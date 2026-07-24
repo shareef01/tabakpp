@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Create compile-only Firebase configuration
+        run: |
+          cat > androidApp/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "100000000000",
+              "project_id": "tabakpp-ci-placeholder",
+              "storage_bucket": "tabakpp-ci-placeholder.appspot.com"
+            },
+            "client": [{
+              "client_info": {
+                "mobilesdk_app_id": "1:100000000000:android:0000000000000000",
+                "android_client_info": { "package_name": "com.tabakpp.app" }
+              },
+              "api_key": [{ "current_key": "ci-placeholder-not-a-real-api-key" }],
+              "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+            }],
+            "configuration_version": "1"
+          }
+          JSON
+      - name: Test shared code and build Android
+        run: ./gradlew :shared:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+
+  web-and-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webApp/package-lock.json
+      - name: Install locked dependencies
+        working-directory: webApp
+        run: npm ci
+      - name: Lint, test, and build
+        working-directory: webApp
+        run: npm run lint && npm run audit:prod && npm run coverage && npm run build
+      - name: Test Firestore rules
+        working-directory: webApp
+        run: npm run test:rules

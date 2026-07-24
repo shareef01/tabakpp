@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme. -->
+    <style name="Theme.TabakPP" parent="android:Theme.Material.NoActionBar">
+        <!-- Status bar color. -->
+        <item name="android:statusBarColor">@color/black</item>
+        <!-- Navigation bar color. -->
+        <item name="android:navigationBarColor">@color/black</item>
+        <!-- Window background color. -->
+        <item name="android:windowBackground">@color/black</item>
+    </style>
+
+    <!-- Splash Screen theme (Android 12+ API). -->
+    <style name="Theme.TabakPP.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/black</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.TabakPP</item>
+    </style>
+</resources>
