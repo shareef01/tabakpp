@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>tabak++ privacy notice</title>
+    <style>
+      body { max-width: 48rem; margin: 0 auto; padding: 2rem; background: #09090b; color: #e4e4e7; font: 16px/1.6 system-ui, sans-serif; }
+      h1, h2 { color: #fff; }
+      a { color: #67e8f9; }
+      .notice { padding: 1rem; border: 1px solid #3f3f46; border-radius: .75rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>tabak++ privacy notice</h1>
+      <p>Last updated: 24 July 2026</p>
+      <p>tabak++ stores account identifiers, profile settings, smoking-tracker counts, history entries, financial estimates, and an optional avatar in Firebase Authentication and Cloud Firestore to provide synchronization and calculated insights.</p>
+      <h2>Data handling</h2>
+      <ul>
+        <li>Firebase processes and stores cloud data on behalf of the app.</li>
+        <li>Avatars are stored as compressed image data in the user's Firestore profile.</li>
+        <li>The app does not intentionally sell personal data or use tracker data for ads.</li>
+      </ul>
+      <h2>Retention and deletion</h2>
+      <p>Data remains until history is removed or Delete Account is used in Settings. Deletion attempts to erase tracker configuration, history, profile data, and the Firebase Authentication account.</p>
+      <h2>Security limitations</h2>
+      <p>Rules isolate each user's Firestore subtree. The client-only Spark architecture cannot prevent a modified client from changing that same user's calculated totals; it does not grant access to another user's data.</p>
+      <p class="notice">Before public distribution, the app operator must add a current privacy contact and publish store-specific disclosures.</p>
+      <p><a href="/">Return to tabak++</a></p>
+    </main>
+  </body>
+</html>
