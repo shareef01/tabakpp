@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/screenshots/showcase/web-auth.png" width="200" alt="tabak++ sign in" />
+  <a href="https://tabakpp.web.app"><strong>tabakpp.web.app</strong></a>
 </p>
 
 <h1 align="center">tabak++</h1>
@@ -17,37 +17,20 @@
   <a href="PRIVACY.md">Privacy</a>
 </p>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Android-Compose-3DDC84?logo=android&logoColor=white" alt="Android" />
-  <img src="https://img.shields.io/badge/Web-PWA-61DAFB?logo=react&logoColor=black" alt="Web" />
-  <img src="https://img.shields.io/badge/Sync-Firebase-FFCA28?logo=firebase&logoColor=black" alt="Firebase" />
-</p>
-
 ---
 
-## Product
-
-<table>
-  <tr>
-    <td align="center" width="25%"><img src="assets/screenshots/showcase/web-track.png" alt="Track" /><br/><sub>Track</sub></td>
-    <td align="center" width="25%"><img src="assets/screenshots/showcase/web-history.png" alt="History" /><br/><sub>History</sub></td>
-    <td align="center" width="25%"><img src="assets/screenshots/showcase/web-settings.png" alt="Settings" /><br/><sub>Settings</sub></td>
-    <td align="center" width="25%"><img src="assets/screenshots/showcase/web-auth.png" alt="Sign in" /><br/><sub>Sign in</sub></td>
-  </tr>
-</table>
-
-<p align="center"><sub>Same experience on Android</sub></p>
-
-### Accents
+<p align="center">
+  <img src="assets/screenshots/showcase/web-track.png" width="900" alt="Track dashboard" />
+</p>
 
 <p align="center">
-  <img src="assets/screenshots/showcase/web-track.png" width="160" alt="Emerald" />
+  <img src="assets/screenshots/showcase/web-history.png" width="440" alt="History" />
   &nbsp;
-  <img src="assets/screenshots/showcase/theme-cobalt.png" width="160" alt="Cobalt" />
-  &nbsp;
-  <img src="assets/screenshots/showcase/theme-rose.png" width="160" alt="Rose" />
-  &nbsp;
-  <img src="assets/screenshots/showcase/theme-violet.png" width="160" alt="Violet" />
+  <img src="assets/screenshots/showcase/web-settings.png" width="440" alt="Settings" />
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/showcase/web-auth.png" width="560" alt="Sign in" />
 </p>
 
 ## Why it exists
