@@ -19,18 +19,26 @@
 
 ---
 
+### Web
+
 <p align="center">
-  <img src="assets/screenshots/showcase/web-track.png" width="900" alt="Track dashboard" />
+  <img src="assets/screenshots/showcase/web-track.png" width="900" alt="Web — Track" />
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/showcase/web-history.png" width="440" alt="History" />
+  <img src="assets/screenshots/showcase/web-history.png" width="440" alt="Web — History" />
   &nbsp;
-  <img src="assets/screenshots/showcase/web-settings.png" width="440" alt="Settings" />
+  <img src="assets/screenshots/showcase/web-settings.png" width="440" alt="Web — Settings" />
 </p>
 
+### Android
+
 <p align="center">
-  <img src="assets/screenshots/showcase/web-auth.png" width="560" alt="Sign in" />
+  <img src="assets/screenshots/showcase/android-track.png" width="220" alt="Android — Track" />
+  &nbsp;
+  <img src="assets/screenshots/showcase/android-history.png" width="220" alt="Android — History" />
+  &nbsp;
+  <img src="assets/screenshots/showcase/android-settings.png" width="220" alt="Android — Settings" />
 </p>
 
 ## Why it exists
