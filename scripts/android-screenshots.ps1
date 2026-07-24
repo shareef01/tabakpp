@@ -1,10 +1,10 @@
-# Captures Android screenshots across accent themes on a connected device.
+# Captures Android screenshots in Signal red (#FF5F5F) for the README.
 # Requires: adb + unlocked device with com.tabakpp.app installed and signed in.
 #
 #   powershell -File scripts/android-screenshots.ps1 [-Serial SERIAL]
 #
 param(
-  [string]$Serial = "31071FDH2007WT",
+  [string]$Serial = "",
   [string]$OutRoot = ""
 )
 
@@ -13,7 +13,7 @@ $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
 if (-not (Test-Path $adb)) { throw "adb not found at $adb" }
 
 if (-not $OutRoot) {
-  $OutRoot = Join-Path (Split-Path $PSScriptRoot -Parent) "assets\screenshots\android"
+  $OutRoot = Join-Path (Split-Path $PSScriptRoot -Parent) "assets\screenshots\android\red"
 }
 New-Item -ItemType Directory -Force -Path $OutRoot | Out-Null
 
@@ -21,7 +21,11 @@ function Invoke-Adb {
   param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
   $prev = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
-  $out = & $adb -s $Serial @Args 2>&1
+  if ($Serial) {
+    $out = & $adb -s $Serial @Args 2>&1
+  } else {
+    $out = & $adb @Args 2>&1
+  }
   $code = $LASTEXITCODE
   $ErrorActionPreference = $prev
   if ($code -ne 0) {
@@ -39,17 +43,13 @@ function Get-UiXml {
 }
 
 function Find-Bounds {
-  param([string]$ContentDesc, [string]$Text, [switch]$ClickableOnly)
+  param([string]$ContentDesc, [string]$Text)
   $xml = Get-UiXml
   foreach ($n in $xml.SelectNodes("//node")) {
     $ok = $false
     if ($ContentDesc -and $n.GetAttribute("content-desc") -eq $ContentDesc) { $ok = $true }
     if ($Text -and $n.GetAttribute("text") -eq $Text) { $ok = $true }
     if (-not $ok) { continue }
-    if ($ClickableOnly -and $n.GetAttribute("clickable") -ne "true") {
-      # Prefer nearest clickable ancestor by walking up via index path is hard in XML;
-      # fall through and use this node's bounds (Compose text sits inside the hit target).
-    }
     $b = $n.GetAttribute("bounds")
     if ($b -match '\[(\d+),(\d+)\]\[(\d+),(\d+)\]') {
       return @{
@@ -97,45 +97,42 @@ function Capture-Shot([string]$Path) {
   Write-Host "  captured $Path ($((Get-Item $Path).Length) bytes)"
 }
 
-Write-Host "Using device $Serial"
+if (-not $Serial) {
+  $lines = & $adb devices | Where-Object { $_ -match "device$" -and $_ -notmatch "List" }
+  if (-not $lines) { throw "No adb device connected - plug in the Pixel and unlock it." }
+  $Serial = ($lines[0] -split "\s+")[0]
+}
+
+Write-Host "Using device $Serial (Signal red)"
 $null = Invoke-Adb shell am force-stop com.tabakpp.app
 Start-Sleep -Seconds 1
 $null = Invoke-Adb shell am start -n com.tabakpp.app/.MainActivity
 Start-Sleep -Seconds 3
 
-# Confirm we are in the app before automating.
 $focus = (Invoke-Adb shell dumpsys window) | Out-String
 if ($focus -notmatch "com\.tabakpp\.app") {
   throw "tabakpp is not focused - unlock the device and keep the app in foreground."
 }
 
-# Map README theme slugs to Android AccentPalette content descriptions.
-$themes = @(
-  @{ slug = "emerald"; desc = "Emerald accent" },
-  @{ slug = "cobalt"; desc = "Cobalt accent" },
-  @{ slug = "rose"; desc = "Magenta accent" },
-  @{ slug = "violet"; desc = "Violet accent" }
-)
+# Closest true red in the Android palette
+$accentDesc = "Signal red accent"
 
-foreach ($theme in $themes) {
-  Write-Host "`ntheme $($theme.slug)"
-  Tap-Target -Text "Settings"
-  Start-Sleep -Milliseconds 500
-  Ensure-AccentVisible $theme.desc | Out-Null
-  Tap-Target -ContentDesc $theme.desc
-  Start-Sleep -Milliseconds 1400
+Tap-Target -Text "Settings"
+Start-Sleep -Milliseconds 500
+Ensure-AccentVisible $accentDesc | Out-Null
+Tap-Target -ContentDesc $accentDesc
+Start-Sleep -Milliseconds 1400
 
-  Tap-Target -Text "Track"
-  Start-Sleep -Milliseconds 900
-  Capture-Shot (Join-Path $OutRoot "$($theme.slug)\track.png")
+Tap-Target -Text "Track"
+Start-Sleep -Milliseconds 900
+Capture-Shot (Join-Path $OutRoot "track.png")
 
-  Tap-Target -Text "History"
-  Start-Sleep -Milliseconds 1100
-  Capture-Shot (Join-Path $OutRoot "$($theme.slug)\history.png")
+Tap-Target -Text "History"
+Start-Sleep -Milliseconds 1100
+Capture-Shot (Join-Path $OutRoot "history.png")
 
-  Tap-Target -Text "Settings"
-  Start-Sleep -Milliseconds 900
-  Capture-Shot (Join-Path $OutRoot "$($theme.slug)\settings.png")
-}
+Tap-Target -Text "Settings"
+Start-Sleep -Milliseconds 900
+Capture-Shot (Join-Path $OutRoot "settings.png")
 
-Write-Host "`nDone. Android shots in $OutRoot"
+Write-Host "`nDone. Android red shots in $OutRoot"
