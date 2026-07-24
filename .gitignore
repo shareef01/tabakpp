@@ -1,0 +1,21 @@
+.gradle
+/build
+/*/build
+/local.properties
+.idea/
+*.iml
+.DS_Store
+/captures
+.externalNativeBuild
+.cxx
+google-services.json
+GoogleService-Info.plist
+.kotlin
+.idea-modules
+webApp/dist/
+
+# Local diagnostics may contain account identifiers or App Check tokens.
+signin*.txt
+signin_log.txt
+appcheck.txt
+*.apk
