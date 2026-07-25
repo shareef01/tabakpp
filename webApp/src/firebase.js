@@ -51,8 +51,11 @@ export const appCheckReady = (async () => {
     return null;
   }
   if (import.meta.env.DEV) {
-    // Register debug tokens in Firebase Console → App Check → Manage debug tokens
-    self.FIREBASE_APPCHECK_DEBUG_TOKEN = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN || true;
+    // Only enable debug tokens when explicitly configured — never auto-mint.
+    const debugToken = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN;
+    if (debugToken) {
+      self.FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken;
+    }
   }
   const { initializeAppCheck, ReCaptchaV3Provider } = await import("firebase/app-check");
   return initializeAppCheck(app, {

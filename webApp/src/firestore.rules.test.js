@@ -95,4 +95,50 @@ describe('Firestore ownership and write paths', () => {
     const snapshot = await getDoc(doc(db, 'users/alice'));
     expect(snapshot.data().lifetimeAggregates.saved).toBe(999);
   });
+
+  it('rejects javascript: avatars and oversized non-image strings', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      avatar: 'javascript:alert(1)',
+    }));
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      avatar: 'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+    }));
+  });
+
+  it('allows a jpeg data-url avatar under the size cap', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    const db = testEnv.authenticatedContext('alice').firestore();
+    const avatar = `data:image/jpeg;base64,${'A'.repeat(100)}`;
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), { avatar }));
+  });
+
+  it('blocks rewinding smokingUnitsMigrated once true', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      smokingUnitsMigrated: false,
+    }));
+  });
+
+  it('rejects log bodies whose id does not match the document id', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(db, 'users/alice/logs/2026-07-24_DAY'), {
+      id: 'spoofed',
+      logDate: '2026-07-24',
+      counts: { cig: 1 },
+      isArchive: true,
+      origin: 'DAY_RESET',
+    }));
+  });
 });

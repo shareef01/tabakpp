@@ -62,5 +62,6 @@ export const mapFirestoreError = (err, fallback = 'Could not save. Try again.') 
     return 'Network error. Check your connection.';
   }
   if (msg === 'NOTHING_TO_ARCHIVE') return 'Nothing to archive yet.';
+  if (msg === 'COUNTERS_BUSY') return 'Still syncing counters. Try End Day again.';
   return fallback;
 };

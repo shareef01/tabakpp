@@ -94,6 +94,31 @@ class RegistryMutationsTest {
     }
 
     @Test
+    fun debit_clampsSmokingUnitsAtZero_soRulesDoNotRejectWrite() {
+        // Deleting a log whose units exceed the stored total must floor smokingUnits
+        // at 0 (rules require >= 0), not go negative and get permission-denied.
+        val agg = RegistryMutations.debit(
+            LifetimeAggregates(saved = 0.0, wasted = 0.0, smokingUnits = 4.0),
+            mapOf("cig" to 6.0), cigOnly, price
+        )
+        assertEquals(0.0, agg.smokingUnits, 1e-9, "smokingUnits floored at 0")
+        // saved/wasted are allowed negative by the rules and are NOT clamped.
+        assertEquals(-4.0, agg.saved, 1e-9)
+        assertEquals(-6.0, agg.wasted, 1e-9)
+    }
+
+    @Test
+    fun replace_clampsSmokingUnitsAtZero_whenNewIsSmallerThanDrift() {
+        // Editing a log down to fewer units than the (drifted) stored total floors at 0.
+        val agg = RegistryMutations.replace(
+            LifetimeAggregates(saved = 0.0, wasted = 0.0, smokingUnits = 3.0),
+            oldCounts = mapOf("cig" to 9.0), newCounts = mapOf("cig" to 1.0), cigOnly, price
+        )
+        // 3 - 9 + 1 = -5 → clamped to 0
+        assertEquals(0.0, agg.smokingUnits, 1e-9, "smokingUnits floored at 0")
+    }
+
+    @Test
     fun endDay_ignoresNonSmokingTypesInUnits() {
         val withSimple = configs + TrackerConfig("simple", "Water", 3, 3, TrackerType.SIMPLE)
         val result = RegistryMutations.endDay(

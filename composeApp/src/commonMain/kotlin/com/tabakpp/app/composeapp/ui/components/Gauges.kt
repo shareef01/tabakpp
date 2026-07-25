@@ -77,19 +77,21 @@ fun TrackerGauge(
             BarProgress(animatedProgress.value, if (isOverLimit) ErrorColor else accentColor)
         } else {
             // Material definition pass — legacy JOINT uses the same cigarette look.
+            // Filter gradient matches web CigaretteGauge (from-[#F4A261] to-[#E76F3C]).
             val paperColor = Color(0xFFFAFAFA)
-            
+
             val filterBrush = remember(type) {
                 when (type) {
                     TrackerType.SIMPLE -> Brush.verticalGradient(listOf(Color.Gray, Color.DarkGray))
                     else -> Brush.verticalGradient(
-                        0.0f to Color(0xFF8B5E3C),
-                        1.0f to Color(0xFF5D4037)
+                        0.0f to Color(0xFFF4A261),
+                        1.0f to Color(0xFFE76F3C)
                     )
                 }
             }
-            
-            val filterRatio = 0.22f
+
+            // Longer filter → shorter paper body (web filterRatio = 0.3)
+            val filterRatio = 0.3f
 
             PWAHighFidelityCanvas(
                 progress = animatedProgress.value,

@@ -1,7 +1,7 @@
 {
-  "name": "TABAK++ Premium Registry",
-  "short_name": "TABAK++",
-  "description": "High-Fidelity Health Optimization Tracker",
+  "name": "tabak++",
+  "short_name": "tabak++",
+  "description": "Track smoking and spend across phone and web.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",

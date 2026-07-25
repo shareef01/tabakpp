@@ -59,7 +59,8 @@ fun TrackerCard(
         WidgetSize.MEDIUM -> 64.sp
         WidgetSize.LARGE -> 84.sp
     }
-    val gaugeHeight = if (isLarge) 48.dp else if (isSmall) 34.dp else 42.dp
+    val gaugeHeight = if (isLarge) 60.dp else if (isSmall) 34.dp else 42.dp
+    val gaugeMaxWidth = 240.dp
     val btnSize = if (isLarge) 64.dp else if (isSmall) 48.dp else 56.dp
 
     // Smooth state transitions (Optimized spec)
@@ -118,7 +119,11 @@ fun TrackerCard(
                 limit = config.limit,
                 accentColor = accentColor,
                 height = gaugeHeight,
-                modifier = Modifier.fillMaxWidth()
+                modifier = if (isLarge) {
+                    Modifier.widthIn(max = gaugeMaxWidth).fillMaxWidth()
+                } else {
+                    Modifier.fillMaxWidth()
+                }
             )
 
             // 3. Counter Zone (Rigid Slot for stability)

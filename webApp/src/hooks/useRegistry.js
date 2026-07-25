@@ -74,7 +74,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
 
     const onListenerError = (err) => {
       console.error('[REGISTRY] listener error', err);
-      setRegistryError('Could not sync registry. Check your connection and try again.');
+      setRegistryError('Could not sync. Check your connection and try again.');
       setLoading(false);
     };
 
@@ -95,7 +95,6 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
             widgetSize: 'MEDIUM',
             avatar: null,
             unitPrice: 0.5,
-            dayStartHour: 6,
             purchaseType: 'PACK',
             pouchPrice: 0,
             estimatedYield: 0,
@@ -116,7 +115,6 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
           widgetSize: d.widgetSize || 'MEDIUM',
           avatar: d.avatar || null,
           unitPrice: d.unitPrice ?? 0.5,
-          dayStartHour: d.dayStartHour ?? 6,
           purchaseType: d.purchaseType || 'PACK',
           pouchPrice: d.pouchPrice ?? 0,
           estimatedYield: d.estimatedYield ?? 0,
@@ -217,8 +215,26 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
 
   const endDay = useCallback(async () => {
     if (!user || isEndingDayRef.current) return;
+    if (!navigator.onLine) {
+      setRegistryError('Network error. Check your connection.');
+      throw new Error('NETWORK_OFFLINE');
+    }
     setIsEndingDay(true);
     try {
+      // Wait for optimistic counter writes so the archive transaction
+      // reads the same counts the UI is showing.
+      const deadline = Date.now() + 5000;
+      while (counterInFlightRef.current > 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      if (counterInFlightRef.current > 0) {
+        setRegistryError('Still syncing counters. Try End Day again.');
+        throw new Error('COUNTERS_BUSY');
+      }
+      if (!SmokingCalculator.hasOpenSession(activeCountsRef.current)) {
+        setRegistryError(mapFirestoreError(new Error('NOTHING_TO_ARCHIVE')));
+        throw new Error('NOTHING_TO_ARCHIVE');
+      }
       await runMutation(
         () => RegistryService.endDay(user.uid, today, effectiveUnitPrice),
         'Could not end day. Try again.'

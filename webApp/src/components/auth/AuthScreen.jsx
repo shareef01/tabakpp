@@ -22,12 +22,8 @@ import { useKeyboardInset } from '../../hooks/useKeyboardInset';
 
 const MIN_PASSWORD_LENGTH = 12;
 
-/**
- * BrandedAtmosphere - High Fidelity Industrial Visuals
- */
 const BrandedAtmosphere = React.memo(({ accent }) => (
   <div className="relative flex flex-col items-center justify-center w-full group">
-    {/* Atmospheric Glow */}
     <div
       className="absolute inset-0 blur-[120px] rounded-full scale-150 opacity-20 transition-all duration-1000 group-hover:opacity-30"
       style={{ backgroundColor: accent }}
@@ -43,18 +39,8 @@ const BrandedAtmosphere = React.memo(({ accent }) => (
       />
     </div>
 
-    <div className="text-center pt-12 relative z-10">
-      <motion.h2
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ delay: 0.2, duration: 0.8 }}
-        className="text-5xl md:text-7xl font-black tracking-tighter uppercase leading-tight"
-      >
-        EVERY SECOND <span style={{ color: accent }}>COUNTS.</span>
-      </motion.h2>
-      <p className="mt-8 text-xs md:text-sm font-black uppercase tracking-[0.18em] text-white/55 antialiased">
-        Reclaim behavioral control
-      </p>
+    <div className="pt-12 relative z-10 flex justify-center">
+      <Logo size="lg" />
     </div>
   </div>
 ));
@@ -172,7 +158,6 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
           {/* Mobile Hero (Logo) */}
           <div className="lg:hidden flex flex-col items-center mb-16 opacity-80">
             <Logo size="lg" />
-            <span className="mt-4 text-[11px] font-black uppercase tracking-[0.18em] text-white/55">Executive Terminal</span>
           </div>
 
           <motion.div

@@ -19,6 +19,11 @@ service cloud.firestore {
       return isNumber(v) && v >= -maxAbs && v <= maxAbs;
     }
 
+    function isTimestampOrNull(v) {
+      // Timestamp preferred; legacy Long/millis still appear on older docs.
+      return v == null || v is timestamp || isNumber(v);
+    }
+
     function validLifetimeAggregates(a) {
       return a is map
         && a.keys().hasOnly(['saved', 'wasted', 'smokingUnits'])
@@ -36,16 +41,24 @@ service cloud.firestore {
         && (!('smokingUnits' in a) || a.smokingUnits == 0);
     }
 
-    // Dynamic tracker ids — bound size only. Firestore rules cannot type-check
-    // arbitrary map values; clients write numbers and App Check is the Spark
-    // defense against unofficial writers (enforce in Console when ready).
+    // Dynamic tracker ids — bound size. Per-value typing of arbitrary keys is
+    // not expressible in Firestore rules; clients sanitize and App Check is the
+    // Spark defense against unofficial writers (enforce in Console).
     function validCountMap(counts) {
       return counts is map && counts.size() <= 50;
     }
 
+    // JPEG/PNG/WebP data URLs only — blocks javascript: / remote XSS payloads in <img>.
+    function validAvatar(v) {
+      return v == null
+        || (v is string
+          && v.size() <= 90000
+          && v.matches('^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$'));
+    }
+
     // Canonical UserProfile keys (shared Android/KMP + web).
-    // Legacy web-only eco fields may still exist on older docs; allowed so
-    // updates are not blocked until clients deleteField them.
+    // Legacy keys (eco*, dayStartHour) may still exist; allowed so updates /
+    // deleteField are not blocked until clients strip them.
     function validUserKeys(data) {
       return data.keys().hasOnly([
         'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'pouchPrice',
@@ -64,7 +77,7 @@ service cloud.firestore {
         && (!('pouchPrice' in d) || (isNumber(d.pouchPrice) && d.pouchPrice >= 0 && d.pouchPrice <= 10000))
         && (!('estimatedYield' in d) || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
         && (!('widgetSize' in d) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
-        && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
+        && (!('avatar' in d) || validAvatar(d.avatar));
     }
 
     function validUserProfile() {
@@ -91,7 +104,10 @@ service cloud.firestore {
       let changed = request.resource.data.diff(resource.data).affectedKeys();
       return (!changed.hasAny(['activeCounts']) || validCountMap(d.activeCounts))
         && (!changed.hasAny(['lifetimeAggregates']) || validLifetimeAggregates(d.lifetimeAggregates))
-        && (!changed.hasAny(['smokingUnitsMigrated']) || d.smokingUnitsMigrated is bool);
+        // smokingUnitsMigrated may only flip false → true (never unset / rewind).
+        && (!changed.hasAny(['smokingUnitsMigrated'])
+          || (d.smokingUnitsMigrated == true
+              && resource.data.get('smokingUnitsMigrated', false) != true));
     }
 
     // Settings path: validate settings shape on the resulting doc, but do not
@@ -102,7 +118,11 @@ service cloud.firestore {
       return validSettingsShape(d)
         && (!('lifetimeAggregates' in d) || validLifetimeAggregates(d.lifetimeAggregates))
         && (!('activeCounts' in d) || validCountMap(d.activeCounts))
-        && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool);
+        && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool)
+        // createdAt is immutable after create (not in settings allow-list).
+        && (!('createdAt' in resource.data)
+          || !('createdAt' in d)
+          || d.createdAt == resource.data.createdAt);
     }
 
     // Spark-safe defense (no Cloud Functions): settings writes cannot touch
@@ -113,7 +133,7 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys()
         .hasOnly([
           'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'pouchPrice',
-          'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt', 'createdAt',
+          'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt',
           'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'
         ]);
     }
@@ -125,7 +145,7 @@ service cloud.firestore {
         ]);
     }
 
-    function validLogEntry() {
+    function validLogEntry(logId) {
       let d = request.resource.data;
       return d.keys().hasOnly([
           'logDate', 'counts', 'origin', 'finalizedAt', 'clientTimestamp', 'id',
@@ -137,10 +157,13 @@ service cloud.firestore {
         && validCountMap(d.counts)
         && (!('origin' in d) || d.origin in ['DAY_RESET', 'MANUAL_ENTRY'])
         && (!('isArchive' in d) || d.isArchive is bool)
-        && (!('isManual' in d) || d.isManual is bool);
+        && (!('isManual' in d) || d.isManual is bool)
+        && (!('id' in d) || (d.id is string && d.id == logId && d.id.size() <= 80))
+        && (!('finalizedAt' in d) || isTimestampOrNull(d.finalizedAt))
+        && (!('clientTimestamp' in d) || isTimestampOrNull(d.clientTimestamp));
     }
 
-    function validConfig() {
+    function validConfig(configId) {
       let d = request.resource.data;
       return d.keys().hasOnly([
           'name', 'limit', 'order', 'type', 'pricePerUnit', 'isFinanciallyTracked',
@@ -158,7 +181,10 @@ service cloud.firestore {
         && (!('type' in d) || d.type in ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING', 'SIMPLE'])
         && (!('pricePerUnit' in d) || d.pricePerUnit == null || (isNumber(d.pricePerUnit) && d.pricePerUnit >= 0 && d.pricePerUnit <= 1000))
         && (!('isFinanciallyTracked' in d) || d.isFinanciallyTracked is bool)
-        && (!('isPrimaryTracked' in d) || d.isPrimaryTracked is bool);
+        && (!('isPrimaryTracked' in d) || d.isPrimaryTracked is bool)
+        && (!('id' in d) || (d.id is string && d.id == configId && d.id.size() <= 80))
+        && (!('createdAt' in d) || isTimestampOrNull(d.createdAt))
+        && (!('updatedAt' in d) || isTimestampOrNull(d.updatedAt));
     }
 
     match /users/{userId} {
@@ -172,13 +198,13 @@ service cloud.firestore {
 
       match /configs/{configId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && validConfig();
+        allow create, update: if isOwner(userId) && validConfig(configId);
         allow delete: if isOwner(userId);
       }
 
       match /logs/{logId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && validLogEntry();
+        allow create, update: if isOwner(userId) && validLogEntry(logId);
         allow delete: if isOwner(userId);
       }
     }

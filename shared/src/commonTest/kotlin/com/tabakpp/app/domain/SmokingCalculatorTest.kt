@@ -9,24 +9,12 @@ import kotlin.test.assertEquals
 class SmokingCalculatorTest {
 
     @Test
-    fun testGetTrackingDate_RolloverBoundaries() {
-        val hour = 6
-        
-        // 05:59:59 -> Previous Day
-        val before = Instant.parse("2024-05-20T05:59:59Z")
-        assertEquals("2024-05-19", SmokingCalculator.getTrackingDate(before, hour, TimeZone.UTC))
-        
-        // 06:00:00 -> Same Day
-        val at = Instant.parse("2024-05-20T06:00:00Z")
-        assertEquals("2024-05-20", SmokingCalculator.getTrackingDate(at, hour, TimeZone.UTC))
-        
-        // 23:59:59 -> Same Day
-        val end = Instant.parse("2024-05-20T23:59:59Z")
-        assertEquals("2024-05-20", SmokingCalculator.getTrackingDate(end, hour, TimeZone.UTC))
-        
-        // 00:00:00 next calendar day -> Previous Day (belongs to night-owl session)
-        val midnight = Instant.parse("2024-05-21T00:00:00Z")
-        assertEquals("2024-05-20", SmokingCalculator.getTrackingDate(midnight, hour, TimeZone.UTC))
+    fun testGetTrackingDate_UsesLocalCalendarDate() {
+        val tz = TimeZone.UTC
+        assertEquals("2024-05-20", SmokingCalculator.getTrackingDate(Instant.parse("2024-05-20T05:59:59Z"), tz))
+        assertEquals("2024-05-20", SmokingCalculator.getTrackingDate(Instant.parse("2024-05-20T06:00:00Z"), tz))
+        assertEquals("2024-05-20", SmokingCalculator.getTrackingDate(Instant.parse("2024-05-20T23:59:59Z"), tz))
+        assertEquals("2024-05-21", SmokingCalculator.getTrackingDate(Instant.parse("2024-05-21T00:00:00Z"), tz))
     }
 
     @Test
@@ -159,13 +147,99 @@ class SmokingCalculatorTest {
         val configs = listOf(TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE))
         val logs = listOf(LogEntry("l1", "2024-05-19", mapOf("c1" to 10.0)))
         val active = mapOf("c1" to 5.0)
-        
+
         // Total units = 10 + 5 = 15. Minutes = 15 * 11 = 165
         assertEquals(165, SmokingCalculator.calculateLifeLostMinutes(logs, configs, active))
-        
-        // Recovery: 
+
+        // Recovery:
         // Log day (limit 10 - count 10) = 0
         // Active day (limit 10 - count 5) = 5. Recovery = 5 * 11 = 55
         assertEquals(55, SmokingCalculator.calculateRecoveryMinutes(logs, configs, active, "2024-05-20"))
+    }
+
+    // --- getGlobalMetrics (previously untested; T3) --------------------------
+
+    @Test
+    fun testGetGlobalMetrics_derivesCountLimitFinancialsAndMinutes() {
+        val configs = listOf(
+            TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE, pricePerUnit = 1.0, isPrimaryTracked = true)
+        )
+        val metrics = SmokingCalculator.getGlobalMetrics(
+            logs = emptyList(),
+            configs = configs,
+            activeCounts = mapOf("c1" to 4.0),
+            trackingDay = "2024-05-20",
+            userPrice = 0.5
+        )
+        assertEquals(4, metrics.count)
+        assertEquals(10, metrics.limit)
+        assertEquals(0.4, metrics.progress, 1e-9)
+        assertEquals(4.0, metrics.spentToday, 1e-9)   // 4 * 1.0
+        assertEquals(6.0, metrics.saved, 1e-9)        // (10 - 4) * 1.0
+        assertEquals(true, metrics.hasOpenSession)
+        assertEquals(44, metrics.lifeLost)            // 4 units * 11
+        assertEquals(66, metrics.recovered)           // (10 - 4) active * 11
+        assertEquals(0.0, metrics.savedLifetime, 1e-9)
+    }
+
+    @Test
+    fun testGetGlobalMetrics_usesLifetimeAggregatesWhenPresent() {
+        val configs = listOf(
+            TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE, pricePerUnit = 1.0, isPrimaryTracked = true)
+        )
+        val agg = LifetimeAggregates(saved = 123.45, wasted = 0.0, smokingUnits = 100.0)
+        val metrics = SmokingCalculator.getGlobalMetrics(
+            logs = emptyList(),
+            configs = configs,
+            activeCounts = mapOf("c1" to 2.0),
+            trackingDay = "2024-05-20",
+            userPrice = 0.5,
+            lifetimeAggregates = agg
+        )
+        // savedLifetime comes from the authoritative aggregate, not a log sum.
+        assertEquals(123.45, metrics.savedLifetime, 1e-9)
+        // lifeLost = (archived 100 + active 2) * 11
+        assertEquals(1122, metrics.lifeLost)
+    }
+
+    @Test
+    fun testGetGlobalMetrics_emptySessionHasNoOpenSession() {
+        val configs = listOf(TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE, isPrimaryTracked = true))
+        val metrics = SmokingCalculator.getGlobalMetrics(
+            logs = emptyList(), configs = configs, activeCounts = emptyMap(),
+            trackingDay = "2024-05-20"
+        )
+        assertEquals(0, metrics.count)
+        assertEquals(false, metrics.hasOpenSession)
+        assertEquals(0.0, metrics.progress, 1e-9)
+    }
+
+    @Test
+    fun testRecovery_todayManualEntryExcludedUntilArchived() {
+        // C7: the same manual entry contributes recovery when dated in the past,
+        // but is skipped for the current tracking day (only the live session counts).
+        val configs = listOf(TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE))
+        val today = "2024-05-20"
+
+        val datedYesterday = listOf(LogEntry("m1", "2024-05-19", mapOf("c1" to 3.0), origin = "MANUAL_ENTRY"))
+        // yesterday (10-3)=7*11=77 + today's empty active (10-0)=10*11=110
+        assertEquals(187, SmokingCalculator.calculateRecoveryMinutes(datedYesterday, configs, emptyMap(), today))
+
+        val datedToday = listOf(LogEntry("m1", today, mapOf("c1" to 3.0), origin = "MANUAL_ENTRY"))
+        // today's manual entry is skipped; only the empty active session counts → 110
+        assertEquals(110, SmokingCalculator.calculateRecoveryMinutes(datedToday, configs, emptyMap(), today))
+    }
+
+    // --- normalizeAccentColor (C3 regression) -------------------------------
+
+    @Test
+    fun testNormalizeAccentColor_expandsShortHexAndGuardsWhite() {
+        assertEquals("#E4E4E7", SmokingCalculator.normalizeAccentColor("#FFFFFF"))
+        assertEquals("#E4E4E7", SmokingCalculator.normalizeAccentColor("#fff"))
+        // 3-digit hex must expand so Compose parses the intended color, not near-black.
+        assertEquals("#00FF00", SmokingCalculator.normalizeAccentColor("#0F0"))
+        assertEquals("#00FF00", SmokingCalculator.normalizeAccentColor("#0f0"))
+        // 6-digit hex passes through unchanged.
+        assertEquals("#FF5F5F", SmokingCalculator.normalizeAccentColor("#FF5F5F"))
     }
 }

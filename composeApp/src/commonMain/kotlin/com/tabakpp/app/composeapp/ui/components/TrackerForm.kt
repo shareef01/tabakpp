@@ -117,7 +117,7 @@ fun TrackerForm(
         Spacer(modifier = Modifier.height(32.dp))
 
         // SECTION 2: OBJECTIVES
-        FormLabel("Target Protocol")
+        FormLabel("Daily limit")
         FormBox(premiumGradient, glassBorder) {
             Column(modifier = Modifier.padding(20.dp)) {
                 FormTextField(

@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { X, Activity, Cigarette, Wind } from 'lucide-react';
 import { Input, UI, Button } from '../Common';
 import { cn } from '../../utils/utils';
-import { sanitizeString } from '../../utils/security';
+import { sanitizeTrackerName } from '../../utils/security';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
 
@@ -44,7 +44,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
 
   const handleSubmit = async (ev) => {
     ev?.preventDefault?.();
-    const cleanName = sanitizeString(name);
+    const cleanName = sanitizeTrackerName(name);
     if (!cleanName) {
       setError('Enter a counter name.');
       return;
@@ -85,14 +85,14 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
         style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 24)}px)` }}
         role="dialog"
         aria-modal="true"
-        aria-label={title || 'Registry'}
+        aria-label={title || 'Tracker'}
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
       >
         <div className="flex justify-between items-center mb-10">
           <div className="space-y-1">
-            <h3 className={UI.LABEL}>Registry</h3>
+            <h3 className={UI.LABEL}>Tracker</h3>
             <span className="text-2xl font-black tracking-tighter uppercase text-white block leading-none">{title}</span>
           </div>
           <button type="button" onClick={onClose} aria-label="Close counter form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-500 hover:text-white transition-all">
@@ -107,7 +107,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
           </div>
 
           <div className="flex flex-col gap-2">
-            <span className={UI.LABEL}>Daily Quota</span>
+            <span className={UI.LABEL}>Daily limit</span>
             <input
               type="number"
               value={limit}

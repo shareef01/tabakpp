@@ -55,7 +55,7 @@ const CIG = { id: 'cig', name: 'Cigarette', type: 'CIGARETTE', limit: 10, priceP
 const profileSnap = (data) => ({ exists: () => true, data: () => data });
 const defaultProfile = (over = {}) => ({
   activeCounts: {}, lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0 },
-  accent: '#111', widgetSize: 'MEDIUM', avatar: null, unitPrice: 0.5, dayStartHour: 6, ...over,
+  accent: '#111', widgetSize: 'MEDIUM', avatar: null, unitPrice: 0.5, ...over,
 });
 
 // Mount the hook and push an initial profile/configs/logs snapshot through.
@@ -161,7 +161,7 @@ describe('useRegistry.endDay', () => {
   it('guards against a concurrent second call while one is in flight', async () => {
     let release;
     RegistryService.endDay.mockImplementation(() => new Promise((r) => { release = r; }));
-    const { result } = mountHydrated();
+    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: { cig: 2 } }) });
 
     act(() => { result.current.endDay(); });
     expect(result.current.isEndingDay).toBe(true);
@@ -176,9 +176,20 @@ describe('useRegistry.endDay', () => {
   });
 
   it('passes the tracking date and effective unit price', async () => {
-    const { result } = mountHydrated({ profile: defaultProfile({ unitPrice: 0.9 }) });
+    const { result } = mountHydrated({
+      profile: defaultProfile({ activeCounts: { cig: 1 }, unitPrice: 0.9 }),
+    });
     await act(async () => { await result.current.endDay(); });
     expect(RegistryService.endDay).toHaveBeenCalledWith('u1', TODAY, 0.9);
+  });
+
+  it('refuses to archive when local counters are already zero', async () => {
+    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: {} }) });
+    await act(async () => {
+      await expect(result.current.endDay()).rejects.toThrow('NOTHING_TO_ARCHIVE');
+    });
+    expect(RegistryService.endDay).not.toHaveBeenCalled();
+    expect(result.current.registryError).toEqual('Nothing to archive yet.');
   });
 });
 
@@ -211,7 +222,7 @@ describe('useRegistry listener errors', () => {
       cap.profileErr.current?.(new Error('permission-denied'));
     });
     expect(result.current.loading).toBe(false);
-    expect(result.current.registryError).toMatch(/Could not sync registry/);
+    expect(result.current.registryError).toMatch(/Could not sync/);
   });
 });
 

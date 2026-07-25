@@ -1,12 +1,12 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { User, Check, Plus, ArrowUp, ArrowDown, Edit2, Trash2, Camera, Loader2, Package, Wind, Moon, Square, Columns2, LayoutGrid, AlertTriangle } from 'lucide-react';
+import { User, Check, Plus, ArrowUp, ArrowDown, Edit2, Trash2, Camera, Loader2, Package, Wind, Square, Columns2, LayoutGrid, AlertTriangle } from 'lucide-react';
 import { updateProfile, EmailAuthProvider, GoogleAuthProvider, reauthenticateWithCredential, reauthenticateWithPopup, reauthenticateWithRedirect, deleteUser } from 'firebase/auth';
 import { auth } from '../../firebase';
 import { RegistryService } from '../../services/registryService';
 import { Input, Button, UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
-import { sanitizeString, compressAvatarFile } from '../../utils/security';
+import { sanitizeString, compressAvatarFile, isSafeAvatarUrl } from '../../utils/security';
 import { mapAuthError } from '../../utils/errorHandlers';
 import { AUTH_INTENT_KEY, prefersAuthRedirect } from '../../utils/platform';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
@@ -25,13 +25,6 @@ const DENSITY_OPTIONS = [
   { id: 'MEDIUM', label: 'Comfortable', icon: Columns2 },
   { id: 'LARGE', label: 'Spacious', icon: Square },
 ];
-
-const formatDayStart = (hour) => {
-  if (hour === 0) return '12:00 AM';
-  if (hour < 12) return `${hour}:00 AM`;
-  if (hour === 12) return '12:00 PM';
-  return `${hour - 12}:00 PM`;
-};
 
 const TYPE_LABELS = {
   CIGARETTE: 'Cigarette',
@@ -133,7 +126,6 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
   packQtyRef.current = packQty;
   const [pouchPrice, setPouchPrice] = useState(settings.pouchPrice || 6.50);
   const [estimatedYield, setEstimatedYield] = useState(settings.estimatedYield || 60);
-  const [pendingDayStart, setPendingDayStart] = useState(settings.dayStartHour ?? 6);
 
   useEffect(() => {
     setDisplayName(user?.displayName || settings.name || '');
@@ -142,10 +134,6 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
   useEffect(() => {
     setPreviewUrl(settings.avatar || null);
   }, [settings.avatar]);
-
-  useEffect(() => {
-    setPendingDayStart(settings.dayStartHour ?? 6);
-  }, [settings.dayStartHour]);
 
   useEffect(() => {
     const mode = settings.purchaseType === 'POUCH' ? 'POUCH' : 'PACK';
@@ -203,22 +191,10 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           unitPrice: bp / by
         });
       }
-      setNotification({ title: "Economics", message: "Calibration synchronized.", type: 'success' });
+      setNotification({ title: "Costs", message: "Saved.", type: 'success' });
     } catch (err) {
       console.error(err);
-      setNotification({ title: "Economics", message: "Could not save economics.", type: 'error' });
-    }
-  };
-
-  const commitDayStart = async (nextHour = pendingDayStart) => {
-    const hour = Math.max(0, Math.min(23, Number(nextHour) || 0));
-    if (hour === (settings.dayStartHour ?? 6)) return;
-    try {
-      await onUpd({ dayStartHour: hour });
-      setNotification({ title: 'Day start', message: `Resets at ${formatDayStart(hour)}.`, type: 'success' });
-    } catch (err) {
-      console.error(err);
-      setNotification({ title: 'Day start', message: 'Could not update day start.', type: 'error' });
+      setNotification({ title: "Costs", message: "Could not save.", type: 'error' });
     }
   };
 
@@ -362,9 +338,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                       <Loader2 className="animate-spin text-accent" size={22} />
                     </div>
                   )}
-                  {previewUrl ? (
-                    <img src={previewUrl} alt="" className="object-cover w-full h-full" />
-                  ) : (() => {
+                    {isSafeAvatarUrl(previewUrl) ? (
+                      <img src={previewUrl} alt="" className="object-cover w-full h-full" />
+                    ) : (() => {
                     const raw = (displayName || user?.email || '').trim();
                     const parts = raw.split(/\s+/).filter(Boolean);
                     const initials = parts.length >= 2
@@ -552,99 +528,6 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               </div>
             </div>
           </Card>
-
-          <Card className="p-6 md:p-8 bg-bg-card">
-            <div className="flex items-end justify-between gap-4 mb-6">
-              <div className="flex flex-col gap-1 min-w-0">
-                <span className={cn(UI.LABEL, 'mb-0 ml-0 inline-flex items-center gap-1.5')}>
-                  <Moon size={11} className="text-accent" strokeWidth={2.5} />
-                  Schedule
-                </span>
-                <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
-                  Day start
-                </h3>
-              </div>
-              <div className="flex flex-col items-end gap-1 shrink-0">
-                <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400">Resets at</span>
-                <span className="text-2xl md:text-3xl font-black text-accent tabular-nums leading-none">
-                  {formatDayStart(pendingDayStart)}
-                </span>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-neutral-500 leading-relaxed mb-6">
-              Your tracking day rolls over at this hour — useful if nights run past midnight.
-            </p>
-
-            <div className="space-y-4">
-              <input
-                type="range"
-                min={0}
-                max={23}
-                step={1}
-                value={pendingDayStart}
-                aria-label="Day start hour"
-                onChange={(e) => setPendingDayStart(Number(e.target.value))}
-                onMouseUp={(e) => commitDayStart(Number(e.currentTarget.value))}
-                onTouchEnd={(e) => commitDayStart(Number(e.currentTarget.value))}
-                onKeyUp={(e) => {
-                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
-                    commitDayStart(Number(e.currentTarget.value));
-                  }
-                }}
-                className="w-full h-2 rounded-full appearance-none cursor-pointer accent-[var(--accent)]
-                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
-                  [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:shadow-[0_0_0_3px_rgba(0,0,0,0.45)]
-                  [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full
-                  [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-accent"
-                style={{
-                  background: `linear-gradient(to right, var(--accent) ${(pendingDayStart / 23) * 100}%, rgba(255,255,255,0.06) ${(pendingDayStart / 23) * 100}%)`
-                }}
-              />
-              <div className="flex justify-between px-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
-                {[0, 6, 12, 18, 23].map((hour) => (
-                  <span
-                    key={hour}
-                    className={cn(
-                      pendingDayStart === hour && 'text-accent'
-                    )}
-                  >
-                    {String(hour).padStart(2, '0')}:00
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-6 flex flex-wrap gap-2">
-              {[
-                { hour: 0, label: 'Midnight' },
-                { hour: 4, label: '4 AM' },
-                { hour: 6, label: '6 AM' },
-                { hour: 12, label: 'Noon' },
-              ].map((preset) => {
-                const selected = pendingDayStart === preset.hour;
-                return (
-                  <button
-                    key={preset.hour}
-                    type="button"
-                    onClick={() => {
-                      setPendingDayStart(preset.hour);
-                      commitDayStart(preset.hour);
-                    }}
-                    className={cn(
-                      "h-9 px-3.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all",
-                      "ring-1 ring-inset outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
-                      selected
-                        ? "bg-accent text-black ring-accent"
-                        : "bg-white/[0.03] text-neutral-400 ring-white/[0.06] hover:text-white hover:bg-white/[0.06]"
-                    )}
-                  >
-                    {preset.label}
-                  </button>
-                );
-              })}
-            </div>
-          </Card>
         </div>
 
         <div className="space-y-10">
@@ -695,7 +578,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           </Card>
 
           <Card className="p-8 md:p-12 bg-bg-card">
-            <h3 className={UI.LABEL}>Economic Constants</h3>
+            <h3 className={UI.LABEL}>Costs</h3>
             <div className="flex p-1 bg-black/60 rounded-full border border-white/5 my-8 shadow-inner">
               <button type="button" onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Package size={14} /> Retail</button>
               <button type="button" onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Wind size={14} /> Loose</button>
@@ -709,7 +592,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 <span className={UI.LABEL}>Unit Cost:</span>
                 <span className="text-3xl font-black text-white tabular-nums">€{unitCostPreview.toFixed(2)}</span>
               </div>
-              <Button className="w-full" onClick={handleSaveEco}>Synchronize Economics</Button>
+              <Button className="w-full" onClick={handleSaveEco}>Save</Button>
             </div>
           </Card>
 

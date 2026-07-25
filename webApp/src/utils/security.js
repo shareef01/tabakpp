@@ -4,21 +4,40 @@
  */
 
 /**
- * Sanitizes user-generated strings to prevent XSS and NoSQL injection patterns.
- * Legacy support for 'sanitizeString' alias.
- * @param {string} str - Raw input
- * @returns {string} Sanitized output
+ * Sanitizes user-generated strings to prevent XSS and injection patterns.
+ * @param {string} str
+ * @param {number} [maxLength=100]
  */
-export const sanitizeInput = (str) => {
+export const sanitizeInput = (str, maxLength = 100) => {
   if (typeof str !== 'string') return '';
   return str
-    .replace(/[<>]/g, '') // Strips HTML tags
-    .replace(/\$/g, '﹩') // Neutralizes NoSQL operator characters
+    .replace(/\p{Cc}/gu, '') // strip control characters (C0/C1 + DEL)
+    .replace(/[<>]/g, '')
     .trim()
-    .substring(0, 100); // Enforce reasonable length limits
+    .substring(0, maxLength);
 };
 
 export const sanitizeString = sanitizeInput;
+export const sanitizeDisplayName = (str) => sanitizeInput(str, 100);
+/** Tracker names — Firestore rules + Android InputSanitizer cap at 80. */
+export const sanitizeTrackerName = (str) => sanitizeInput(str, 80);
+
+/** Only render Firestore/Auth avatars that cannot smuggle script URLs. */
+export const isSafeAvatarUrl = (url) => {
+  if (typeof url !== 'string' || !url) return false;
+  if (url.startsWith('data:image/jpeg;base64,')
+    || url.startsWith('data:image/jpg;base64,')
+    || url.startsWith('data:image/png;base64,')
+    || url.startsWith('data:image/webp;base64,')) {
+    return url.length <= 90000;
+  }
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
 
 const looksLikeImage = (file) => {
   const type = (file.type || '').toLowerCase();
@@ -101,7 +120,7 @@ const decodeViaHeic2Any = async (file) => {
 
 /**
  * Resize + JPEG-compress an image file to a data URL suitable for Firestore avatar.
- * Caps output length to stay under firestore.rules avatar.size() <= 100000.
+ * Caps output length to stay under the firestore.rules avatar.size() <= 90000 bound.
  * Prefers createImageBitmap, then Image(), then lazy heic2any for HEIC/HEIF.
  * @param {File} file
  * @param {{ maxSide?: number, quality?: number, maxChars?: number }} [opts]

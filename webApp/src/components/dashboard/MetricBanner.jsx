@@ -65,7 +65,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
         />
         <MetricColumn
           icon={Activity}
-          label="Daily Quota"
+          label="Daily limit"
           value={`${quotaPct}%`}
           sub={isOver ? 'Over Limit' : 'Load'}
           warning={isOver || progress >= 0.8}

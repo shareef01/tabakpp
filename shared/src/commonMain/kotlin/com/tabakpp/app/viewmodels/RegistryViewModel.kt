@@ -54,7 +54,12 @@ class RegistryViewModel(
     private val _endingDay = MutableStateFlow(false)
     val endingDay = _endingDay.asStateFlow()
 
-    private val _trackingDay = MutableStateFlow(SmokingCalculator.getTrackingDate(Clock.System.now()))
+    private val _trackingDay = MutableStateFlow(
+        SmokingCalculator.getTrackingDate(
+            now = Clock.System.now(),
+            timeZone = kotlinx.datetime.TimeZone.currentSystemDefault()
+        )
+    )
     val trackingDay = _trackingDay.asStateFlow()
 
     // Local accent color for fast startup
@@ -63,19 +68,12 @@ class RegistryViewModel(
     )
     val localAccent = _localAccent.asStateFlow()
 
-    val friendlyError = _error.map { raw ->
-        raw
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
-
     init {
-        // Refresh tracking day periodically
+        // Refresh tracking day periodically (local calendar midnight)
         viewModelScope.launch {
             while (true) {
-                val profile = userProfile.value
-                val dayStartHour = profile?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR
                 _trackingDay.value = SmokingCalculator.getTrackingDate(
-                    now = Clock.System.now(), 
-                    dayStartHour = dayStartHour,
+                    now = Clock.System.now(),
                     timeZone = kotlinx.datetime.TimeZone.currentSystemDefault()
                 )
                 delay(30000) // 30 seconds
@@ -171,6 +169,10 @@ class RegistryViewModel(
 
     fun endDay() {
         val uid = authUser.value?.uid ?: return
+        if (!isOnline.value) {
+            setError(Exception("NETWORK"), "Network error. Check your connection.")
+            return
+        }
         val td = trackingDay.value
         viewModelScope.launch {
             _endingDay.value = true

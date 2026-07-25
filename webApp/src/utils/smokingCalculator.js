@@ -5,7 +5,6 @@
  * here must be mirrored in the Kotlin implementation and vice versa.
  */
 
-const DAY_START_HOUR_DEFAULT = 6;
 const SMOKING_TYPES = ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING'];
 
 // Date-only arithmetic done entirely in UTC space so the viewer's timezone
@@ -53,13 +52,10 @@ export const SmokingCalculator = {
   aggregateLoggedCounts,
 
   /**
-   * Tracking day in the device's local timezone with the user's day-start
-   * hour, matching mobile's getTrackingDate + TimeZone.currentSystemDefault().
-   * A 2 AM session belongs to yesterday's tracking day (night-owl mode).
+   * Local calendar date (YYYY-MM-DD). Tracking day rolls at midnight.
    */
-  getTrackingDate: (now = new Date(), dayStartHour = DAY_START_HOUR_DEFAULT) => {
+  getTrackingDate: (now = new Date()) => {
     const d = new Date(now);
-    if (d.getHours() < dayStartHour) d.setDate(d.getDate() - 1);
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');

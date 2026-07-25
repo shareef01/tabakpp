@@ -100,7 +100,7 @@ fun HistoryScreen(
                 // TREND ANALYSIS BLOCK
                 item {
                     Column {
-                        HistoryGroupHeader("vault statistics")
+                        HistoryGroupHeader("statistics")
                         Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),

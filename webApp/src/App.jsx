@@ -29,9 +29,22 @@ const lazyWithRetry = (componentImport) => lazy(async () => {
   try {
     return await componentImport();
   } catch (error) {
-    console.error("[ARCH] Dynamic import failure, forcing refresh...", error);
-    window.location.reload();
-    return { default: () => null };
+    console.error('[ARCH] Dynamic import failure', error);
+    const key = 'tabak_chunk_reload';
+    const last = Number(sessionStorage.getItem(key) || 0);
+    if (Date.now() - last > 15_000) {
+      sessionStorage.setItem(key, String(Date.now()));
+      window.location.reload();
+    }
+    return {
+      default: () => (
+        <div className="flex min-h-screen items-center justify-center bg-black p-8 text-center text-white">
+          <p className="text-sm font-bold uppercase tracking-widest text-neutral-400">
+            Could not load this screen. Refresh and try again.
+          </p>
+        </div>
+      ),
+    };
   }
 });
 
@@ -46,8 +59,8 @@ const SettingsScreen = lazyWithRetry(() => import('./components/settings/Setting
 const LoadingView = React.memo(() => (
   <div role="status" aria-live="polite" className="flex flex-col items-center justify-center min-h-screen min-h-dvh w-full space-y-12 bg-black text-white font-inter antialiased">
     <Loader2 className="animate-spin text-accent" size={64} strokeWidth={3} aria-hidden />
-    <span className="text-[11px] font-black uppercase tracking-[0.35em] text-white/55 animate-pulse">Synchronizing</span>
-    <span className="sr-only">Loading registry</span>
+    <span className="text-[11px] font-black uppercase tracking-[0.35em] text-white/55 animate-pulse">Loading</span>
+    <span className="sr-only">Loading</span>
   </div>
 ));
 
@@ -81,8 +94,8 @@ class GlobalErrorBoundary extends React.Component {
         <div className="flex flex-col items-center justify-center min-h-screen min-h-dvh w-full p-12 text-center bg-black text-white font-inter antialiased">
           <div className="p-8 mb-8 bg-red-600/10 rounded-[32px] text-red-500 border border-red-600/20 shadow-2xl"><AlertCircle size={48} /></div>
           <h2 className="mb-4 text-3xl font-black uppercase tracking-tighter leading-none">System Fault</h2>
-          <p className="max-w-md mb-10 text-sm font-bold leading-relaxed text-white/60">{this.state.error?.toString() || "Registry sync error."}</p>
-          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } localStorage.clear(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reset Engine</button>
+          <p className="max-w-md mb-10 text-sm font-bold leading-relaxed text-white/60">{this.state.error?.toString() || "Something went wrong."}</p>
+          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } localStorage.clear(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reload</button>
         </div>
       );
     }
@@ -122,7 +135,6 @@ const AppContent = () => {
       avatar: null,
       name: '',
       unitPrice: 0.5,
-      dayStartHour: 6,
       purchaseType: 'PACK',
       pouchPrice: 0,
       estimatedYield: 0
@@ -143,15 +155,14 @@ const AppContent = () => {
   const [showEndDayConfirm, setShowEndDayConfirm] = useState(false);
   const [protocolToDelete, setProtocolToDelete] = useState(null);
 
-  // Tracking day in LOCAL time with the user's day-start hour (Android
-  // parity) — recomputed live so a tab left open rolls over correctly.
+  // Local calendar tracking day — recomputed so a tab left open rolls over at midnight.
   const [today, setToday] = useState(() => SmokingCalculator.getTrackingDate());
   useEffect(() => {
-    const tick = () => setToday(SmokingCalculator.getTrackingDate(new Date(), settings.dayStartHour));
+    const tick = () => setToday(SmokingCalculator.getTrackingDate());
     tick();
     const id = setInterval(tick, 30000);
     return () => clearInterval(id);
-  }, [settings.dayStartHour]);
+  }, []);
 
   const registry = useRegistry(user, today, settings.unitPrice);
 
@@ -160,7 +171,7 @@ const AppContent = () => {
     registryError, clearRegistryError,
     increment, decrement, endDay, reorder, addProtocol, updateProtocol, deleteProtocol,
     createManualEntry, deleteLog, restoreLog, updateHistoricalLog
-  } = registry || { configs: [], logs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null };
+  } = registry;
 
   // Bootstrap profile once per session (create-if-missing + smokingUnits migration).
   // Settings hydration comes from useRegistry's single profile listener.
@@ -190,7 +201,6 @@ const AppContent = () => {
       widgetSize: profileSettings.widgetSize || prev.widgetSize,
       avatar: profileSettings.avatar || null,
       unitPrice: profileSettings.unitPrice ?? 0.5,
-      dayStartHour: profileSettings.dayStartHour ?? 6,
       purchaseType: profileSettings.purchaseType || 'PACK',
       pouchPrice: profileSettings.pouchPrice ?? 0,
       estimatedYield: profileSettings.estimatedYield ?? 0
@@ -417,12 +427,10 @@ const AppContent = () => {
             )}
             <ConfirmModal
               isOpen={showEndDayConfirm}
-              onClose={() => setShowEndDayConfirm(false)}
+              onClose={() => { if (!isEndingDay) setShowEndDayConfirm(false); }}
               onConfirm={async () => {
+                await endDay();
                 setShowEndDayConfirm(false);
-                try {
-                  await endDay();
-                } catch { /* registryError set in hook */ }
               }}
               title="End tracking day?"
               message="Today’s counts will be archived and counters reset. Archived entries can be edited in History."

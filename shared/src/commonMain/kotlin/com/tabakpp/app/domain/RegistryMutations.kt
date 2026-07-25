@@ -43,7 +43,11 @@ object RegistryMutations {
         return LifetimeAggregates(
             saved = current.saved - fin.saved,
             wasted = current.wasted - fin.wasted,
-            smokingUnits = current.smokingUnits - units
+            // Clamp: smokingUnits is a lifetime running total the rules require to
+            // be >= 0 (firestore.rules validLifetimeAggregates). Aggregate drift or
+            // deleting a log whose units exceed the stored total must floor at 0,
+            // otherwise the whole transaction is rejected with permission-denied.
+            smokingUnits = maxOf(0.0, current.smokingUnits - units)
         )
     }
 
@@ -62,7 +66,8 @@ object RegistryMutations {
         return LifetimeAggregates(
             saved = current.saved - oldFin.saved + newFin.saved,
             wasted = current.wasted - oldFin.wasted + newFin.wasted,
-            smokingUnits = current.smokingUnits - oldUnits + newUnits
+            // Clamp to satisfy the rules' smokingUnits >= 0 invariant; see debit().
+            smokingUnits = maxOf(0.0, current.smokingUnits - oldUnits + newUnits)
         )
     }
 

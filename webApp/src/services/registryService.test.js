@@ -202,6 +202,7 @@ describe('RegistryService.updateProfileSettings', () => {
       retailQty: 20,
       ryoPrice: 6.5,
       ryoYield: 60,
+      dayStartHour: 4,
       unitPrice: 0.4
     });
 
@@ -229,6 +230,7 @@ describe('RegistryService.updateProfileSettings', () => {
     expect(doc.retailQty).toBeUndefined();
     expect(doc.ryoPrice).toBeUndefined();
     expect(doc.ryoYield).toBeUndefined();
+    expect(doc.dayStartHour).toBeUndefined();
   });
 });
 
@@ -306,6 +308,16 @@ describe('RegistryService.updateHistoricalLog', () => {
     await expect(RegistryService.updateHistoricalLog(UID, 'nope', { cig: 1 })).rejects.toThrow('LOG_NOT_FOUND');
   });
 
+  it('floors smokingUnits at zero when an edit would underflow the total', async () => {
+    // old{cig:9} new{cig:1} against a drifted total of 3 → 3 - 9 + 1 = -5 → clamp 0.
+    seedLog({ id: 'L1', logDate: '2026-07-10', counts: { cig: 9 }, origin: 'DAY_RESET' });
+    seedUser({ lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 3 }, unitPrice: 0.5 });
+
+    await RegistryService.updateHistoricalLog(UID, 'L1', { cig: 1 });
+
+    expect(userDoc().lifetimeAggregates.smokingUnits).toBe(0);
+  });
+
   it('drops non-finite, negative, and excessive counts', async () => {
     seedLog({ id: 'L1', logDate: '2026-07-10', counts: { cig: 1 }, origin: 'DAY_RESET' });
     seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });
@@ -341,6 +353,21 @@ describe('RegistryService.deleteLog', () => {
     seedUser({ lifetimeAggregates: baseAgg() });
     await RegistryService.deleteLog(UID, 'missing');
     expect(userDoc().lifetimeAggregates).toEqual(baseAgg());
+  });
+
+  it('floors smokingUnits at zero instead of going negative (rules parity)', async () => {
+    // Deleting a log whose units exceed the stored total must clamp at 0, else
+    // the rules reject the write (smokingUnits >= 0). Mirrors RegistryMutationsTest.
+    seedLog({ id: 'L1', logDate: '2026-07-10', counts: { cig: 6 } });
+    seedUser({ lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 4 }, unitPrice: 0.5 });
+
+    await RegistryService.deleteLog(UID, 'L1');
+
+    const u = userDoc();
+    expect(u.lifetimeAggregates.smokingUnits).toBe(0);
+    // saved/wasted are allowed negative by the rules and are NOT clamped.
+    expect(u.lifetimeAggregates.saved).toBeCloseTo(-4);
+    expect(u.lifetimeAggregates.wasted).toBeCloseTo(-6);
   });
 });
 

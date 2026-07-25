@@ -3,6 +3,7 @@ import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { User, LogOut, Layout, Settings, ChevronDown, Square, Columns2, LayoutGrid, BarChart3 } from 'lucide-react';
 import { cn } from '../../utils/utils';
 import { Logo } from '../Common';
+import { isSafeAvatarUrl } from '../../utils/security';
 
 /** Compact → comfortable → spacious (matches TrackerCard density). */
 const DENSITY_OPTIONS = [
@@ -30,7 +31,7 @@ const AvatarFace = ({ user, size = 'md', className }) => {
         className
       )}
     >
-      {user?.photoURL ? (
+      {isSafeAvatarUrl(user?.photoURL) ? (
         <img src={user.photoURL} alt="" className="object-cover w-full h-full" />
       ) : initials ? (
         <span className="font-black tracking-tight text-accent leading-none">{initials}</span>

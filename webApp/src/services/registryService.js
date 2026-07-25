@@ -12,11 +12,11 @@ const withDocId = (d) => ({ ...d.data(), id: d.id });
 /** Settings keys mirrored from Android `updateProfileSettings` — never counters/aggregates. */
 const PROFILE_SETTINGS_KEYS = new Set([
   'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice',
-  'pouchPrice', 'estimatedYield', 'dayStartHour', 'avatar'
+  'pouchPrice', 'estimatedYield', 'avatar'
 ]);
 
-/** Legacy web-only economics keys — strip on every settings write. */
-const LEGACY_ECO_KEYS = ['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'];
+/** Legacy keys stripped on every settings write. */
+const LEGACY_STRIP_KEYS = ['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield', 'dayStartHour'];
 
 const normalizeCounts = (counts) => Object.fromEntries(
   Object.entries(counts || {})
@@ -95,7 +95,6 @@ export const RegistryService = {
       unitPrice: 0.5,
       pouchPrice: 0,
       estimatedYield: 0,
-      dayStartHour: 6,
       activeCounts: {},
       lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0 },
       smokingUnitsMigrated: true
@@ -105,7 +104,7 @@ export const RegistryService = {
   /**
    * Settings-only write path (Android `updateProfileSettings` parity).
    * Never touches activeCounts / lifetimeAggregates. Strips unknown keys and
-   * deletes legacy web eco fields so hardened rules stay satisfied.
+   * deletes legacy fields so hardened rules stay satisfied.
    */
   updateProfileSettings: async (uid, patch = {}) => {
     if (!uid) throw new Error('INVALID_REF');
@@ -113,7 +112,7 @@ export const RegistryService = {
     for (const [key, value] of Object.entries(patch)) {
       if (PROFILE_SETTINGS_KEYS.has(key)) payload[key] = value;
     }
-    for (const key of LEGACY_ECO_KEYS) {
+    for (const key of LEGACY_STRIP_KEYS) {
       payload[key] = deleteField();
     }
     return updateDoc(doc(db, 'users', uid), payload);
@@ -171,8 +170,10 @@ export const RegistryService = {
       if (!snap.exists()) throw new Error("USER_NOT_FOUND");
 
       const profile = snap.data();
-      const counts = { ...(profile.activeCounts || {}) };
-      counts[counterId] = Math.max(0, (counts[counterId] || 0) + delta);
+      const counts = normalizeCounts({
+        ...(profile.activeCounts || {}),
+        [counterId]: Math.max(0, (profile.activeCounts?.[counterId] || 0) + delta),
+      });
 
       transaction.update(userRef, { activeCounts: counts });
     });
@@ -192,7 +193,7 @@ export const RegistryService = {
 
     return runTransaction(db, async (transaction) => {
       const userSnap = await transaction.get(userRef);
-      if (!userSnap.exists()) return;
+      if (!userSnap.exists()) throw new Error('USER_NOT_FOUND');
       const logSnap = await transaction.get(logRef);
       const configs = await getConfigsInTransaction(transaction, uid);
 
@@ -263,7 +264,9 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - oldFin.saved + newFin.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - oldFin.wasted + newFin.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldUnits + newUnits
+        // Clamp: rules require smokingUnits >= 0; floor at 0 so an edit that would
+        // underflow the lifetime total is not rejected with permission-denied.
+        'lifetimeAggregates.smokingUnits': Math.max(0, (profile.lifetimeAggregates?.smokingUnits || 0) - oldUnits + newUnits)
       });
     });
   },
@@ -293,7 +296,9 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - fin.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - fin.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - units
+        // Clamp: rules require smokingUnits >= 0; floor at 0 so a delete that would
+        // underflow the lifetime total is not rejected with permission-denied.
+        'lifetimeAggregates.smokingUnits': Math.max(0, (profile.lifetimeAggregates?.smokingUnits || 0) - units)
       });
     });
   },

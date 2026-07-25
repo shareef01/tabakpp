@@ -6,8 +6,8 @@
 export const BRAND = {
   NAME: "tabak",
   SUFFIX: "++",
-  SUB_LABEL: "Registry",
-  VERSION: "TITAN-ARCH-V1"
+  SUB_LABEL: "Tracker",
+  VERSION: "1.0"
 };
 
 export const ACCENTS = [

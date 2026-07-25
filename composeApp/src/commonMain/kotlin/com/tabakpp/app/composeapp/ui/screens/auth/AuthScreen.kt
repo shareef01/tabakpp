@@ -298,14 +298,6 @@ private fun BrandedHero(accentColor: Color) {
                 fontWeight = FontWeight.Black
             )
         }
-        Text(
-            text = "EXECUTIVE HABIT TRACKING",
-            style = TabakTypography.labelSmall.copy(
-                letterSpacing = 4.sp, 
-                color = Color.White.copy(alpha = 0.3f),
-                fontWeight = FontWeight.Bold
-            )
-        )
     }
 }
 

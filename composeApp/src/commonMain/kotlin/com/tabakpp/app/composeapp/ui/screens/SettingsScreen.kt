@@ -41,6 +41,7 @@ import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.TrackerType
 import com.tabakpp.app.data.UserProfile
 import com.tabakpp.app.data.WidgetSize
+import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.viewmodels.RegistryViewModel
 import com.tabakpp.app.viewmodels.AuthViewModel
 import kotlinx.coroutines.delay
@@ -186,22 +187,10 @@ fun SettingsScreen(
                 }
             }
 
-            // 4. Night Owl Mode
+            // 4. Economics (web Settings parity)
             item {
                 Column {
-                    SettingsHeader("night owl mode")
-                    DayStartSettings(
-                        hour = profile?.dayStartHour ?: 6,
-                        onHourChange = { viewModel.updateProfile { p -> p.copy(dayStartHour = it) } },
-                        accentColor = accentColor
-                    )
-                }
-            }
-
-            // 5. Economics (web Settings parity)
-            item {
-                Column {
-                    SettingsHeader("economic constants")
+                    SettingsHeader("costs")
                     EconomicsSettings(
                         profile = profile,
                         accentColor = accentColor,
@@ -219,7 +208,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 6. Privacy
+            // 5. Privacy
             item {
                 Surface(
                     onClick = { showPrivacyNotice = true },
@@ -241,7 +230,7 @@ fun SettingsScreen(
                 }
             }
 
-            // 7. Sign Out / Delete
+            // 6. Sign Out / Delete
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Spacer(modifier = Modifier.height(16.dp))
@@ -310,7 +299,7 @@ fun SettingsScreen(
     configToDelete?.let { config ->
         ConfirmModal(
             title = "Delete tracker?",
-            message = "\"${config.name}\" will be removed from your dashboard. Logged history stays in the vault.",
+            message = "\"${config.name}\" will be removed from your dashboard. Logged history stays saved.",
             confirmLabel = "Delete",
             tintColor = ErrorColor,
             onConfirm = {
@@ -679,7 +668,7 @@ fun AccentPalette(
     onColorSelected: (String) -> Unit
 ) {
     val colors = listOf(
-        "Signal red" to "#FF5F5F", "Industrial amber" to "#F59E0B",
+        "Signal red" to "#FF5F5F", "Amber" to "#F59E0B",
         "Warning yellow" to "#FACC15", "Emerald" to "#10B981",
         "Teal" to "#14B8A6", "Electric cyan" to "#00D1FF",
         "Cobalt" to "#3B82F6", "Violet" to "#8B5CF6",
@@ -850,7 +839,8 @@ fun EconomicsSettings(
             ) {
                 Text("UNIT COST", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextMuted)
                 Text(
-                    "€${twoDecimals(unitCost)}",
+                    // Single source of truth for money display (matches History/metrics).
+                    SmokingCalculator.formatCurrency(unitCost),
                     style = TabakTypography.headlineMedium.copy(fontSize = 22.sp, fontWeight = FontWeight.Black),
                     color = TextPrimary
                 )
@@ -878,7 +868,7 @@ fun EconomicsSettings(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        "SYNCHRONIZE ECONOMICS",
+                        "SAVE",
                         style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = accentColor)
                     )
                 }
@@ -894,51 +884,4 @@ private fun twoDecimals(value: Double): String {
     val whole = abs / 100
     val frac = (abs % 100).toString().padStart(2, '0')
     return "${if (neg) "-" else ""}$whole.$frac"
-}
-
-@Composable
-fun DayStartSettings(
-    hour: Int,
-    onHourChange: (Int) -> Unit,
-    accentColor: Color
-) {
-    // Local state while dragging; a single Firestore write on release
-    var pendingHour by remember(hour) { mutableStateOf(hour) }
-    val amPm = if (pendingHour == 0) "12:00 AM" else if (pendingHour < 12) "$pendingHour:00 AM" else if (pendingHour == 12) "12:00 PM" else "${pendingHour-12}:00 PM"
-
-    SettingsGroupCard {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("DAY RESET PROTOCOL", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp), color = TextPrimary)
-                Text(amPm, style = TabakTypography.headlineMedium.copy(fontSize = 18.sp, fontWeight = FontWeight.Black, color = accentColor))
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Slider(
-                value = pendingHour.toFloat(),
-                onValueChange = { pendingHour = it.toInt() },
-                onValueChangeFinished = { if (pendingHour != hour) onHourChange(pendingHour) },
-                valueRange = 0f..23f,
-                steps = 22,
-                colors = SliderDefaults.colors(thumbColor = accentColor, activeTrackColor = accentColor, inactiveTrackColor = Color.White.copy(alpha = 0.05f))
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                listOf(0 to "Midnight", 4 to "4 AM", 6 to "6 AM", 12 to "Noon").forEach { (preset, label) ->
-                    FilterChip(
-                        selected = pendingHour == preset,
-                        onClick = {
-                            pendingHour = preset
-                            if (preset != hour) onHourChange(preset)
-                        },
-                        label = { Text(label) },
-                        modifier = Modifier.heightIn(min = 48.dp)
-                    )
-                }
-            }
-        }
-    }
 }

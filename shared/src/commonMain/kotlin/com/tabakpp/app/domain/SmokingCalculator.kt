@@ -8,22 +8,22 @@ import kotlin.math.min
 import kotlin.math.round
 
 object SmokingCalculator {
-    const val DEFAULT_DAY_START_HOUR = 6
     private val SMOKING_TYPES = listOf(TrackerType.CIGARETTE, TrackerType.RYO_ROLL, TrackerType.JOINT_KING)
+
+    /** Estimated minutes of life lost per smoking unit (and recovered per unit under the limit). */
+    private const val MINUTES_LOST_PER_UNIT = 11
 
     fun hasOpenSession(activeCounts: Map<String, Double>?): Boolean {
         return activeCounts?.values?.any { it > 0 } ?: false
     }
 
-    fun getTrackingDate(now: Instant, dayStartHour: Int = DEFAULT_DAY_START_HOUR, timeZone: TimeZone = TimeZone.UTC): String {
-        val localDateTime = now.toLocalDateTime(timeZone)
-        
-        val date = if (localDateTime.hour < dayStartHour) {
-            localDateTime.date.minus(1, DateTimeUnit.DAY)
-        } else {
-            localDateTime.date
-        }
-        return date.toString() // YYYY-MM-DD
+    /**
+     * Local calendar date (YYYY-MM-DD) — tracking day rolls at midnight in the
+     * given zone. [timeZone] is required on purpose: a UTC default silently
+     * shifted day boundaries for any caller that forgot to pass the device zone.
+     */
+    fun getTrackingDate(now: Instant, timeZone: TimeZone): String {
+        return now.toLocalDateTime(timeZone).date.toString()
     }
 
     private fun isDayArchiveLog(log: LogEntry): Boolean {
@@ -205,7 +205,7 @@ object SmokingCalculator {
             }
         }
 
-        return (totalCount * 11).toInt()
+        return (totalCount * MINUTES_LOST_PER_UNIT).toInt()
     }
 
     fun calculateRecoveryMinutes(
@@ -225,14 +225,14 @@ object SmokingCalculator {
             smokingConfigs.forEach { c ->
                 val count = max(0.0, counts[c.id] ?: 0.0)
                 val limit = max(0, c.limit)
-                recovered += max(0.0, limit.toDouble() - count) * 11
+                recovered += max(0.0, limit.toDouble() - count) * MINUTES_LOST_PER_UNIT
             }
         }
 
         smokingConfigs.forEach { c ->
             val count = max(0.0, (activeCounts ?: emptyMap())[c.id] ?: 0.0)
             val limit = max(0, c.limit)
-            recovered += max(0.0, limit.toDouble() - count) * 11
+            recovered += max(0.0, limit.toDouble() - count) * MINUTES_LOST_PER_UNIT
         }
 
         return recovered.toInt()
@@ -287,7 +287,6 @@ object SmokingCalculator {
             limit = primaryLimit,
             streak = streak,
             spentToday = sessionFin.wasted,
-            budgetLeftToday = sessionFin.saved,
             saved = sessionFin.saved,
             savedLifetime = savedLifetime,
             progress = if (primaryLimit > 0) primaryCount / primaryLimit else 0.0,
@@ -302,7 +301,6 @@ object SmokingCalculator {
         val limit: Int,
         val streak: Int,
         val spentToday: Double,
-        val budgetLeftToday: Double,
         val saved: Double,
         val savedLifetime: Double,
         val progress: Double,
@@ -349,7 +347,15 @@ object SmokingCalculator {
 
     fun normalizeAccentColor(hex: String): String {
         val h = hex.trim().uppercase()
-        return if (h == "#FFFFFF" || h == "#FFF") "#E4E4E7" else hex
+        if (h == "#FFFFFF" || h == "#FFF") return "#E4E4E7"
+        // Expand 3-digit #RGB → #RRGGBB. The Firestore rules accept short hex, so a
+        // web-written "#0F0" would otherwise be parsed by the Compose callers
+        // (Color(hex.removePrefix("#").toLong(16))) as 0x0000F0 — a near-black wrong color.
+        if (h.length == 4 && h.startsWith("#")) {
+            val r = h[1]; val g = h[2]; val b = h[3]
+            return "#$r$r$g$g$b$b"
+        }
+        return hex
     }
 
     fun normalizeCounts(counts: Map<String, Double>): Map<String, Double> {

@@ -111,7 +111,6 @@ data class UserProfile(
     val unitPrice: Double = 0.5,
     val pouchPrice: Double = 0.0,
     val estimatedYield: Int = 0,
-    val dayStartHour: Int = 6,
     val activeCounts: Map<String, Double> = emptyMap(),
     val lifetimeAggregates: LifetimeAggregates = LifetimeAggregates(),
     /** One-shot backfill of smokingUnits from full log history completed. */

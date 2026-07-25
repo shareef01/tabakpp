@@ -9,7 +9,12 @@
 .externalNativeBuild
 .cxx
 google-services.json
+google-services.json*
 GoogleService-Info.plist
+*.keystore
+*.jks
+keystore.properties
+*.bak
 .kotlin
 .idea-modules
 webApp/dist/

@@ -76,7 +76,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
             <div key={c.id} className="flex items-center justify-between p-5 bg-black/40 border border-white/5 rounded-2xl hover:border-white/10 transition-colors">
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-bold text-white uppercase tracking-wider">{c.name}</span>
-                <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Protocol {c.id.slice(0,4)}</span>
+                <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Tracker {c.id.slice(0,4)}</span>
               </div>
               <div className="flex items-center gap-3 bg-black/60 p-1.5 rounded-xl border border-white/5 shadow-inner">
                 <button

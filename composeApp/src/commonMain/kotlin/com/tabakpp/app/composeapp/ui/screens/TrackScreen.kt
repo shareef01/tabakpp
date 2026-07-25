@@ -169,10 +169,15 @@ fun TrackScreen(
         )
     }
 
-    // Close the dialog once the archive operation finishes
+    // Close only after an end-day attempt finishes (true → false), not on every
+    // composition where endingDay happens to be false.
+    var endDayAttempted by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(endingDay) {
-        if (!endingDay) {
+        if (endingDay) {
+            endDayAttempted = true
+        } else if (endDayAttempted) {
             showEndDayConfirm = false
+            endDayAttempted = false
         }
     }
 }
@@ -230,37 +235,6 @@ fun EmptyDashboard(accentColor: Color, onAddClick: () -> Unit) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp), tint = TextPrimary)
                     Spacer(modifier = Modifier.width(12.dp))
                     Text("CREATE TRACKER", style = TabakTypography.labelSmall.copy(color = TextPrimary, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ErrorBanner(message: String?, onDismiss: () -> Unit) {
-    AnimatedVisibility(
-        visible = message != null,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut()
-    ) {
-        message?.let { msg ->
-            Surface(
-                color = ErrorColor.copy(alpha = 0.95f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = msg.uppercase(),
-                        color = Color.White,
-                        style = TabakTypography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Black),
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color.White, modifier = Modifier.size(16.dp))
-                    }
                 }
             }
         }

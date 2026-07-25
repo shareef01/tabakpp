@@ -56,7 +56,7 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
         {/* Header */}
         <div className="w-full flex items-center justify-between gap-2">
           <span className="text-[11px] md:text-xs font-black uppercase tracking-[0.16em] text-white/85 truncate">
-            {config?.name || 'Registry'}
+            {config?.name || 'Tracker'}
           </span>
           <span className="shrink-0 text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 px-2 py-0.5 rounded bg-white/[0.04] border border-white/[0.06]">
             {limit}/day

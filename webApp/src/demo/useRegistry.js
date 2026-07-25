@@ -64,7 +64,6 @@ export const useRegistry = () => {
     widgetSize: 'MEDIUM',
     avatar: null,
     unitPrice: 0.55,
-    dayStartHour: 6,
   };
 
   return {

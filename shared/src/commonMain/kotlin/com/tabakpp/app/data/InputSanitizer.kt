@@ -14,7 +14,7 @@ object InputSanitizer {
 
     private fun text(value: String, maxLength: Int): String =
         value
-            .filterNot { it.isISOControl() || it == '<' || it == '>' }
+            .filterNot { it.isISOControl() || it == '<' || it == '>' || it == '$' }
             .trim()
             .take(maxLength)
 }

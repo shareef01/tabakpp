@@ -13,6 +13,16 @@ class FirebaseRegistryRepository(
 
     private val BATCH_LIMIT = 400
 
+    /**
+     * ~48 bits of entropy (two 24-bit draws) appended to a millisecond timestamp
+     * for client-generated log/config ids. Wide enough that two writes in the same
+     * millisecond effectively never collide (the old 3-digit suffix could, and a
+     * collision would silently overwrite via set()).
+     */
+    private fun randomIdSuffix(): String =
+        (0..0xFFFFFF).random().toString(16).padStart(6, '0') +
+            (0..0xFFFFFF).random().toString(16).padStart(6, '0')
+
     override fun subscribeToUserProfile(uid: String): Flow<UserProfile?> {
         return firestore.collection("users").document(uid).snapshots().map { 
             if (it.exists) it.data<UserProfile>() else null
@@ -58,8 +68,11 @@ class FirebaseRegistryRepository(
     private fun decodeLogEntry(doc: DocumentSnapshot): LogEntry? {
         return try {
             doc.data<LogEntry>().copy(id = doc.id)
-        } catch (_: Exception) {
-            // Legacy/partial docs must not crash the signed-in shell.
+        } catch (e: Exception) {
+            // Legacy/partial docs must not crash the signed-in shell. A dropped log
+            // silently disappears from aggregation, so make the loss observable
+            // (Logcat / JS console) instead of swallowing it — id only, no payload.
+            println("TabakPP: skipped undecodable log '${doc.id}': ${e.message}")
             null
         }
     }
@@ -155,8 +168,7 @@ class FirebaseRegistryRepository(
 
             val agg = RegistryMutations.credit(profile.lifetimeAggregates, normalized, configs, profile.unitPrice)
             val now = Clock.System.now().toEpochMilliseconds()
-            val entropy = (0..999).random().toString().padStart(3, '0')
-            val logId = "${date}_M${now}_$entropy"
+            val logId = "${date}_M${now}_${randomIdSuffix()}"
 
             val logEntry = LogEntry(
                 id = logId,
@@ -266,8 +278,7 @@ class FirebaseRegistryRepository(
         val collection = firestore.collection("users").document(uid).collection("configs")
         val nowMillis = Clock.System.now().toEpochMilliseconds()
         val finalId = if (config.id.isBlank()) {
-            val entropy = (0..999).random().toString().padStart(3, '0')
-            "cfg_${nowMillis}$entropy"
+            "cfg_${nowMillis}_${randomIdSuffix()}"
         } else {
             config.id
         }
@@ -326,8 +337,8 @@ class FirebaseRegistryRepository(
             "unitPrice" to profile.unitPrice
             "pouchPrice" to profile.pouchPrice
             "estimatedYield" to profile.estimatedYield
-            "dayStartHour" to profile.dayStartHour
             "avatar" to profile.avatar
+            "dayStartHour" to FieldValue.delete
             "ecoMode" to FieldValue.delete
             "retailPrice" to FieldValue.delete
             "retailQty" to FieldValue.delete
@@ -349,7 +360,6 @@ class FirebaseRegistryRepository(
                 unitPrice = 0.5,
                 pouchPrice = 0.0,
                 estimatedYield = 0,
-                dayStartHour = 6,
                 lifetimeAggregates = LifetimeAggregates(),
                 smokingUnitsMigrated = true,
                 activeCounts = emptyMap()
