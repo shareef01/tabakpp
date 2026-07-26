@@ -92,6 +92,10 @@ export const Strings = {
   UNIT_COST: 'Unit Cost',
   RETAIL: 'Retail',
   LOOSE: 'Loose',
+  PACK_PRICE_LABEL: 'Pack Price (€)',
+  BEUTEL_PRICE_LABEL: 'Beutel Price (€)',
+  UNITS_PACK_LABEL: 'Units / Pack',
+  EST_YIELD_LABEL: 'Est. Yield',
 
   // History Refinements
   USAGE_VELOCITY: 'Usage velocity',
@@ -193,4 +197,12 @@ export const Strings = {
   OFFLINE_BANNER_MSG: "You're offline — changes may fail until you're back online",
   SYSTEM_FAULT: 'System Fault',
   SOMETHING_WRONG: 'Something went wrong.',
+
+  // Branding
+  BRAND_NAME: 'tabak',
+  BRAND_SUFFIX: '++',
+  BRAND_SUB_LABEL: 'Tracker',
+
+  // Accessibility
+  UNITS_DESC: 'daily units',
 };

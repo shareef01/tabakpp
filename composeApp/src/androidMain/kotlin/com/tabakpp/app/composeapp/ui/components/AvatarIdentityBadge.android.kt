@@ -78,9 +78,8 @@ actual fun AvatarIdentityBadge(
                 onAvatarChanged(dataUrl)
             } catch (e: Exception) {
                 val message = when (e.message) {
-                    "AVATAR_TOO_LARGE" -> "Image still too large"
-                    "DECODE_FAILED", "INVALID_IMAGE" -> "Could not process image"
-                    else -> "Could not process image"
+                    "AVATAR_TOO_LARGE" -> Strings.ERR_IMAGE_TOO_LARGE
+                    else -> Strings.ERR_PROCESS_IMAGE
                 }
                 snackbarHostState.showSnackbar(message)
             } finally {
@@ -115,13 +114,13 @@ actual fun AvatarIdentityBadge(
                     )
                     bitmap != null -> Image(
                         bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Avatar",
+                        contentDescription = Strings.AVATAR_LABEL,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
                     else -> Icon(
                         Icons.Default.Person,
-                        contentDescription = "Choose avatar",
+                        contentDescription = Strings.CHOOSE_AVATAR,
                         modifier = Modifier.size(36.dp),
                         tint = TextDisabled
                     )
@@ -140,7 +139,7 @@ actual fun AvatarIdentityBadge(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "Remove avatar",
+                        contentDescription = Strings.REMOVE_AVATAR,
                         modifier = Modifier.padding(4.dp).size(14.dp),
                         tint = Color.White
                     )
@@ -156,7 +155,7 @@ actual fun AvatarIdentityBadge(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         Icons.Default.Person,
-                        contentDescription = "Add avatar",
+                        contentDescription = Strings.ADD_AVATAR,
                         modifier = Modifier.padding(4.dp).size(12.dp),
                         tint = Color.Black
                     )

@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { cn } from '../utils/utils';
+import { Strings } from '../constants/strings';
 
 /**
  * UI Constants for Platinum Industrial Design
@@ -31,13 +32,13 @@ export const Logo = React.memo(({ size = 'md', className }) => {
         "font-black text-white leading-none lowercase tracking-[-0.05em] transition-transform duration-500 group-hover:scale-105",
         s.t
       )}>
-        t
+        {Strings.BRAND_NAME}
       </span>
       <span className={cn(
         "font-black text-accent leading-none transition-transform duration-500 delay-75 group-hover:scale-110",
         s.plus
       )}>
-        ++
+        {Strings.BRAND_SUFFIX}
       </span>
     </div>
   );

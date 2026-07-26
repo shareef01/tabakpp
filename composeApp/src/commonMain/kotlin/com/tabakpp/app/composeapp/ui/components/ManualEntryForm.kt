@@ -114,7 +114,7 @@ fun ManualEntryForm(
                     onValueChange = { date = it.take(10) },
                     enabled = !isEditing,
                     isError = date.isNotBlank() && !isDateValid,
-                    placeholder = { Text("YYYY-MM-DD", color = TextDisabled, style = TabakTypography.bodyMedium) },
+                    placeholder = { Text(Strings.DATE_FORMAT_HINT, color = TextDisabled, style = TabakTypography.bodyMedium) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.small,
                     colors = TextFieldDefaults.colors(

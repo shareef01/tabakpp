@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { cn } from '../../utils/utils';
+import { Strings } from '../../constants/strings';
 
 /**
  * SHARED DESIGN TOKENS
@@ -30,7 +31,10 @@ export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type, isLarge 
       "relative w-full max-w-[220px] mx-auto rounded-full bg-black/40 border border-white/[0.08] shadow-inner p-1.5 overflow-hidden transition-all duration-700",
       isLarge ? "h-16 md:h-[4.5rem]" : "h-14 md:h-16",
       ignited && "border-red-500/20 bg-red-950/20"
-    )}>
+    )}
+    role="img"
+    aria-label={`${count} of ${limit} ${Strings.UNITS_DESC}`}
+    >
       {/* THE INNER TRACK */}
       <div className="relative w-full h-full rounded-full overflow-hidden flex items-center bg-black/20">
 

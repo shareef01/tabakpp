@@ -316,10 +316,23 @@ class RegistryViewModel(
         }
     }
 
-    fun updateDisplayName(name: String) {
+    /**
+     * Persist display name to Firestore first, then Auth.
+     * Avoids Auth/Firestore drift when the profile write is denied
+     * (e.g. unrelated permission failure while saving identity).
+     */
+    fun updateIdentityName(name: String) {
+        val uid = authUser.value?.uid ?: return
+        val current = userProfile.value ?: UserProfile()
+        val updated = current.copy(name = name)
         viewModelScope.launch {
-            authRepository.updateDisplayName(name)
-                .onFailure { setError(it, "Could not update your display name. Try again.") }
+            try {
+                registryRepository.updateProfileSettings(uid, updated)
+                authRepository.updateDisplayName(name)
+                    .onFailure { setError(it, "Could not update your display name. Try again.") }
+            } catch (e: Exception) {
+                setError(e, "Could not update settings. Try again.")
+            }
         }
     }
 

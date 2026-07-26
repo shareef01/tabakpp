@@ -103,8 +103,7 @@ fun SettingsScreen(
                         profile = profile,
                         onUpdateName = { raw ->
                             val name = InputSanitizer.displayName(raw)
-                            viewModel.updateDisplayName(name)
-                            viewModel.updateProfile { p -> p.copy(name = name) }
+                            viewModel.updateIdentityName(name)
                         },
                         onUpdateAvatar = { dataUrl ->
                             viewModel.updateProfile { p -> p.copy(avatar = dataUrl) }

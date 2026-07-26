@@ -118,6 +118,27 @@ describe('Firestore ownership and write paths', () => {
     await assertSucceeds(updateDoc(doc(db, 'users/alice'), { avatar }));
   });
 
+  it('allows unrelated settings updates when a legacy avatar is already stored', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), {
+        ...emptyProfile,
+        // Pre-hardening payload: remote URL (no longer accepted for new writes).
+        avatar: 'https://example.com/legacy-avatar.png',
+      });
+    });
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+      name: 'Alice',
+      accent: '#10B981',
+    }));
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      avatar: 'https://example.com/still-legacy.png',
+    }));
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+      avatar: null,
+    }));
+  });
+
   it('blocks rewinding smokingUnitsMigrated once true', async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);

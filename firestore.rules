@@ -68,7 +68,9 @@ service cloud.firestore {
       ]);
     }
 
-    function validSettingsShape(d) {
+    // Settings fields other than avatar. Avatar is validated separately so
+    // settings updates do not re-check an unchanged legacy avatar.
+    function validSettingsFields(d) {
       return (!('name' in d) || (d.name is string && d.name.size() <= 100))
         && (!('accent' in d) || (d.accent is string && d.accent.matches('^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$')))
         && (!('purchaseType' in d) || d.purchaseType in ['PACK', 'POUCH'])
@@ -76,7 +78,11 @@ service cloud.firestore {
         && (!('unitPrice' in d) || (isNumber(d.unitPrice) && d.unitPrice >= 0 && d.unitPrice <= 1000))
         && (!('pouchPrice' in d) || (isNumber(d.pouchPrice) && d.pouchPrice >= 0 && d.pouchPrice <= 10000))
         && (!('estimatedYield' in d) || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
-        && (!('widgetSize' in d) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
+        && (!('widgetSize' in d) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE']);
+    }
+
+    function validSettingsShape(d) {
+      return validSettingsFields(d)
         && (!('avatar' in d) || validAvatar(d.avatar));
     }
 
@@ -110,12 +116,17 @@ service cloud.firestore {
               && resource.data.get('smokingUnitsMigrated', false) != true));
     }
 
-    // Settings path: validate settings shape on the resulting doc, but do not
+    // Settings path: validate settings fields on the resulting doc, but do not
     // require hasOnly — legacy unknown keys must not brick settings saves.
+    // Avatar is only re-checked when it changes so pre-hardening payloads
+    // (https URLs, oversized data URLs, plain strings) do not block name/
+    // accent/economics updates. New avatar writes still go through validAvatar.
     // Still forbid touching counters/aggregates via isSettingsOnlyUpdate().
     function validSettingsUpdate() {
       let d = request.resource.data;
-      return validSettingsShape(d)
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return validSettingsFields(d)
+        && (!changed.hasAny(['avatar']) || validAvatar(d.get('avatar', null)))
         && (!('lifetimeAggregates' in d) || validLifetimeAggregates(d.lifetimeAggregates))
         && (!('activeCounts' in d) || validCountMap(d.activeCounts))
         && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool)

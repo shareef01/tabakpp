@@ -62,7 +62,7 @@ fun TrackerGauge(
             .fillMaxWidth()
             .height(height)
             .semantics {
-                contentDescription = "$count of $limit daily units"
+                contentDescription = "$count of $limit ${Strings.DAILY_UNITS_DESC}"
                 progressBarRangeInfo = ProgressBarRangeInfo(
                     current = progress.coerceIn(0f, 1f),
                     range = 0f..1f

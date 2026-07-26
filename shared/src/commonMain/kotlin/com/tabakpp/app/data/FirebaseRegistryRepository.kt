@@ -328,6 +328,9 @@ class FirebaseRegistryRepository(
     // which are owned by the transactional counter/archive paths. Writing the full
     // profile here would race live increments and silently revert them.
     // Also strip legacy web eco keys so rules stay satisfied on older documents.
+    // Avatar is only written when cleared or rules-compliant — rewriting a legacy
+    // https/plain/oversized payload on every accent/name save is unnecessary and
+    // used to fail once validAvatar tightened.
     override suspend fun updateProfileSettings(uid: String, profile: UserProfile) {
         firestore.collection("users").document(uid).updateFields {
             "name" to profile.name
@@ -337,7 +340,10 @@ class FirebaseRegistryRepository(
             "unitPrice" to profile.unitPrice
             "pouchPrice" to profile.pouchPrice
             "estimatedYield" to profile.estimatedYield
-            "avatar" to profile.avatar
+            val avatar = profile.avatar
+            if (avatar == null || isRulesCompliantAvatar(avatar)) {
+                "avatar" to avatar
+            }
             "dayStartHour" to FieldValue.delete
             "ecoMode" to FieldValue.delete
             "retailPrice" to FieldValue.delete
@@ -407,5 +413,14 @@ class FirebaseRegistryRepository(
             batch.commit()
             if (docs.size < BATCH_LIMIT) break
         }
+    }
+
+    companion object {
+        // Mirrors firestore.rules validAvatar (data-URL + 90k cap).
+        private val AVATAR_DATA_URL =
+            Regex("^data:image/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$")
+
+        internal fun isRulesCompliantAvatar(value: String): Boolean =
+            value.length <= 90_000 && AVATAR_DATA_URL.matches(value)
     }
 }

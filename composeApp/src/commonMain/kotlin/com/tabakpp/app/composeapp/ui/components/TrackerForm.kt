@@ -100,7 +100,7 @@ fun TrackerForm(
                     value = name,
                     onValueChange = { name = it },
                     label = Strings.TRACKER_NAME,
-                    placeholder = "e.g. Marlboro Red"
+                    placeholder = Strings.TRACKER_NAME_EXAMPLE
                 )
                 
                 Spacer(modifier = Modifier.height(28.dp))

@@ -1,12 +1,14 @@
+import { Strings } from './strings';
+
 /**
  * TABAK++ UI & Branding Constants
  * Standardized design tokens for consistent high-fidelity presentation.
  */
 
 export const BRAND = {
-  NAME: "tabak",
-  SUFFIX: "++",
-  SUB_LABEL: "Tracker",
+  NAME: Strings.BRAND_NAME,
+  SUFFIX: Strings.BRAND_SUFFIX,
+  SUB_LABEL: Strings.BRAND_SUB_LABEL,
   VERSION: "1.0"
 };
 
@@ -22,7 +24,7 @@ export const ACCENTS = [
 export const SCALING_OPTIONS = ['SMALL', 'MEDIUM', 'LARGE'];
 
 export const COUNTER_TYPES = [
-  { id: 'CIGARETTE', label: 'Cigarette' },
-  { id: 'RYO_ROLL', label: 'RYO' },
-  { id: 'SIMPLE', label: 'Custom' }
+  { id: 'CIGARETTE', label: Strings.CIGARETTE },
+  { id: 'RYO_ROLL', label: Strings.RYO },
+  { id: 'SIMPLE', label: Strings.CUSTOM }
 ];

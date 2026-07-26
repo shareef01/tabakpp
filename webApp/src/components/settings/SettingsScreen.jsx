@@ -585,8 +585,8 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               <button type="button" onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Wind size={14} /> {Strings.LOOSE}</button>
             </div>
             <div className="grid grid-cols-2 gap-6">
-              <Input label={ecoMode === 'PACK' ? "Pack Price (€)" : "Beutel Price (€)"} type="number" step="0.01" value={ecoMode === 'PACK' ? packPrice : pouchPrice} onChange={ecoMode === 'PACK' ? setPackPrice : setPouchPrice} isDark />
-              <Input label={ecoMode === 'PACK' ? "Units / Pack" : "Est. Yield"} type="number" value={ecoMode === 'PACK' ? packQty : estimatedYield} onChange={ecoMode === 'PACK' ? setPackQty : setEstimatedYield} isDark />
+              <Input label={ecoMode === 'PACK' ? Strings.PACK_PRICE_LABEL : Strings.BEUTEL_PRICE_LABEL} type="number" step="0.01" value={ecoMode === 'PACK' ? packPrice : pouchPrice} onChange={ecoMode === 'PACK' ? setPackPrice : setPouchPrice} isDark />
+              <Input label={ecoMode === 'PACK' ? Strings.UNITS_PACK_LABEL : Strings.EST_YIELD_LABEL} type="number" value={ecoMode === 'PACK' ? packQty : estimatedYield} onChange={ecoMode === 'PACK' ? setPackQty : setEstimatedYield} isDark />
             </div>
             <div className="mt-10 pt-10 border-t border-white/5 space-y-8">
               <div className="flex items-center justify-between px-2">

@@ -165,4 +165,15 @@ object Strings {
     const val ERR_PROFILE_NOT_READY = "Profile is not ready yet. Refresh and try again."
     const val ERR_ENTRY_NOT_FOUND = "That history entry no longer exists. Refresh and try again."
     const val ERR_NOTHING_TO_ARCHIVE = "Nothing to archive — counters are at zero."
+    const val DAILY_UNITS_DESC = "daily units"
+    
+    // Avatar
+    const val AVATAR_LABEL = "Avatar"
+    const val CHOOSE_AVATAR = "Choose avatar"
+    const val REMOVE_AVATAR = "Remove avatar"
+    const val ADD_AVATAR = "Add avatar"
+    const val ERR_IMAGE_TOO_LARGE = "Image still too large"
+    const val ERR_PROCESS_IMAGE = "Could not process image"
+    const val DATE_FORMAT_HINT = "YYYY-MM-DD"
+    const val TRACKER_NAME_EXAMPLE = "e.g. Marlboro Red"
 }
