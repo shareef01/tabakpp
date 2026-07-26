@@ -31,6 +31,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tabakpp.app.composeapp.theme.*
+import com.tabakpp.app.composeapp.ui.components.Strings
 import com.tabakpp.app.viewmodels.AuthViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -104,7 +105,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
 
                     if (isSignUp) {
                         AuthField(
-                            label = "DISPLAY NAME (OPTIONAL)",
+                            label = Strings.DISPLAY_NAME_OPT,
                             value = displayName,
                             onValueChange = { displayName = it.take(100) }
                         )
@@ -112,21 +113,21 @@ fun AuthScreen(viewModel: AuthViewModel) {
                     }
 
                     AuthField(
-                        label = "EMAIL",
+                        label = Strings.EMAIL,
                         value = email,
                         onValueChange = { email = it },
                         keyboardType = KeyboardType.Email
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     AuthField(
-                        label = "PASSWORD",
+                        label = Strings.PASSWORD_LABEL,
                         value = password,
                         onValueChange = { password = it },
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         trailing = {
                             TextButton(onClick = { passwordVisible = !passwordVisible }) {
                                 Text(
-                                    if (passwordVisible) "HIDE" else "SHOW",
+                                    if (passwordVisible) Strings.HIDE else Strings.SHOW,
                                     style = TabakTypography.labelSmall.copy(
                                         fontWeight = FontWeight.Black,
                                         letterSpacing = 1.sp,
@@ -139,7 +140,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
                     if (isSignUp) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            "Use at least 12 characters.",
+                            Strings.PASSWORD_HINT,
                             style = TabakTypography.labelSmall.copy(color = TextMuted),
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -148,7 +149,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
                     if (!isOnline) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            "OFFLINE — RECONNECT TO SIGN IN",
+                            Strings.OFFLINE_AUTH_MSG,
                             style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp),
                             color = Color(0xFFFBBF24)
                         )
@@ -168,7 +169,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
                             .fillMaxWidth()
                             .height(56.dp)
                             .semantics {
-                                if (loading) stateDescription = "Loading"
+                                if (loading) stateDescription = Strings.LOADING
                             }
                             .tabakPressScale()
                             .shadow(12.dp, MaterialTheme.shapes.small, ambientColor = accentColor.copy(alpha = 0.4f), spotColor = accentColor.copy(alpha = 0.4f)),
@@ -180,7 +181,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
                                 CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
                             } else {
                                 Text(
-                                    text = if (isSignUp) "CREATE ACCOUNT" else "SIGN IN",
+                                    text = if (isSignUp) Strings.CREATE_ACCOUNT else Strings.SIGN_IN,
                                     style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = Color.White)
                                 )
                             }
@@ -196,7 +197,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
                         ) {
                             Box(modifier = Modifier.weight(1f).height(1.dp).background(Color.White.copy(alpha = 0.08f)))
                             Text(
-                                "OR",
+                                Strings.OR,
                                 modifier = Modifier.padding(horizontal = 12.dp),
                                 style = TabakTypography.labelSmall.copy(letterSpacing = 2.sp, color = Color.White.copy(alpha = 0.55f), fontWeight = FontWeight.Black)
                             )
@@ -226,7 +227,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Text(
-                                        "CONTINUE WITH GOOGLE",
+                                        Strings.CONTINUE_WITH_GOOGLE,
                                         style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = Color.White)
                                     )
                                 }
@@ -243,7 +244,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                "FORGOT PASSWORD?",
+                                Strings.FORGOT_PASSWORD,
                                 style = TabakTypography.labelSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 1.sp,
@@ -311,8 +312,8 @@ private fun AuthTabs(isSignUp: Boolean, onTabSelected: (Boolean) -> Unit, accent
             .background(Color.White.copy(alpha = 0.04f))
             .padding(4.dp)
     ) {
-        TabItem("Sign in", !isSignUp, Modifier.weight(1f), accentColor) { onTabSelected(false) }
-        TabItem("Create account", isSignUp, Modifier.weight(1f), accentColor) { onTabSelected(true) }
+        TabItem(Strings.SIGN_IN, !isSignUp, Modifier.weight(1f), accentColor) { onTabSelected(false) }
+        TabItem(Strings.CREATE_ACCOUNT, isSignUp, Modifier.weight(1f), accentColor) { onTabSelected(true) }
     }
 }
 

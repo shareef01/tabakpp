@@ -2,7 +2,8 @@ import React from 'react';
 import { cn } from '../../utils/utils';
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { Card } from '../Common';
-import { Target, Zap, Activity, Wallet, Sun, Loader2 } from 'lucide-react';
+import { Target, Zap, Activity, Wallet, Sun, Loader2, Award } from 'lucide-react';
+import { Strings } from '../../constants/strings';
 
 const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning }) => (
   <div className="flex flex-col items-center justify-center gap-2 px-3 py-5 md:px-5 md:py-6 transition-colors duration-300 group/metric">
@@ -42,32 +43,38 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
 
   return (
     <Card className="overflow-hidden bg-bg-card p-0" noPadding>
-      <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
+      <div className="grid grid-cols-2 lg:grid-cols-5 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
         <MetricColumn
           icon={Target}
-          label="Remaining"
+          label={Strings.REMAINING}
           value={Math.max(0, (m.limit || 0) - (m.count || 0))}
-          sub="Units"
+          sub={Strings.UNITS}
           accent
         />
         <MetricColumn
           icon={Wallet}
-          label="Spent Today"
+          label={Strings.SPENT_TODAY}
           value={SmokingCalculator.formatCurrency(m.spentToday || 0)}
-          sub="Resources"
+          sub={Strings.RESOURCES}
           warning={(m.spentToday || 0) > 0}
         />
         <MetricColumn
           icon={Zap}
-          label="Streak"
+          label={Strings.STREAK}
           value={`${m.streak || 0}`}
-          sub={m.streak === 1 ? 'Day' : 'Days'}
+          sub={m.streak === 1 ? Strings.DAY : Strings.DAYS}
+        />
+        <MetricColumn
+          icon={Award}
+          label={Strings.RANK}
+          value={m.rank || 'Apprentice'}
+          sub={`${m.xp || 0} ${Strings.XP}`}
         />
         <MetricColumn
           icon={Activity}
-          label="Daily limit"
+          label={Strings.DAILY_LIMIT}
           value={`${quotaPct}%`}
-          sub={isOver ? 'Over Limit' : 'Load'}
+          sub={isOver ? Strings.OVER_LIMIT : Strings.LOAD}
           warning={isOver || progress >= 0.8}
         />
       </div>
@@ -89,7 +96,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           type="button"
           onClick={onEndDay}
           disabled={isEnding}
-          aria-label="End tracking day"
+          aria-label={Strings.END_TRACKING_DAY}
           className="group w-full h-12 flex items-center justify-center gap-2.5 border-t border-amber-500/15 bg-amber-500/[0.05] hover:bg-amber-500/[0.09] transition-colors duration-300 disabled:opacity-40"
         >
           {isEnding ? (
@@ -98,7 +105,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
             <Sun className="text-amber-400 group-hover:rotate-90 transition-transform duration-700" size={16} />
           )}
           <span className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-100/85">
-            {isEnding ? 'Archiving…' : 'End Tracking Day'}
+            {isEnding ? Strings.ARCHIVING : Strings.END_TRACKING_DAY}
           </span>
         </button>
       )}

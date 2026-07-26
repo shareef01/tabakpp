@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { LayoutGrid, BarChart3, Settings } from 'lucide-react';
 import { cn } from '../../utils/utils';
+import { Strings } from '../../constants/strings';
 
 /**
  * Bottom Navigation Dock - PLATINUM REFINED PILL
@@ -9,9 +10,9 @@ import { cn } from '../../utils/utils';
  */
 export const BottomNav = React.memo(({ activeTab, onTabChange }) => {
   const tabs = [
-    { id: 'track', icon: LayoutGrid, label: 'Track' },
-    { id: 'history', icon: BarChart3, label: 'History' },
-    { id: 'settings', icon: Settings, label: 'Settings' }
+    { id: 'track', icon: LayoutGrid, label: Strings.TRACK },
+    { id: 'history', icon: BarChart3, label: Strings.HISTORY },
+    { id: 'settings', icon: Settings, label: Strings.SETTINGS }
   ];
 
   const activeIndex = tabs.findIndex(t => t.id === activeTab);

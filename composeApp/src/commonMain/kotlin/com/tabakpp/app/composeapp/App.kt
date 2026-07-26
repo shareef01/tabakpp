@@ -55,9 +55,9 @@ import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 sealed class Screen(val route: String, val icon: ImageVector, val label: String) {
-    object Track : Screen("track", Icons.Rounded.Dashboard, "Track")
-    object History : Screen("history", Icons.Rounded.History, "History")
-    object Settings : Screen("settings", Icons.Rounded.Settings, "Settings")
+    object Track : Screen("track", Icons.Rounded.Dashboard, Strings.TRACK)
+    object History : Screen("history", Icons.Rounded.History, Strings.HISTORY)
+    object Settings : Screen("settings", Icons.Rounded.Settings, Strings.SETTINGS)
 }
 
 @Composable
@@ -89,7 +89,7 @@ fun App(reducedMotion: Boolean = false) {
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black)
-                        .semantics { stateDescription = "Loading account" },
+                        .semantics { stateDescription = Strings.LOADING_ACCOUNT },
                     contentAlignment = Alignment.Center
                 ) {
                     CircularProgressIndicator(
@@ -165,9 +165,9 @@ fun MainApp(registryViewModel: RegistryViewModel, accentColor: Color, snackbarHo
 
             if (showHeaderLogoutConfirm) {
                 ConfirmModal(
-                    title = "Sign out?",
-                    message = "Are you sure you want to sign out? You will need to log in again to access your data.",
-                    confirmLabel = "Sign out",
+                    title = "${Strings.SIGN_OUT}?",
+                    message = Strings.SIGN_OUT_MSG,
+                    confirmLabel = Strings.SIGN_OUT,
                     tintColor = ErrorColor,
                     onConfirm = {
                         showHeaderLogoutConfirm = false

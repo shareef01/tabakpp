@@ -89,7 +89,7 @@ fun AppHeader(
                 }, modifier = Modifier.size(48.dp)) {
                     Icon(
                         imageVector = if (widgetSize == WidgetSize.LARGE) Icons.Rounded.ViewAgenda else Icons.Rounded.GridView,
-                        contentDescription = "Change dashboard density. Current ${widgetSize.accessibleLabel()}",
+                        contentDescription = "${Strings.CHANGE_DENSITY} ${widgetSize.accessibleLabel()}",
                         tint = TextMuted,
                         modifier = Modifier.size(26.dp)
                     )
@@ -111,7 +111,7 @@ fun AppHeader(
                         ),
                         shape = CircleShape
                     ) {
-                        Icon(Icons.Rounded.Person, contentDescription = "Profile", modifier = Modifier.size(20.dp))
+                        Icon(Icons.Rounded.Person, contentDescription = Strings.PROFILE_LABEL, modifier = Modifier.size(20.dp))
                     }
 
                     DropdownMenu(
@@ -122,7 +122,7 @@ fun AppHeader(
                             .border(1.dp, Color.White.copy(alpha = 0.08f), MaterialTheme.shapes.small)
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Sign out", color = ErrorColor) },
+                            text = { Text(Strings.SIGN_OUT, color = ErrorColor) },
                             onClick = { 
                                 showMenu = false
                                 onSignOutClick() 
@@ -137,7 +137,7 @@ fun AppHeader(
 }
 
 private fun WidgetSize.accessibleLabel(): String = when (this) {
-    WidgetSize.SMALL -> "Compact"
-    WidgetSize.MEDIUM -> "Comfortable"
-    WidgetSize.LARGE -> "Spacious"
+    WidgetSize.SMALL -> Strings.COMPACT
+    WidgetSize.MEDIUM -> Strings.COMFORTABLE
+    WidgetSize.LARGE -> Strings.SPACIOUS
 }

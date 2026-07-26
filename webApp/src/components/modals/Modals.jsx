@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { LogOut, AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { Button, Card } from '../Common';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
+import { Strings } from '../../constants/strings';
 
 /**
  * Standardized Logout Modal
@@ -36,17 +37,17 @@ export const LogoutModal = ({ isOpen, onClose, onConfirm }) => {
                 <LogOut size={32} strokeWidth={2.5} />
               </div>
               <div className="space-y-2">
-                <h3 id="logout-title" className="text-2xl font-[1000] uppercase tracking-tighter text-white">Sign out?</h3>
+                <h3 id="logout-title" className="text-2xl font-[1000] uppercase tracking-tighter text-white">{Strings.SIGN_OUT}?</h3>
                 <p id="logout-desc" className="text-xs font-black text-neutral-400 uppercase tracking-widest leading-relaxed px-4">
-                  You will need to sign in again to access your data.
+                  {Strings.SIGN_OUT_MSG}
                 </p>
               </div>
               <div className="flex flex-col w-full gap-3">
                 <Button variant="danger" className="h-16" onClick={onConfirm}>
-                  Sign out
+                  {Strings.SIGN_OUT}
                 </Button>
                 <Button variant="secondary" className="h-16" onClick={onClose}>
-                  Cancel
+                  {Strings.CANCEL}
                 </Button>
               </div>
             </div>

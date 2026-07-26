@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Undo2, Loader2 } from 'lucide-react';
 import { cn } from '../../utils/utils';
+import { Strings } from '../../constants/strings';
 
 export const UNDO_TOAST_MS = 5000;
 
@@ -14,7 +15,7 @@ export const UndoToast = ({
   toastKey,
   message,
   detail,
-  undoLabel = 'Undo',
+  undoLabel = Strings.UNDO,
   duration = UNDO_TOAST_MS,
   onUndo,
   onDismiss,

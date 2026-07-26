@@ -35,6 +35,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tabakpp.app.composeapp.theme.*
 import com.tabakpp.app.composeapp.ui.components.AvatarIdentityBadge
 import com.tabakpp.app.composeapp.ui.components.ConfirmModal
+import com.tabakpp.app.composeapp.ui.components.Strings
 import com.tabakpp.app.composeapp.ui.components.TrackerForm
 import com.tabakpp.app.data.InputSanitizer
 import com.tabakpp.app.data.TrackerConfig
@@ -97,7 +98,7 @@ fun SettingsScreen(
             // 1. Identity
             item {
                 Column {
-                    SettingsHeader("command identity")
+                    SettingsHeader(Strings.COMMAND_IDENTITY)
                     IdentitySection(
                         profile = profile,
                         onUpdateName = { raw ->
@@ -116,11 +117,11 @@ fun SettingsScreen(
             // 2. Visual Interface
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    SettingsHeader("visual interface")
+                    SettingsHeader(Strings.VISUAL_INTERFACE)
                     
                     SettingsGroupCard {
                         Column(modifier = Modifier.padding(20.dp)) {
-                            Text("ACCENT SPECTRUM", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
+                            Text(Strings.ACCENT_SPECTRUM, style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
                             Spacer(modifier = Modifier.height(16.dp))
                             AccentPalette(
                                 selectedColor = profile?.accent ?: "#10B981",
@@ -131,7 +132,7 @@ fun SettingsScreen(
 
                     SettingsGroupCard {
                         Column(modifier = Modifier.padding(20.dp)) {
-                            Text("DASHBOARD DENSITY", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
+                            Text(Strings.DASHBOARD_DENSITY, style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
                             Spacer(modifier = Modifier.height(16.dp))
                             WidgetSizeSelector(
                                 selectedSize = profile?.widgetSize ?: WidgetSize.MEDIUM,
@@ -146,7 +147,7 @@ fun SettingsScreen(
             // 3. Habit Configuration
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    SettingsHeader("habit configuration")
+                    SettingsHeader(Strings.HABIT_CONFIGURATION)
                     SettingsGroupCard {
                         Column {
                             configs.forEachIndexed { index, config ->
@@ -180,7 +181,7 @@ fun SettingsScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.White)
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text("ADD NEW TRACKER", style = TabakTypography.labelSmall.copy(color = Color.White, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
+                                Text(Strings.ADD_NEW_TRACKER, style = TabakTypography.labelSmall.copy(color = Color.White, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
                             }
                         }
                     }
@@ -190,7 +191,7 @@ fun SettingsScreen(
             // 4. Economics (web Settings parity)
             item {
                 Column {
-                    SettingsHeader("costs")
+                    SettingsHeader(Strings.COSTS)
                     EconomicsSettings(
                         profile = profile,
                         accentColor = accentColor,
@@ -219,7 +220,7 @@ fun SettingsScreen(
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
-                            "PRIVACY AND DATA HANDLING",
+                            Strings.PRIVACY_HANDLING,
                             style = TabakTypography.labelSmall.copy(
                                 color = TextMuted,
                                 fontWeight = FontWeight.Black,
@@ -248,7 +249,7 @@ fun SettingsScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(20.dp), tint = ErrorColor)
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text("SIGN OUT", style = TabakTypography.labelSmall.copy(color = ErrorColor, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
+                                Text(Strings.SIGN_OUT, style = TabakTypography.labelSmall.copy(color = ErrorColor, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
                             }
                         }
                     }
@@ -270,7 +271,7 @@ fun SettingsScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(20.dp), tint = ErrorColor)
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text("DELETE ACCOUNT", style = TabakTypography.labelSmall.copy(color = ErrorColor, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
+                                Text(Strings.DELETE_ACCOUNT_BTN, style = TabakTypography.labelSmall.copy(color = ErrorColor, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
                             }
                         }
                     }
@@ -282,15 +283,13 @@ fun SettingsScreen(
     if (showPrivacyNotice) {
         AlertDialog(
             onDismissRequest = { showPrivacyNotice = false },
-            title = { Text("Privacy and data handling") },
+            title = { Text(Strings.PRIVACY_TITLE) },
             text = {
-                Text(
-                    "Your account, tracker history, financial estimates, profile settings, and optional avatar are stored in Firebase for synchronization. The app does not sell tracker data. Delete Account removes Firestore data and then the sign-in account; a partial failure is reported so deletion can be retried."
-                )
+                Text(Strings.PRIVACY_MSG)
             },
             confirmButton = {
                 TextButton(onClick = { showPrivacyNotice = false }) {
-                    Text("Close")
+                    Text(Strings.CLOSE)
                 }
             }
         )
@@ -298,9 +297,9 @@ fun SettingsScreen(
 
     configToDelete?.let { config ->
         ConfirmModal(
-            title = "Delete tracker?",
-            message = "\"${config.name}\" will be removed from your dashboard. Logged history stays saved.",
-            confirmLabel = "Delete",
+            title = Strings.DELETE_TRACKER_TITLE,
+            message = "\"${config.name}\" ${Strings.DELETE_TRACKER_MSG}",
+            confirmLabel = Strings.DELETE,
             tintColor = ErrorColor,
             onConfirm = {
                 viewModel.deleteTracker(config.id)
@@ -312,9 +311,9 @@ fun SettingsScreen(
 
     if (showLogoutConfirm) {
         ConfirmModal(
-            title = "Sign out?",
-            message = "Are you sure you want to sign out? You will need to log in again to access your data.",
-            confirmLabel = "Sign out",
+            title = "${Strings.SIGN_OUT}?",
+            message = Strings.SIGN_OUT_MSG,
+            confirmLabel = Strings.SIGN_OUT,
             tintColor = ErrorColor,
             onConfirm = {
                 showLogoutConfirm = false
@@ -365,13 +364,13 @@ fun SettingsScreen(
                         },
                         modifier = Modifier.fillMaxWidth().height(56.dp)
                     ) {
-                        Text("CLOSE", style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black), color = TextDisabled)
+                        Text(Strings.CLOSE, style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black), color = TextDisabled)
                     }
                 } else {
                 if (canPasswordDelete) {
                     Spacer(modifier = Modifier.height(20.dp))
                     Text(
-                        "PASSWORD",
+                        Strings.PASSWORD,
                         style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp),
                         color = TextMuted
                     )
@@ -421,7 +420,7 @@ fun SettingsScreen(
                         if (isDeletingAccount || authLoading) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), color = ErrorColor, strokeWidth = 2.dp)
                         } else {
-                            Text("DELETE FOREVER", style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black))
+                            Text(Strings.DELETE_FOREVER, style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black))
                         }
                     }
                 }
@@ -452,7 +451,7 @@ fun SettingsScreen(
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), color = ErrorColor, strokeWidth = 2.dp)
                         } else {
                             Text(
-                                if (canPasswordDelete) "CONFIRM WITH GOOGLE" else "DELETE WITH GOOGLE",
+                                if (canPasswordDelete) Strings.CONFIRM_GOOGLE else Strings.DELETE_WITH_GOOGLE,
                                 style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black)
                             )
                         }
@@ -469,7 +468,7 @@ fun SettingsScreen(
                     enabled = !isDeletingAccount,
                     modifier = Modifier.fillMaxWidth().height(56.dp)
                 ) {
-                    Text("CANCEL", style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black), color = TextDisabled)
+                    Text(Strings.CANCEL, style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black), color = TextDisabled)
                 }
                 } // supported providers
             }
@@ -567,7 +566,7 @@ fun IdentitySection(
                     singleLine = true
                 )
                 Text(
-                    text = "IDENTIFIED COMMANDER",
+                    text = Strings.IDENTIFIED_COMMANDER,
                     style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp),
                     color = TextMuted
                 )
@@ -595,10 +594,10 @@ fun TrackerSettingsItem(
     canMoveDown: Boolean
 ) {
     val typeLabel = when(config.type) {
-        TrackerType.CIGARETTE -> "Cigarette"
-        TrackerType.RYO_ROLL -> "RYO"
-        TrackerType.JOINT_KING -> "Cigarette" // legacy; no longer offered
-        TrackerType.SIMPLE -> "Custom"
+        TrackerType.CIGARETTE -> Strings.CIGARETTE
+        TrackerType.RYO_ROLL -> Strings.RYO
+        TrackerType.JOINT_KING -> Strings.CIGARETTE // legacy; no longer offered
+        TrackerType.SIMPLE -> Strings.CUSTOM
     }
 
     Row(
@@ -611,10 +610,10 @@ fun TrackerSettingsItem(
             Text(typeLabel, style = TabakTypography.labelSmall, color = TextMuted)
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move ${config.name} up", modifier = Modifier.size(18.dp), tint = if (canMoveUp) TextMuted else TextDisabled) }
-            IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move ${config.name} down", modifier = Modifier.size(18.dp), tint = if (canMoveDown) TextMuted else TextDisabled) }
-            IconButton(onClick = onEdit, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Edit, contentDescription = "Edit ${config.name}", modifier = Modifier.size(18.dp), tint = TextMuted) }
-            IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Delete, contentDescription = "Delete ${config.name}", modifier = Modifier.size(18.dp), tint = ErrorColor) }
+            IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "${Strings.MOVE_UP} ${config.name}", modifier = Modifier.size(18.dp), tint = if (canMoveUp) TextMuted else TextDisabled) }
+            IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "${Strings.MOVE_DOWN} ${config.name}", modifier = Modifier.size(18.dp), tint = if (canMoveDown) TextMuted else TextDisabled) }
+            IconButton(onClick = onEdit, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Edit, contentDescription = "${Strings.EDIT} ${config.name}", modifier = Modifier.size(18.dp), tint = TextMuted) }
+            IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Delete, contentDescription = "${Strings.DELETE} ${config.name}", modifier = Modifier.size(18.dp), tint = ErrorColor) }
         }
     }
 }
@@ -648,9 +647,9 @@ fun WidgetSizeSelector(
                 Box(contentAlignment = Alignment.Center) {
                     Text(
                         text = when (size) {
-                            WidgetSize.SMALL -> "Compact"
-                            WidgetSize.MEDIUM -> "Comfortable"
-                            WidgetSize.LARGE -> "Spacious"
+                            WidgetSize.SMALL -> Strings.COMPACT
+                            WidgetSize.MEDIUM -> Strings.COMFORTABLE
+                            WidgetSize.LARGE -> Strings.SPACIOUS
                         },
                         style = TabakTypography.labelMedium.copy(fontWeight = if(isSelected) FontWeight.Black else FontWeight.Bold),
                         color = if (isSelected) accentColor else TextMuted
@@ -753,7 +752,7 @@ fun EconomicsSettings(
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                listOf("PACK" to "RETAIL", "POUCH" to "LOOSE").forEach { (mode, label) ->
+                listOf("PACK" to Strings.RETAIL, "POUCH" to Strings.LOOSE).forEach { (mode, label) ->
                     val selected = ecoMode == mode
                     Surface(
                         onClick = { ecoMode = mode },
@@ -778,7 +777,7 @@ fun EconomicsSettings(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        if (ecoMode == "PACK") "PACK PRICE (€)" else "BEUTEL PRICE (€)",
+                        if (ecoMode == "PACK") Strings.PACK_PRICE else Strings.BEUTEL_PRICE,
                         style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black),
                         color = TextMuted
                     )
@@ -804,7 +803,7 @@ fun EconomicsSettings(
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        if (ecoMode == "PACK") "UNITS / PACK" else "EST. YIELD",
+                        if (ecoMode == "PACK") Strings.UNITS_PACK else Strings.EST_YIELD,
                         style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black),
                         color = TextMuted
                     )
@@ -837,7 +836,7 @@ fun EconomicsSettings(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("UNIT COST", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextMuted)
+                Text(Strings.UNIT_COST, style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextMuted)
                 Text(
                     // Single source of truth for money display (matches History/metrics).
                     SmokingCalculator.formatCurrency(unitCost),
@@ -868,7 +867,7 @@ fun EconomicsSettings(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        "SAVE",
+                        Strings.SAVE,
                         style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = accentColor)
                     )
                 }

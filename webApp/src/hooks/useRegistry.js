@@ -143,7 +143,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   const effectiveUnitPrice = profileSettings?.unitPrice ?? unitPrice;
 
   const metrics = useMemo(() => {
-    const base = SmokingCalculator.getGlobalMetrics(
+    return SmokingCalculator.getGlobalMetrics(
       logs,
       configs,
       activeCounts,
@@ -151,12 +151,6 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       effectiveUnitPrice,
       lifetimeAggregates
     );
-    const xp = SmokingCalculator.calculateXP(logs, base.streak);
-    return {
-      ...base,
-      budgetLeft: base.budgetLeftToday,
-      rank: SmokingCalculator.getRank(xp)
-    };
   }, [logs, configs, activeCounts, effectiveUnitPrice, today, lifetimeAggregates]);
 
   const runMutation = useCallback(async (fn, fallback) => {

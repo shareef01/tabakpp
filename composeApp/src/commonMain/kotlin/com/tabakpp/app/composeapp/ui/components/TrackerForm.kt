@@ -23,6 +23,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tabakpp.app.composeapp.theme.*
+import com.tabakpp.app.composeapp.ui.components.Strings
 import com.tabakpp.app.data.InputSanitizer
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.TrackerType
@@ -80,31 +81,31 @@ fun TrackerForm(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                if (initialConfig == null) "NEW COUNTER" else "EDIT CONFIG",
+                if (initialConfig == null) Strings.NEW_COUNTER else Strings.EDIT_CONFIG,
                 style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black, letterSpacing = 2.sp),
                 color = TextPrimary
             )
             IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Close tracker form", tint = TextMuted, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.Close, contentDescription = Strings.CLOSE_FORM, tint = TextMuted, modifier = Modifier.size(20.dp))
             }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
 
         // SECTION 1: IDENTITY
-        FormLabel("Label & Type")
+        FormLabel(Strings.LABEL_TYPE)
         FormBox(premiumGradient, glassBorder) {
             Column(modifier = Modifier.padding(20.dp)) {
                 FormTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = "TRACKER NAME",
+                    label = Strings.TRACKER_NAME,
                     placeholder = "e.g. Marlboro Red"
                 )
                 
                 Spacer(modifier = Modifier.height(28.dp))
                 
-                Text("GAUGE ARCHITECTURE", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextMuted)
+                Text(Strings.GAUGE_ARCH, style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextMuted)
                 Spacer(modifier = Modifier.height(12.dp))
                 TypeSelector(
                     selectedType = type,
@@ -117,15 +118,15 @@ fun TrackerForm(
         Spacer(modifier = Modifier.height(32.dp))
 
         // SECTION 2: OBJECTIVES
-        FormLabel("Daily limit")
+        FormLabel(Strings.DAILY_LIMIT_LABEL)
         FormBox(premiumGradient, glassBorder) {
             Column(modifier = Modifier.padding(20.dp)) {
                 FormTextField(
                     value = limit,
                     onValueChange = { limit = it },
-                    label = "DAILY UNIT LIMIT",
+                    label = Strings.DAILY_UNIT_LIMIT,
                     keyboardType = KeyboardType.Number,
-                    placeholder = "Units"
+                    placeholder = Strings.UNITS
                 )
                 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -140,7 +141,7 @@ fun TrackerForm(
                         )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Primary streak tracker", style = TabakTypography.bodyMedium, color = TextPrimary)
+                    Text(Strings.PRIMARY_STREAK, style = TabakTypography.bodyMedium, color = TextPrimary)
                 }
             }
         }
@@ -148,7 +149,7 @@ fun TrackerForm(
         Spacer(modifier = Modifier.height(32.dp))
 
         // SECTION 3: ECONOMICS
-        FormLabel("Financial intelligence")
+        FormLabel(Strings.FINANCIAL_INTEL)
         FormBox(premiumGradient, glassBorder) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -161,7 +162,7 @@ fun TrackerForm(
                         )
                     )
                     Spacer(modifier = Modifier.width(16.dp))
-                    Text("Cost tracking", style = TabakTypography.bodyMedium, color = TextPrimary)
+                    Text(Strings.COST_TRACKING, style = TabakTypography.bodyMedium, color = TextPrimary)
                 }
 
                 if (isFinancial) {
@@ -169,7 +170,7 @@ fun TrackerForm(
                     FormTextField(
                         value = pricePerUnit,
                         onValueChange = { pricePerUnit = it },
-                        label = "UNIT PRICE (€)",
+                        label = Strings.UNIT_PRICE_EURO,
                         keyboardType = KeyboardType.Decimal
                     )
                 }
@@ -199,7 +200,7 @@ fun TrackerForm(
             enabled = InputSanitizer.trackerName(name).isNotBlank()
         ) {
             Text(
-                if (initialConfig == null) "SAVE COUNTER" else "UPDATE COUNTER",
+                if (initialConfig == null) Strings.SAVE_COUNTER else Strings.UPDATE_COUNTER,
                 style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp)
             )
         }
@@ -295,9 +296,9 @@ private fun TypeSelector(
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 4.dp, vertical = 10.dp)) {
                     val label = when (type) {
-                        TrackerType.CIGARETTE -> "Cigarette"
-                        TrackerType.RYO_ROLL -> "RYO"
-                        TrackerType.SIMPLE -> "Custom"
+                        TrackerType.CIGARETTE -> Strings.CIGARETTE
+                        TrackerType.RYO_ROLL -> Strings.RYO
+                        TrackerType.SIMPLE -> Strings.CUSTOM
                         else -> type.name
                     }
                     Text(

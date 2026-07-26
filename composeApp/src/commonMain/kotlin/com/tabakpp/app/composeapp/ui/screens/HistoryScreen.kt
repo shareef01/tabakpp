@@ -31,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tabakpp.app.composeapp.theme.*
 import com.tabakpp.app.composeapp.ui.components.HistoryChart
 import com.tabakpp.app.composeapp.ui.components.ManualEntryForm
+import com.tabakpp.app.composeapp.ui.components.Strings
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.viewmodels.RegistryViewModel
@@ -81,7 +82,7 @@ fun HistoryScreen(
     ) {
         if (loading) {
             Box(
-                modifier = Modifier.fillMaxSize().semantics { stateDescription = "Loading history" },
+                modifier = Modifier.fillMaxSize().semantics { stateDescription = Strings.LOADING_HISTORY },
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = accentColor, strokeWidth = 2.dp)
@@ -100,7 +101,7 @@ fun HistoryScreen(
                 // TREND ANALYSIS BLOCK
                 item {
                     Column {
-                        HistoryGroupHeader("statistics")
+                        HistoryGroupHeader(Strings.STATISTICS)
                         Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -110,7 +111,7 @@ fun HistoryScreen(
                                 FilterChip(
                                     selected = historyPeriod == days,
                                     onClick = { historyPeriod = days },
-                                    label = { Text("$days days") },
+                                    label = { Text("$days ${Strings.DAYS.lowercase()}") },
                                     modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                 )
                             }
@@ -127,7 +128,7 @@ fun HistoryScreen(
                         ) {
                             Column(modifier = Modifier.padding(24.dp)) {
                                 Text(
-                                    "USAGE TRENDS", 
+                                    Strings.USAGE_TRENDS, 
                                     style = TabakTypography.labelSmall.copy(letterSpacing = 2.sp, fontWeight = FontWeight.Black),
                                     color = accentColor
                                 )
@@ -152,15 +153,15 @@ fun HistoryScreen(
                         ) {
                             MetricBlock(
                                 value = "${metrics?.streak ?: 0}",
-                                label = "days",
-                                subLabel = "STREAK",
+                                label = Strings.DAYS.lowercase(),
+                                subLabel = Strings.STREAK,
                                 icon = Icons.Default.Whatshot,
                                 modifier = Modifier.weight(1f)
                             )
                             MetricBlock(
                                 value = SmokingCalculator.formatCurrency(metrics?.spentToday ?: 0.0),
-                                label = "today",
-                                subLabel = "SPENT",
+                                label = Strings.TODAY_LC,
+                                subLabel = Strings.SPENT,
                                 icon = Icons.Default.Wallet,
                                 modifier = Modifier.weight(1f)
                             )
@@ -171,15 +172,15 @@ fun HistoryScreen(
                         ) {
                             MetricBlock(
                                 value = SmokingCalculator.formatCurrency(metrics?.savedLifetime ?: 0.0),
-                                label = "lifetime",
-                                subLabel = "SAVED",
+                                label = Strings.LIFETIME,
+                                subLabel = Strings.SAVED,
                                 icon = Icons.Default.Savings,
                                 modifier = Modifier.weight(1f)
                             )
                             MetricBlock(
                                 value = SmokingCalculator.formatLifeMinutes(metrics?.recovered ?: 0),
-                                label = "restored",
-                                subLabel = "Lost ${SmokingCalculator.formatLifeMinutes(metrics?.lifeLost ?: 0)}",
+                                label = Strings.RESTORED,
+                                subLabel = "${Strings.LOST_LABEL} ${SmokingCalculator.formatLifeMinutes(metrics?.lifeLost ?: 0)}",
                                 icon = Icons.Default.Favorite,
                                 modifier = Modifier.weight(1f)
                             )
@@ -194,11 +195,11 @@ fun HistoryScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        HistoryGroupHeader("tactical log")
+                        HistoryGroupHeader(Strings.TACTICAL_LOG)
                         IconButton(onClick = { showAddEntry = true }, modifier = Modifier.size(48.dp)) {
                             Icon(
                                 Icons.Default.Add,
-                                contentDescription = "Add manual entry",
+                                contentDescription = Strings.ADD_MANUAL_ENTRY,
                                 tint = accentColor,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -209,7 +210,7 @@ fun HistoryScreen(
                 if (historyIsTruncated) {
                     item {
                         Text(
-                            "Showing the most recent 1,200 entries. Trend and streak views exclude older entries; lifetime totals remain authoritative.",
+                            Strings.TRUNCATED_HISTORY_MSG,
                             style = TabakTypography.bodySmall,
                             color = WarningColor,
                             modifier = Modifier.padding(horizontal = 4.dp)
@@ -220,7 +221,7 @@ fun HistoryScreen(
                 if (logs.isEmpty()) {
                     item {
                         Text(
-                            "No sessions yet. End a tracking day or add a manual entry.",
+                            Strings.NO_SESSIONS,
                             color = TextMuted,
                             modifier = Modifier.padding(16.dp)
                         )
@@ -245,8 +246,8 @@ fun HistoryScreen(
                                     viewModel.deleteLog(log) {
                                         scope.launch {
                                             val result = snackbarHostState.showSnackbar(
-                                                message = "Entry deleted",
-                                                actionLabel = "Undo",
+                                                message = Strings.ENTRY_DELETED,
+                                                actionLabel = Strings.UNDO,
                                                 duration = SnackbarDuration.Short
                                             )
                                             if (result == SnackbarResult.ActionPerformed) {
@@ -366,14 +367,14 @@ fun LogItem(
             Column(modifier = Modifier.weight(1f)) {
                 val totalUnits = log.counts.values.sum().toInt()
                 Text(
-                    text = "$totalUnits UNITS LOGGED",
+                    text = "$totalUnits ${Strings.UNITS_LOGGED}",
                     style = TabakTypography.bodyLarge.copy(fontWeight = FontWeight.Black),
                     color = TextPrimary
                 )
                 Text(
                     text = when (log.origin) {
-                        "DAY_RESET" -> "Ended day"
-                        "MANUAL_ENTRY" -> "Manual entry"
+                        "DAY_RESET" -> Strings.ENDED_DAY
+                        "MANUAL_ENTRY" -> Strings.MANUAL_ENTRY_LABEL
                         else -> log.origin.lowercase().replace('_', ' ')
                     },
                     style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp),
@@ -383,10 +384,10 @@ fun LogItem(
             
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 IconButton(onClick = onEdit, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.Edit, contentDescription = "Edit history entry", tint = TextMuted, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Edit, contentDescription = Strings.EDIT_HISTORY, tint = TextMuted, modifier = Modifier.size(18.dp))
                 }
                 IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete history entry", tint = ErrorColor, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Delete, contentDescription = Strings.DELETE_HISTORY, tint = ErrorColor, modifier = Modifier.size(18.dp))
                 }
             }
         }

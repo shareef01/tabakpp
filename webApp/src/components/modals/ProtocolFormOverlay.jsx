@@ -6,11 +6,12 @@ import { cn } from '../../utils/utils';
 import { sanitizeTrackerName } from '../../utils/security';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
+import { Strings } from '../../constants/strings';
 
 const SELECTABLE_TYPES = [
-  { id: 'CIGARETTE', label: 'Cigarette', icon: Cigarette },
-  { id: 'RYO_ROLL', label: 'RYO', icon: Wind },
-  { id: 'SIMPLE', label: 'Custom', icon: Activity }
+  { id: 'CIGARETTE', label: Strings.CIGARETTE, icon: Cigarette },
+  { id: 'RYO_ROLL', label: Strings.RYO, icon: Wind },
+  { id: 'SIMPLE', label: Strings.CUSTOM, icon: Activity }
 ];
 
 const normalizeType = (type) => (type === 'JOINT_KING' ? 'CIGARETTE' : (type || 'CIGARETTE'));
@@ -46,7 +47,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
     ev?.preventDefault?.();
     const cleanName = sanitizeTrackerName(name);
     if (!cleanName) {
-      setError('Enter a counter name.');
+      setError(Strings.ENTER_COUNTER_NAME);
       return;
     }
     const parsedPrice = parseFloat(String(pricePerUnit).replace(',', '.'));
@@ -62,7 +63,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
         pricePerUnit: Number.isFinite(parsedPrice) ? parsedPrice : 0.5
       });
     } catch {
-      setError('Could not save counter. Check your connection and try again.');
+      setError(Strings.COULD_NOT_SAVE_COUNTER);
     } finally {
       setSaving(false);
     }
@@ -92,22 +93,22 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
       >
         <div className="flex justify-between items-center mb-10">
           <div className="space-y-1">
-            <h3 className={UI.LABEL}>Tracker</h3>
+            <h3 className={UI.LABEL}>{Strings.TRACKER}</h3>
             <span className="text-2xl font-black tracking-tighter uppercase text-white block leading-none">{title}</span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close counter form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-500 hover:text-white transition-all">
+          <button type="button" onClick={onClose} aria-label={Strings.CLOSE_COUNTER_FORM} className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-500 hover:text-white transition-all">
             <X size={20} strokeWidth={3} />
           </button>
         </div>
 
         <form className="space-y-10" onSubmit={handleSubmit}>
           <div>
-            <Input label="Counter name" value={name} onChange={(value) => { setName(value); if (error) setError(''); }} isDark placeholder="e.g. Cigarettes" autoComplete="off" name="counter-name" enterKeyHint="next" aria-invalid={!!error} aria-describedby={error ? 'counter-form-error' : undefined} />
+            <Input label={Strings.COUNTER_NAME} value={name} onChange={(value) => { setName(value); if (error) setError(''); }} isDark placeholder="e.g. Cigarettes" autoComplete="off" name="counter-name" enterKeyHint="next" aria-invalid={!!error} aria-describedby={error ? 'counter-form-error' : undefined} />
             {error && <p id="counter-form-error" role="alert" className="mt-2 text-[10px] font-bold text-rose-400">{error}</p>}
           </div>
 
           <div className="flex flex-col gap-2">
-            <span className={UI.LABEL}>Daily limit</span>
+            <span className={UI.LABEL}>{Strings.DAILY_LIMIT}</span>
             <input
               type="number"
               value={limit}
@@ -119,7 +120,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
           </div>
 
           <div className="flex flex-col gap-5">
-            <span className={UI.LABEL}>Visualization Engine</span>
+            <span className={UI.LABEL}>{Strings.VISUALIZATION_ENGINE}</span>
             <div className="grid grid-cols-2 gap-3">
               {TYPES.map(t => {
                 const Icon = t.icon;
@@ -143,7 +144,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
 
           <div className="space-y-4 rounded-2xl border border-white/5 bg-black/40 p-5">
             <label className="flex items-center justify-between gap-4 cursor-pointer">
-              <span className="text-xs font-black uppercase tracking-widest text-neutral-300">Primary streak tracker</span>
+              <span className="text-xs font-black uppercase tracking-widest text-neutral-300">{Strings.PRIMARY_STREAK}</span>
               <input
                 type="checkbox"
                 checked={isPrimary}
@@ -152,7 +153,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
               />
             </label>
             <label className="flex items-center justify-between gap-4 cursor-pointer">
-              <span className="text-xs font-black uppercase tracking-widest text-neutral-300">Cost tracking</span>
+              <span className="text-xs font-black uppercase tracking-widest text-neutral-300">{Strings.COST_TRACKING}</span>
               <input
                 type="checkbox"
                 checked={isFinancial}
@@ -162,7 +163,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
             </label>
             {isFinancial && (
               <div className="flex flex-col gap-2 pt-2">
-                <span className={UI.LABEL}>Unit price (€)</span>
+                <span className={UI.LABEL}>{Strings.UNIT_PRICE}</span>
                 <input
                   type="number"
                   step="0.01"
@@ -182,7 +183,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
             disabled={saving}
             className="w-full h-18 text-[11px] mt-4"
           >
-            {saving ? 'Saving…' : 'Save counter'}
+            {saving ? Strings.SAVING : Strings.SAVE_COUNTER}
           </Button>
         </form>
       </motion.div>

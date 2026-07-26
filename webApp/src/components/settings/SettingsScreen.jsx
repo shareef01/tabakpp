@@ -14,6 +14,7 @@ import { ConfirmModal } from '../modals/ConfirmModal';
 import { AlertOverlay } from '../modals/Modals';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
 import { ACCENTS } from '../../constants/ui';
+import { Strings } from '../../constants/strings';
 
 const hasPasswordProvider = (u) =>
   !!u?.providerData?.some((p) => p.providerId === 'password');
@@ -159,12 +160,12 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
     try {
       await onUpd(patch);
       if (successTitle) {
-        setNotification({ title: successTitle, message: successMessage || 'Saved.', type: 'success' });
+        setNotification({ title: successTitle, message: successMessage || Strings.SAVED, type: 'success' });
       }
       return true;
     } catch (err) {
       console.error(err);
-      setNotification({ title: successTitle || 'Settings', message: 'Could not save. Try again.', type: 'error' });
+      setNotification({ title: successTitle || Strings.SETTINGS, message: Strings.COULD_NOT_SAVE, type: 'error' });
       return false;
     }
   }, [onUpd]);
@@ -191,17 +192,17 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           unitPrice: bp / by
         });
       }
-      setNotification({ title: "Costs", message: "Saved.", type: 'success' });
+      setNotification({ title: Strings.COSTS_TITLE, message: Strings.SAVED, type: 'success' });
     } catch (err) {
       console.error(err);
-      setNotification({ title: "Costs", message: "Could not save.", type: 'error' });
+      setNotification({ title: Strings.COSTS_TITLE, message: Strings.COULD_NOT_SAVE, type: 'error' });
     }
   };
 
   const handleApplyName = async () => {
     const name = sanitizeString(displayName);
     if (!name) {
-      setNameError('Enter a display name.');
+      setNameError(Strings.ENTER_DISPLAY_NAME);
       return;
     }
     setNameError('');
@@ -212,7 +213,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
       }
     } catch (err) {
       console.error(err);
-      setNotification({ title: "Profile", message: "Could not save name.", type: 'error' });
+      setNotification({ title: Strings.PROFILE, message: Strings.COULD_NOT_SAVE, type: 'error' });
     }
   };
 
@@ -235,16 +236,16 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
       setPreviewUrl(previousPreview);
       const saveFailed = err?.code === 'permission-denied' || err?.message?.includes?.('PERMISSION_DENIED');
       setNotification({
-        title: "Avatar",
+        title: Strings.PROFILE,
         message: err?.message === 'AVATAR_TOO_LARGE'
-          ? "Image still too large after compression."
+          ? Strings.IMAGE_TOO_LARGE
           : err?.message === 'DECODE_FAILED'
-            ? "Could not read that photo. Try a JPEG or PNG from your library."
+            ? Strings.DECODE_FAILED
             : err?.message === 'INVALID_IMAGE'
-              ? "Choose a photo (JPEG, PNG, or WebP)."
+              ? Strings.INVALID_IMAGE
               : saveFailed
-                ? "Could not save avatar."
-                : "Could not process image.",
+                ? Strings.COULD_NOT_SAVE_AVATAR
+                : Strings.COULD_NOT_PROCESS_IMAGE,
         type: 'error'
       });
     } finally {
@@ -275,8 +276,8 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
         // Firestore already wiped — ask user to retry Auth deletion.
         console.error(authErr);
         setNotification({
-          title: 'Delete incomplete',
-          message: 'Your data was erased but login removal failed. Sign in again and retry Delete Account.',
+          title: Strings.DELETE_INCOMPLETE,
+          message: Strings.DELETE_INCOMPLETE,
           type: 'error'
         });
         return;
@@ -285,10 +286,10 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
     } catch (err) {
       console.error(err);
       if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
-        setNotification({ title: 'Delete cancelled', message: 'Deletion cancelled.', type: 'error' });
+        setNotification({ title: Strings.DELETE_CANCELLED, message: Strings.DELETE_CANCELLED, type: 'error' });
       } else {
         setNotification({
-          title: 'Delete failed',
+          title: Strings.DELETE_ACCOUNT,
           message: mapAuthError(err, 'delete'),
           type: 'error'
         });
@@ -303,16 +304,16 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
 
   return (
     <div className="pb-32">
-      <h1 className="sr-only">Settings</h1>
+      <h1 className="sr-only">{Strings.SETTINGS}</h1>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start max-w-7xl mx-auto">
 
         <div className="space-y-10">
           <Card className="p-6 md:p-8 bg-bg-card">
             <div className="flex items-end justify-between gap-4 mb-8">
               <div className="flex flex-col gap-1 min-w-0">
-                <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Profile</span>
+                <span className={cn(UI.LABEL, 'mb-0 ml-0')}>{Strings.PROFILE}</span>
                 <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
-                  Identity
+                  {Strings.IDENTITY}
                 </h3>
               </div>
               {user?.email && (
@@ -367,12 +368,12 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
 
               <div className="flex-1 w-full space-y-5 min-w-0">
                 <p className="text-[11px] text-neutral-500 leading-relaxed sm:pt-1">
-                  Photo stays in your profile. Tap the camera to replace it
-                  {previewUrl ? ', or remove it below.' : '.'}
-                  {' '}On iPhone, JPEG/PNG are safest; HEIC is converted when possible.
+                  {Strings.PHOTO_STAYS_MSG}
+                  {previewUrl ? Strings.PHOTO_REMOVE_MSG : '.'}
+                  {' '}{Strings.IPHONE_PHOTO_MSG}
                 </p>
                 <Input
-                  label="Display name"
+                  label={Strings.DISPLAY_NAME_OPT}
                   value={displayName}
                   onChange={(value) => { setDisplayName(value); if (nameError) setNameError(''); }}
                   isDark
@@ -401,16 +402,16 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
 
           <Card className="p-6 md:p-8 bg-bg-card">
             <div className="flex flex-col gap-1 mb-8 min-w-0">
-              <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Appearance</span>
+              <span className={cn(UI.LABEL, 'mb-0 ml-0')}>{Strings.APPEARANCE}</span>
               <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
-                Look & density
+                {Strings.LOOK_DENSITY}
               </h3>
             </div>
 
             <div className="space-y-8">
               <div className="space-y-3">
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Accent</span>
+                  <span className={cn(UI.LABEL, 'mb-0 ml-0')}>{Strings.ACCENT}</span>
                   <span className="text-[10px] font-black uppercase tracking-[0.18em] text-accent tabular-nums">
                     {ACCENTS.find((a) => a.v === settings.accent)?.n || 'Custom'}
                   </span>
@@ -472,14 +473,14 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 <div className="flex items-center gap-2.5 px-0.5">
                   <span className="w-2 h-2 rounded-full bg-accent shadow-[0_0_12px_var(--accent)]" />
                   <span className="text-[10px] font-semibold text-neutral-500">
-                    Applied to buttons, gauges, and highlights
+                    {Strings.ACCENT_DESCRIPTION}
                   </span>
                 </div>
               </div>
 
               <div className="space-y-3">
                 <div className="flex items-baseline justify-between gap-3">
-                  <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Card density</span>
+                  <span className={cn(UI.LABEL, 'mb-0 ml-0')}>{Strings.CARD_DENSITY}</span>
                   <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-neutral-500">
                     {DENSITY_OPTIONS.find((d) => d.id === settings.widgetSize)?.label || 'Comfortable'}
                   </span>
@@ -534,7 +535,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           <Card className="flex flex-col p-6 md:p-8 bg-bg-card">
             <div className="flex items-end justify-between gap-4 mb-6">
               <div className="flex flex-col gap-1 min-w-0">
-                <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Trackers</span>
+                <span className={cn(UI.LABEL, 'mb-0 ml-0')}>{Strings.TRACKERS}</span>
                 <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
                   {sortedConfigs.length} {sortedConfigs.length === 1 ? 'counter' : 'counters'}
                 </h3>
@@ -545,7 +546,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 className="inline-flex items-center gap-2 h-10 px-3.5 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all"
               >
                 <Plus size={15} strokeWidth={3} />
-                Add
+                {Strings.SAVE}
               </button>
             </div>
 
@@ -562,15 +563,15 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 />
               )) : (
                 <div className="py-12 px-4 text-center rounded-2xl ring-1 ring-inset ring-white/[0.06]">
-                  <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">No counters yet</p>
-                  <p className="mt-2 text-xs text-neutral-500">Add a tracker to start counting.</p>
+                  <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">{Strings.NO_COUNTERS}</p>
+                  <p className="mt-2 text-xs text-neutral-500">{Strings.ADD_TRACKER_MSG}</p>
                   <button
                     type="button"
                     onClick={onAdd}
                     className="mt-5 inline-flex items-center gap-2 h-10 px-4 rounded-full bg-white/[0.06] text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors"
                   >
                     <Plus size={14} strokeWidth={3} />
-                    Add counter
+                    {Strings.ADD_COUNTER}
                   </button>
                 </div>
               )}
@@ -578,10 +579,10 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           </Card>
 
           <Card className="p-8 md:p-12 bg-bg-card">
-            <h3 className={UI.LABEL}>Costs</h3>
+            <h3 className={UI.LABEL}>{Strings.COSTS_TITLE}</h3>
             <div className="flex p-1 bg-black/60 rounded-full border border-white/5 my-8 shadow-inner">
-              <button type="button" onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Package size={14} /> Retail</button>
-              <button type="button" onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Wind size={14} /> Loose</button>
+              <button type="button" onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Package size={14} /> {Strings.RETAIL}</button>
+              <button type="button" onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Wind size={14} /> {Strings.LOOSE}</button>
             </div>
             <div className="grid grid-cols-2 gap-6">
               <Input label={ecoMode === 'PACK' ? "Pack Price (€)" : "Beutel Price (€)"} type="number" step="0.01" value={ecoMode === 'PACK' ? packPrice : pouchPrice} onChange={ecoMode === 'PACK' ? setPackPrice : setPouchPrice} isDark />
@@ -589,10 +590,10 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
             </div>
             <div className="mt-10 pt-10 border-t border-white/5 space-y-8">
               <div className="flex items-center justify-between px-2">
-                <span className={UI.LABEL}>Unit Cost:</span>
+                <span className={UI.LABEL}>{Strings.UNIT_COST}:</span>
                 <span className="text-3xl font-black text-white tabular-nums">€{unitCostPreview.toFixed(2)}</span>
               </div>
-              <Button className="w-full" onClick={handleSaveEco}>Save</Button>
+              <Button className="w-full" onClick={handleSaveEco}>{Strings.SAVE}</Button>
             </div>
           </Card>
 
@@ -602,15 +603,15 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 <AlertTriangle size={16} strokeWidth={2.5} />
               </div>
               <div className="flex flex-col gap-1 min-w-0">
-                <span className={cn(UI.LABEL, 'mb-0 ml-0 text-rose-400/80')}>Danger zone</span>
+                <span className={cn(UI.LABEL, 'mb-0 ml-0 text-rose-400/80')}>{Strings.DANGER_ZONE}</span>
                 <h3 className="text-xl font-black tracking-tight text-white leading-none">
-                  Delete account
+                  {Strings.DELETE_ACCOUNT}
                 </h3>
               </div>
             </div>
 
             <p className="text-[12px] text-neutral-400 leading-relaxed mb-4">
-              This permanently removes your data and sign-in. It cannot be undone.
+              {Strings.DELETE_ACCOUNT_DESC}
             </p>
             <a
               href="/privacy.html"
@@ -618,10 +619,10 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               rel="noreferrer"
               className="inline-flex mb-4 text-[11px] font-bold text-neutral-400 underline underline-offset-4 hover:text-white"
             >
-              Privacy and data handling
+              {Strings.PRIVACY_DATA}
             </a>
             <ul className="mb-6 space-y-1.5 text-[11px] text-neutral-500">
-              {['Trackers and daily limits', 'History and session logs', 'Profile settings and login'].map((item) => (
+              {[Strings.DELETE_TRACKER_HISTORY, Strings.DELETE_SESSION_LOGS, Strings.DELETE_PROFILE_LOGIN].map((item) => (
                 <li key={item} className="flex items-center gap-2">
                   <span className="w-1 h-1 rounded-full bg-rose-400/70 shrink-0" />
                   {item}
@@ -634,7 +635,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               className="w-full"
               onClick={() => { setDeletePassword(''); setShowDeleteAccount(true); }}
             >
-              Delete account
+              {Strings.DELETE_ACCOUNT}
             </Button>
           </Card>
         </div>
@@ -649,9 +650,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           setPreviewUrl(null); setShowRemoveConfirm(false);
         } catch (err) {
           console.error(err);
-          setNotification({ title: "Avatar", message: "Could not remove avatar.", type: 'error' });
+          setNotification({ title: Strings.PROFILE, message: Strings.COULD_NOT_SAVE_AVATAR, type: 'error' });
         }
-      }} title="Delete photo?" message="Your profile photo will be permanently deleted." confirmText="Delete" />
+      }} title={Strings.DELETE_PHOTO_TITLE} message={Strings.DELETE_PHOTO_MSG} confirmText={Strings.DELETE} />
 
       <AnimatePresence>
         {showDeleteAccount && (
@@ -677,7 +678,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               style={{ paddingBottom: `max(1.5rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 16)}px)` }}
             >
               <Card className="p-10 border-danger/30 bg-red-950/20 space-y-6">
-                <h3 id="delete-account-title" className="text-2xl font-black uppercase tracking-tight text-white text-center">Delete Account?</h3>
+                <h3 id="delete-account-title" className="text-2xl font-black uppercase tracking-tight text-white text-center">{Strings.DELETE_ACCOUNT_TITLE}</h3>
                 <p id="delete-account-description" className="text-xs font-bold uppercase tracking-[0.16em] text-neutral-400 text-center leading-relaxed">
                   {!canPasswordDelete && !canGoogleDelete
                     ? 'This account has no password or Google sign-in linked. Use a supported method, then retry deletion.'
@@ -689,7 +690,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 </p>
                 {canPasswordDelete && (
                   <Input
-                    label="Password"
+                    label={Strings.PASSWORD}
                     type="password"
                     value={deletePassword}
                     onChange={setDeletePassword}
@@ -702,7 +703,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 )}
                 <div className="flex flex-col gap-3">
                   {!canPasswordDelete && !canGoogleDelete ? (
-                    <Button variant="secondary" onClick={() => setShowDeleteAccount(false)}>Close</Button>
+                    <Button variant="secondary" onClick={() => setShowDeleteAccount(false)}>{Strings.CLOSE}</Button>
                   ) : (
                     <>
                   {canPasswordDelete && (
@@ -711,7 +712,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                       disabled={isDeletingAccount || !deletePassword}
                       onClick={() => handleDeleteAccount('password')}
                     >
-                      {isDeletingAccount ? 'Deleting…' : 'Delete Forever'}
+                      {isDeletingAccount ? Strings.DELETING : Strings.DELETE_FOREVER}
                     </Button>
                   )}
                   {canGoogleDelete && (
@@ -721,14 +722,14 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                       onClick={() => handleDeleteAccount('google')}
                     >
                       {isDeletingAccount
-                        ? 'Deleting…'
+                        ? Strings.DELETING
                         : canPasswordDelete
-                          ? 'Confirm with Google'
-                          : 'Delete with Google'}
+                          ? Strings.CONFIRM_GOOGLE
+                          : Strings.DELETE_WITH_GOOGLE}
                     </Button>
                   )}
                   <Button variant="secondary" disabled={isDeletingAccount} onClick={() => setShowDeleteAccount(false)}>
-                    Cancel
+                    {Strings.CANCEL}
                   </Button>
                     </>
                   )}

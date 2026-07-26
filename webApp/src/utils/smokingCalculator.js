@@ -51,6 +51,23 @@ export const SmokingCalculator = {
   mergeCounts,
   aggregateLoggedCounts,
 
+  normalizeCounts: (counts) =>
+    Object.fromEntries(
+      Object.entries(counts || {}).map(([id, v]) => [id, Math.max(0, v || 0)])
+    ),
+
+  normalizeAccentColor: (hex) => {
+    const h = (hex || '').trim().toUpperCase();
+    if (h === '#FFFFFF' || h === '#FFF') return '#E4E4E7';
+    if (h.length === 4 && h.startsWith('#')) {
+      const r = h[1];
+      const g = h[2];
+      const b = h[3];
+      return `#${r}${r}${g}${g}${b}${b}`;
+    }
+    return hex;
+  },
+
   /**
    * Local calendar date (YYYY-MM-DD). Tracking day rolls at midnight.
    */
@@ -280,17 +297,23 @@ export const SmokingCalculator = {
       recovered = SmokingCalculator.calculateRecoveryMinutes(logs, configs, activeCounts, trackingDay);
     } catch { /* keep 0 */ }
 
+    const xp = SmokingCalculator.calculateXP(logs, streak);
+    const rank = SmokingCalculator.getRank(xp);
+
     return {
       count: Math.floor(count),
       limit,
       streak,
       spentToday: sessionFin.wasted,
       budgetLeftToday: sessionFin.saved,
+      budgetLeft: sessionFin.saved,
       saved: sessionFin.saved,
       savedLifetime,
       progress: limit > 0 ? count / limit : 0,
       lifeLost,
       recovered,
+      xp,
+      rank,
       activeCounts: sessionCounts,
       hasOpenSession: SmokingCalculator.hasOpenSession(sessionCounts)
     };

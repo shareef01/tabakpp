@@ -19,6 +19,7 @@ import { RegistryService } from '../../services/registryService';
 import { AUTH_INTENT_KEY, prefersAuthRedirect } from '../../utils/platform';
 import { sanitizeString } from '../../utils/security';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
+import { Strings } from '../../constants/strings';
 
 const MIN_PASSWORD_LENGTH = 12;
 
@@ -69,7 +70,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
 
   const handle = async () => {
     if (!isOnline) {
-      setMsg({ t: 'FAULT', c: 'You’re offline. Reconnect to continue.' });
+      setMsg({ t: 'FAULT', c: Strings.OFFLINE_AUTH_MSG });
       return;
     }
     setLoading(true); setMsg({ t: '', c: '' });
@@ -107,7 +108,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
 
   const handleGoogle = async () => {
     if (!isOnline) {
-      setMsg({ t: 'FAULT', c: 'You’re offline. Reconnect to continue.' });
+      setMsg({ t: 'FAULT', c: Strings.OFFLINE_AUTH_MSG });
       return;
     }
     setLoading(true); setMsg({ t: '', c: '' });
@@ -138,7 +139,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
       className="flex flex-col items-stretch min-h-screen min-h-dvh relative overflow-x-clip bg-black text-white font-inter antialiased lg:flex-row"
       style={{'--accent': accent}}
     >
-      <h1 className="sr-only">{mode === 'LOGIN' ? 'Sign in' : mode === 'REGISTER' ? 'Create account' : 'Reset password'}</h1>
+      <h1 className="sr-only">{mode === 'LOGIN' ? Strings.SIGN_IN : mode === 'REGISTER' ? Strings.CREATE_ACCOUNT : Strings.RESET_PASSWORD}</h1>
 
       {/* STEALTH BRANDING LAYER */}
       <div className="absolute top-[max(2rem,env(safe-area-inset-top))] left-[max(2rem,env(safe-area-inset-left))] md:top-12 md:left-12 lg:top-16 lg:left-16 z-[100] pointer-events-none opacity-80">
@@ -168,8 +169,8 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
           >
              {/* MODE TOGGLE (PWA High-Contrast) */}
              {mode !== 'RESET' ? <div role="tablist" aria-label="Authentication mode" className="relative flex items-center h-14 w-full mb-12 p-1 rounded-full bg-black/60 border border-white/5 shadow-inner">
-                <button type="button" role="tab" aria-selected={mode === 'LOGIN'} onClick={() => setMode('LOGIN')} className={cn("relative flex-1 h-full z-20 text-xs font-black uppercase tracking-widest transition-all duration-500", mode === 'LOGIN' ? "text-black" : "text-white/55 hover:text-white/80")}>Sign in</button>
-                <button type="button" role="tab" aria-selected={mode === 'REGISTER'} onClick={() => setMode('REGISTER')} className={cn("relative flex-1 h-full z-20 text-xs font-black uppercase tracking-widest transition-all duration-500", mode === 'REGISTER' ? "text-black" : "text-white/55 hover:text-white/80")}>Create account</button>
+                <button type="button" role="tab" aria-selected={mode === 'LOGIN'} onClick={() => setMode('LOGIN')} className={cn("relative flex-1 h-full z-20 text-xs font-black uppercase tracking-widest transition-all duration-500", mode === 'LOGIN' ? "text-black" : "text-white/55 hover:text-white/80")}>{Strings.SIGN_IN}</button>
+                <button type="button" role="tab" aria-selected={mode === 'REGISTER'} onClick={() => setMode('REGISTER')} className={cn("relative flex-1 h-full z-20 text-xs font-black uppercase tracking-widest transition-all duration-500", mode === 'REGISTER' ? "text-black" : "text-white/55 hover:text-white/80")}>{Strings.CREATE_ACCOUNT}</button>
                 <motion.div
                    className="absolute left-1 h-[calc(100%-8px)] bg-accent rounded-full shadow-lg"
                    animate={{ x: mode === 'LOGIN' ? 0 : '100%', left: mode === 'LOGIN' ? '4px' : '-4px' }}
@@ -178,8 +179,8 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
                 />
              </div> : (
                <div className="mb-12 text-left">
-                 <p className="text-2xl font-black tracking-tight text-white">Reset password</p>
-                 <p className="mt-2 text-[11px] text-neutral-500">Enter your email and we’ll send a reset link.</p>
+                 <p className="text-2xl font-black tracking-tight text-white">{Strings.RESET_PASSWORD}</p>
+                 <p className="mt-2 text-[11px] text-neutral-500">{Strings.RESET_PASSWORD_MSG}</p>
                </div>
              )}
 
@@ -205,23 +206,23 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
                <div className="flex flex-col gap-6 text-left">
                  {mode === 'REGISTER' && (
                    <Input
-                     label="Name"
+                     label={Strings.NAME}
                      value={n}
                      onChange={setN}
                      isDark
-                     placeholder="Full Name..."
+                     placeholder={Strings.FULL_NAME_PLACEHOLDER}
                      autoComplete="name"
                      name="name"
                      enterKeyHint="next"
                    />
                  )}
                  <Input
-                   label="Email"
+                   label={Strings.EMAIL}
                    type="email"
                    value={e}
                    onChange={setE}
                    isDark
-                   placeholder="Email Address..."
+                   placeholder={Strings.EMAIL_PLACEHOLDER}
                    autoComplete="email"
                    name="email"
                    inputMode="email"
@@ -231,12 +232,12 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
                    <div>
                      <div className="relative">
                        <Input
-                         label="Password"
+                         label={Strings.PASSWORD}
                          type={showPassword ? 'text' : 'password'}
                          value={p}
                          onChange={setP}
                          isDark
-                         placeholder="••••••••••••"
+                         placeholder={Strings.PASSWORD_PLACEHOLDER}
                          autoComplete={mode === 'REGISTER' ? 'new-password' : 'current-password'}
                          name="password"
                          enterKeyHint="go"
@@ -247,7 +248,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
                          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                        </button>
                      </div>
-                     {mode === 'REGISTER' && <p id="password-hint" className="mt-2 text-[11px] text-neutral-400">Use at least 12 characters.</p>}
+                     {mode === 'REGISTER' && <p id="password-hint" className="mt-2 text-[11px] text-neutral-400">{Strings.PASSWORD_HINT}</p>}
                    </div>
                  )}
                </div>
@@ -260,7 +261,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
               >
                  <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
                  <span className="relative z-10 flex items-center gap-3">
-                   {loading ? <Loader2 className="animate-spin" size={24} strokeWidth={4} /> : (mode === 'LOGIN' ? 'SIGN IN' : (mode === 'REGISTER' ? 'CREATE ACCOUNT' : 'SEND RESET LINK'))}
+                   {loading ? <Loader2 className="animate-spin" size={24} strokeWidth={4} /> : (mode === 'LOGIN' ? Strings.SIGN_IN_BTN : (mode === 'REGISTER' ? Strings.CREATE_ACCOUNT.toUpperCase() : Strings.SEND_RESET_LINK))}
                  </span>
                </button>
 
@@ -268,7 +269,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
                  <>
                    <div className="flex items-center gap-4 my-1">
                      <div className="flex-1 h-px bg-white/10" />
-                     <span className="text-[11px] font-black uppercase tracking-[0.18em] text-neutral-400">Or</span>
+                     <span className="text-[11px] font-black uppercase tracking-[0.18em] text-neutral-400">{Strings.OR}</span>
                      <div className="flex-1 h-px bg-white/10" />
                    </div>
                    <button
@@ -277,7 +278,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
                      disabled={loading || !isOnline}
                      className="flex items-center justify-center w-full h-14 rounded-xl border border-white/10 bg-white/[0.03] text-white font-black uppercase tracking-[0.22em] text-[11px] hover:bg-white/[0.06] active:scale-[0.97] transition-all disabled:opacity-50"
                    >
-                     Continue with Google
+                     {Strings.CONTINUE_WITH_GOOGLE}
                    </button>
                  </>
                )}
@@ -290,7 +291,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
                      className="group inline-flex items-center justify-center min-h-11 px-5 rounded-xl text-[11px] font-black uppercase tracking-[0.22em] text-neutral-400 border border-transparent hover:text-accent hover:border-white/[0.08] hover:bg-white/[0.03] active:scale-[0.97] transition-all duration-300"
                    >
                      <span className="border-b border-neutral-600/80 group-hover:border-accent/60 pb-px transition-colors duration-300">
-                       Forgot password?
+                       {Strings.FORGOT_PASSWORD}
                      </span>
                    </button>
                  )}
@@ -301,7 +302,7 @@ export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
                      className="group inline-flex items-center justify-center min-h-11 px-5 rounded-xl text-[11px] font-black uppercase tracking-[0.22em] text-neutral-400 border border-transparent hover:text-white hover:border-white/[0.08] hover:bg-white/[0.03] active:scale-[0.97] transition-all duration-300"
                    >
                      <span className="border-b border-neutral-600/80 group-hover:border-white/50 pb-px transition-colors duration-300">
-                       Return to sign in
+                       {Strings.RETURN_TO_SIGN_IN}
                      </span>
                    </button>
                  )}

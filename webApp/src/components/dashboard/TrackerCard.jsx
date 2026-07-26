@@ -4,6 +4,7 @@ import { Plus, Minus } from 'lucide-react';
 import { cn } from '../../utils/utils';
 import { CigaretteGauge } from '../gauges/Gauges';
 import { UI } from '../Common';
+import { Strings } from '../../constants/strings';
 
 /** Fire on pointer down for zero click-delay; ignore non-primary mouse buttons. */
 const bindTap = (handler) => (e) => {
@@ -56,10 +57,10 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
         {/* Header */}
         <div className="w-full flex items-center justify-between gap-2">
           <span className="text-[11px] md:text-xs font-black uppercase tracking-[0.16em] text-white/85 truncate">
-            {config?.name || 'Tracker'}
+            {config?.name || Strings.TRACKER_FALLBACK}
           </span>
           <span className="shrink-0 text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 px-2 py-0.5 rounded bg-white/[0.04] border border-white/[0.06]">
-            {limit}/day
+            {limit}{Strings.DAY_LIMIT}
           </span>
         </div>
 
@@ -114,7 +115,7 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
                 'text-[11px] font-black uppercase tracking-[0.14em] leading-none',
                 isOver ? 'text-danger' : isLimitReached ? 'text-amber-400/90' : 'text-neutral-400'
               )}>
-                {isOver ? `${count - limit} over` : `${remaining} left`}
+                {isOver ? `${count - limit} ${Strings.OVER}` : `${remaining} ${Strings.LEFT}`}
               </span>
               <div className="w-10 h-[2px] rounded-full bg-white/[0.08] overflow-hidden shrink-0">
                 <div

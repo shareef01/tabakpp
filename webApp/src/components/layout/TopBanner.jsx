@@ -4,6 +4,7 @@ import { User, LogOut, Layout, Settings, ChevronDown, Square, Columns2, LayoutGr
 import { cn } from '../../utils/utils';
 import { Logo } from '../Common';
 import { isSafeAvatarUrl } from '../../utils/security';
+import { Strings } from '../../constants/strings';
 
 /** Compact → comfortable → spacious (matches TrackerCard density). */
 const DENSITY_OPTIONS = [
@@ -185,10 +186,10 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
                   <div className="h-px bg-white/[0.06] mx-1 mb-1" />
 
                   <div className="space-y-0.5">
-                    <DropdownItem icon={Layout} label="Track" onClick={() => { onNavigate('track'); setIsOpen(false); }} />
-                    <DropdownItem icon={BarChart3} label="History" onClick={() => { onNavigate('history'); setIsOpen(false); }} />
-                    <DropdownItem icon={Settings} label="Settings" onClick={() => { onNavigate('settings'); setIsOpen(false); }} />
-                    <DropdownItem icon={LogOut} label="Sign out" onClick={() => { onRequestLogout(); setIsOpen(false); }} danger />
+                    <DropdownItem icon={Layout} label={Strings.TRACK} onClick={() => { onNavigate('track'); setIsOpen(false); }} />
+                    <DropdownItem icon={BarChart3} label={Strings.HISTORY} onClick={() => { onNavigate('history'); setIsOpen(false); }} />
+                    <DropdownItem icon={Settings} label={Strings.SETTINGS} onClick={() => { onNavigate('settings'); setIsOpen(false); }} />
+                    <DropdownItem icon={LogOut} label={Strings.SIGN_OUT} onClick={() => { onRequestLogout(); setIsOpen(false); }} danger />
                   </div>
                 </motion.div>
               )}

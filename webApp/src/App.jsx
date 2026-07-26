@@ -12,6 +12,7 @@ const cn = (...classes) => classes.filter(Boolean).join(' ');
 // --- CONTEXT & HOOKS ---
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useRegistry } from './hooks/useRegistry';
+import { Strings } from './constants/strings';
 
 // --- SHARED COMPONENTS ---
 import { TopBanner } from './components/layout/TopBanner';
@@ -40,7 +41,7 @@ const lazyWithRetry = (componentImport) => lazy(async () => {
       default: () => (
         <div className="flex min-h-screen items-center justify-center bg-black p-8 text-center text-white">
           <p className="text-sm font-bold uppercase tracking-widest text-neutral-400">
-            Could not load this screen. Refresh and try again.
+            {Strings.CHUNK_LOAD_ERROR}
           </p>
         </div>
       ),
@@ -75,7 +76,7 @@ const OfflineBanner = ({ isOffline }) => (
       >
         <div className="flex items-center justify-center py-2 gap-3 text-amber-500">
           <AlertCircle size={14} strokeWidth={3} />
-          <span className="text-[12px] font-black uppercase tracking-[0.2em]">You're offline — changes may fail until you're back online</span>
+          <span className="text-[12px] font-black uppercase tracking-[0.2em]">{Strings.OFFLINE_BANNER_MSG}</span>
         </div>
       </motion.div>
     )}
@@ -93,9 +94,9 @@ class GlobalErrorBoundary extends React.Component {
       return (
         <div className="flex flex-col items-center justify-center min-h-screen min-h-dvh w-full p-12 text-center bg-black text-white font-inter antialiased">
           <div className="p-8 mb-8 bg-red-600/10 rounded-[32px] text-red-500 border border-red-600/20 shadow-2xl"><AlertCircle size={48} /></div>
-          <h2 className="mb-4 text-3xl font-black uppercase tracking-tighter leading-none">System Fault</h2>
-          <p className="max-w-md mb-10 text-sm font-bold leading-relaxed text-white/60">{this.state.error?.toString() || "Something went wrong."}</p>
-          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } localStorage.clear(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reload</button>
+          <h2 className="mb-4 text-3xl font-black uppercase tracking-tighter leading-none">{Strings.SYSTEM_FAULT}</h2>
+          <p className="max-w-md mb-10 text-sm font-bold leading-relaxed text-white/60">{this.state.error?.toString() || Strings.SOMETHING_WRONG}</p>
+          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } localStorage.clear(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">{Strings.RELOAD}</button>
         </div>
       );
     }
@@ -331,9 +332,9 @@ const AppContent = () => {
                           </div> : (
                             <div className="min-h-[22rem] rounded-[2rem] border border-dashed border-white/10 bg-bg-card/70 flex flex-col items-center justify-center text-center px-8">
                               <div className="w-16 h-16 rounded-2xl bg-accent/10 text-accent flex items-center justify-center ring-1 ring-accent/20"><Plus size={28} /></div>
-                              <h2 className="mt-6 text-2xl font-black tracking-tight">Start tracking</h2>
-                              <p className="mt-2 max-w-sm text-sm text-neutral-500">Add a counter for cigarettes, rolls, or any habit you want to measure.</p>
-                              <button type="button" onClick={() => setIsAddOpen(true)} className="mt-6 min-h-12 px-6 rounded-xl bg-accent text-black text-[11px] font-black uppercase tracking-widest">Add counter</button>
+                              <h2 className="mt-6 text-2xl font-black tracking-tight">{Strings.START_TRACKING}</h2>
+                              <p className="mt-2 max-w-sm text-sm text-neutral-500">{Strings.EMPTY_DASHBOARD_MSG}</p>
+                              <button type="button" onClick={() => setIsAddOpen(true)} className="mt-6 min-h-12 px-6 rounded-xl bg-accent text-black text-[11px] font-black uppercase tracking-widest">{Strings.ADD_COUNTER}</button>
                             </div>
                           )}
 
@@ -397,7 +398,7 @@ const AppContent = () => {
                 isOpen={isAddOpen}
                 onClose={() => setIsAddOpen(false)}
                 onApply={handleAddProtocol}
-                title="Create Counter"
+                title={Strings.CREATE_COUNTER_TITLE}
               />
             )}
             {editProtocol && (
@@ -405,7 +406,7 @@ const AppContent = () => {
                 isOpen={!!editProtocol}
                 onClose={() => setEditProtocol(null)}
                 onApply={handleUpdateProtocol}
-                title="Configure Counter"
+                title={Strings.CONFIGURE_COUNTER_TITLE}
                 initialData={editProtocol}
               />
             )}
@@ -432,9 +433,9 @@ const AppContent = () => {
                 await endDay();
                 setShowEndDayConfirm(false);
               }}
-              title="End tracking day?"
-              message="Today’s counts will be archived and counters reset. Archived entries can be edited in History."
-              confirmText="End Day"
+              title={Strings.END_DAY_TITLE}
+              message={Strings.END_DAY_MSG}
+              confirmText={Strings.END_TRACKING_DAY}
             />
             <ConfirmModal
               isOpen={!!protocolToDelete}
@@ -446,16 +447,16 @@ const AppContent = () => {
                   try { await deleteProtocol(id); } catch (e) { console.error(e); }
                 }
               }}
-              title="Delete tracker?"
-              message="This counter will be removed from your dashboard. Logged history stays available."
-              confirmText="Delete"
+              title={Strings.DELETE_TRACKER_TITLE}
+              message={`"${configs.find(c => c.id === protocolToDelete)?.name || ''}" ${Strings.DELETE_TRACKER_MSG}`}
+              confirmText={Strings.DELETE}
             />
           </AnimatePresence>
           <UndoToast
             open={!!incrementUndo}
             toastKey={incrementUndo?.key}
-            message={`${incrementUndo?.name || 'Counter'} increased`}
-            detail="Undo available for 5 seconds"
+            message={`${incrementUndo?.name || Strings.TRACKER_FALLBACK} ${Strings.INCREASED}`}
+            detail={Strings.UNDO_DETAIL}
             duration={UNDO_TOAST_MS}
             onUndo={async () => {
               const item = incrementUndo;

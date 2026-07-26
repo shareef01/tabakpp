@@ -73,7 +73,7 @@ fun TrackScreen(
             .padding(top = innerPadding.calculateTopPadding())
     ) {
         if (loading) {
-            Box(modifier = Modifier.fillMaxSize().semantics { stateDescription = "Loading trackers" }) {
+            Box(modifier = Modifier.fillMaxSize().semantics { stateDescription = Strings.LOADING_TRACKERS }) {
                 TrackSkeleton()
             }
         } else {
@@ -128,7 +128,7 @@ fun TrackScreen(
                         Icon(Icons.Default.Undo, contentDescription = null, modifier = Modifier.size(18.dp), tint = accentColor)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            "UNDO LOG",
+                            Strings.UNDO_LOG,
                             style = TabakTypography.labelSmall.copy(
                                 fontWeight = FontWeight.Black,
                                 letterSpacing = 1.sp,
@@ -159,9 +159,9 @@ fun TrackScreen(
 
     if (showEndDayConfirm) {
         ConfirmModal(
-            title = "End tracking day?",
-            message = "Today’s counts will be archived and counters reset. Archived entries can be edited in History.",
-            confirmLabel = "End Day",
+            title = Strings.END_DAY_TITLE,
+            message = Strings.END_DAY_MSG,
+            confirmLabel = Strings.END_DAY,
             tintColor = ErrorColor,
             isLoading = endingDay,
             onConfirm = { viewModel.endDay() },
@@ -207,14 +207,14 @@ fun EmptyDashboard(accentColor: Color, onAddClick: () -> Unit) {
         }
         Spacer(modifier = Modifier.height(32.dp))
         Text(
-            "INITIALIZE TRACKING",
+            Strings.INIT_TRACKING,
             style = TabakTypography.headlineMedium.copy(fontSize = 20.sp, fontWeight = FontWeight.Black, letterSpacing = 1.sp),
             color = TextPrimary,
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            "Deploy your first habit counter to start gathering behavioral intelligence.",
+            Strings.EMPTY_TRACKER_MSG,
             color = TextMuted,
             textAlign = TextAlign.Center,
             style = TabakTypography.bodyMedium.copy(lineHeight = 20.sp)
@@ -234,7 +234,7 @@ fun EmptyDashboard(accentColor: Color, onAddClick: () -> Unit) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp), tint = TextPrimary)
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text("CREATE TRACKER", style = TabakTypography.labelSmall.copy(color = TextPrimary, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
+                    Text(Strings.CREATE_TRACKER, style = TabakTypography.labelSmall.copy(color = TextPrimary, fontWeight = FontWeight.Black, letterSpacing = 1.sp))
                 }
             }
         }

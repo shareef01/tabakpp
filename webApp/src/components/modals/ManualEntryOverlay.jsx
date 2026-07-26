@@ -6,6 +6,7 @@ import { UI, Button, Input } from '../Common';
 import { cn } from '../../utils/utils';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
+import { Strings } from '../../constants/strings';
 
 /**
  * Manual historical backfill — Android ManualEntryForm parity.
@@ -38,7 +39,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
       onClose();
     } catch (e) {
       console.error('[SYS] Manual entry failed', e);
-      setError('Could not log entry. Check your connection and try again.');
+      setError(Strings.COULD_NOT_LOG);
     } finally {
       setSaving(false);
     }
@@ -64,23 +65,23 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
         style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 24)}px)` }}
         role="dialog"
         aria-modal="true"
-        aria-label="Historical entry"
+        aria-label={Strings.HISTORICAL_ENTRY}
       >
         <div className="flex justify-between items-center mb-10">
           <div className="space-y-1">
-            <h3 className={UI.LABEL}>Historical Entry</h3>
+            <h3 className={UI.LABEL}>{Strings.HISTORICAL_ENTRY}</h3>
             <span className="text-2xl font-black tracking-tighter uppercase text-white block leading-none">
-              Backfill Log
+              {Strings.BACKFILL_LOG}
             </span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close historical entry form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-500 hover:text-white transition-all">
+          <button type="button" onClick={onClose} aria-label={Strings.CLOSE_ENTRY_FORM} className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-500 hover:text-white transition-all">
             <X size={20} strokeWidth={3} />
           </button>
         </div>
 
         <div className="mb-8">
           <Input
-            label="Deployment Timestamp"
+            label={Strings.DEPLOYMENT_TIMESTAMP}
             type="date"
             value={date}
             onChange={setDate}
@@ -90,7 +91,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
           />
           {date && !isDateValid && (
             <span className="mt-2 ml-1 block text-[11px] font-black uppercase tracking-widest text-rose-500">
-              Invalid date — use YYYY-MM-DD
+              {Strings.INVALID_DATE}
             </span>
           )}
         </div>
@@ -136,7 +137,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
             className="w-full h-18 text-[11px]"
           >
             <Database size={16} className="mr-3" strokeWidth={3} />
-            {saving ? 'Logging…' : 'Log Entry'}
+            {saving ? Strings.LOGGING : Strings.LOG_ENTRY_BTN}
           </Button>
         </div>
       </motion.div>

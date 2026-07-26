@@ -66,13 +66,13 @@ fun MetricBanner(
                     horizontalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
                     MetricItem(
-                        label = "REMAINING",
+                        label = Strings.REMAINING,
                         value = maxOf(0, metrics.limit - metrics.count).toString(),
                         valueColor = if (isOverLimit) ErrorColor else Color.White,
                         modifier = Modifier.weight(1f)
                     )
                     SpentMetricItem(
-                        label = "SPENT TODAY",
+                        label = Strings.SPENT_TODAY,
                         spent = metrics.spentToday,
                         modifier = Modifier.weight(1f)
                     )
@@ -85,47 +85,57 @@ fun MetricBanner(
                     horizontalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
                     MetricItem(
-                        label = "STREAK",
+                        label = Strings.STREAK,
                         value = "${metrics.streak}",
-                        suffix = if (metrics.streak == 1) "DAY" else "DAYS",
+                        suffix = if (metrics.streak == 1) Strings.DAY else Strings.DAYS,
                         valueColor = SuccessColor,
                         modifier = Modifier.weight(1f)
                     )
-                    Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "DAILY QUOTA",
-                                style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 1.sp, fontWeight = FontWeight.Black)
+                    MetricItem(
+                        label = Strings.RANK,
+                        value = metrics.rank.uppercase(),
+                        suffix = "${metrics.xp} ${Strings.XP}",
+                        valueColor = accentColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = Strings.DAILY_QUOTA,
+                            style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 1.sp, fontWeight = FontWeight.Black)
+                        )
+                        Text(
+                            text = if (isOverLimit) Strings.OVER_LIMIT else "${(progress * 100).toInt()}%",
+                            style = TabakTypography.labelSmall.copy(
+                                color = stateColor,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 1.sp
                             )
-                            Text(
-                                text = if (isOverLimit) "OVER LIMIT" else "${(progress * 100).toInt()}%",
-                                style = TabakTypography.labelSmall.copy(
-                                    color = stateColor,
-                                    fontWeight = FontWeight.Black,
-                                    letterSpacing = 1.sp
-                                )
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(100))
+                            .background(Color.White.copy(alpha = 0.05f))
+                    ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(8.dp)
+                                .fillMaxWidth(animatedProgress)
+                                .fillMaxHeight()
                                 .clip(RoundedCornerShape(100))
-                                .background(Color.White.copy(alpha = 0.05f))
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(animatedProgress)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(100))
-                                    .background(stateColor)
-                            )
-                        }
+                                .background(stateColor)
+                        )
                     }
                 }
             }
@@ -157,7 +167,7 @@ fun MetricBanner(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        "END DAY",
+                        Strings.END_DAY,
                         style = TabakTypography.labelSmall.copy(
                             color = TextPrimary,
                             fontWeight = FontWeight.Black,
@@ -184,24 +194,21 @@ private fun MetricItem(
             style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 1.sp, fontWeight = FontWeight.Black)
         )
         Spacer(modifier = Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.Bottom) {
+        Text(
+            text = value,
+            style = TabakTypography.headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = 24.sp),
+            color = valueColor
+        )
+        if (suffix.isNotEmpty()) {
             Text(
-                text = value,
-                style = TabakTypography.headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = 24.sp),
-                color = valueColor
-            )
-            if (suffix.isNotEmpty()) {
-                Text(
-                    text = " $suffix",
-                    style = TabakTypography.labelSmall.copy(
-                        fontSize = 10.sp,
-                        color = TextMuted,
-                        fontWeight = FontWeight.Black,
-                        letterSpacing = 1.sp
-                    ),
-                    modifier = Modifier.padding(bottom = 4.dp)
+                text = suffix,
+                style = TabakTypography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    color = TextMuted,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 1.sp
                 )
-            }
+            )
         }
     }
 }

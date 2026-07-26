@@ -23,6 +23,20 @@ val TabakTypography = Typography(
         letterSpacing = (-0.5).sp,
         color = TextPrimary
     ),
+    titleLarge = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Black,
+        fontSize = 22.sp,
+        letterSpacing = 0.5.sp,
+        color = TextPrimary
+    ),
+    titleMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 18.sp,
+        letterSpacing = 0.25.sp,
+        color = TextPrimary
+    ),
     bodyLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold, // Sharper for dark mode

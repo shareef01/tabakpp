@@ -22,6 +22,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tabakpp.app.composeapp.theme.*
+import com.tabakpp.app.composeapp.ui.components.Strings
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.domain.SmokingCalculator
@@ -86,19 +87,19 @@ fun ManualEntryForm(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "HISTORICAL ENTRY",
+                Strings.HISTORICAL_ENTRY,
                 style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black, letterSpacing = 2.sp),
                 color = TextPrimary
             )
             IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "Close entry form", tint = TextMuted, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.Close, contentDescription = Strings.CLOSE_ENTRY_FORM, tint = TextMuted, modifier = Modifier.size(20.dp))
             }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
 
         // DATE SECTION
-        FormTitle("Deployment Timestamp")
+        FormTitle(Strings.DEPLOYMENT_TIMESTAMP)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -135,7 +136,7 @@ fun ManualEntryForm(
                 )
                 if (date.isNotBlank() && !isDateValid) {
                     Text(
-                        "INVALID DATE — USE YYYY-MM-DD",
+                        Strings.INVALID_DATE,
                         style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp),
                         color = ErrorColor,
                         modifier = Modifier.padding(top = 8.dp, start = 4.dp)
@@ -147,7 +148,7 @@ fun ManualEntryForm(
         Spacer(modifier = Modifier.height(32.dp))
 
         // COUNTS SECTION
-        FormTitle("Tactical Unit Data")
+        FormTitle(Strings.TACTICAL_UNIT_DATA)
         configs.forEach { config ->
             Box(
                 modifier = Modifier
@@ -203,7 +204,7 @@ fun ManualEntryForm(
             enabled = isEditing || isDateValid
         ) {
             Text(
-                if (isEditing) "UPDATE HISTORY" else "LOG ENTRY",
+                if (isEditing) Strings.UPDATE_HISTORY else Strings.LOG_ENTRY,
                 style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp)
             )
         }

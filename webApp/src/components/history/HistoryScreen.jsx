@@ -10,8 +10,7 @@ import { cn } from '../../utils/utils';
 import { formatDateDisplay } from '../../utils/formatters';
 import { mapFirestoreError } from '../../utils/errorHandlers';
 import { UndoToast, UNDO_TOAST_MS } from '../feedback/UndoToast';
-
-const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+import { Strings } from '../../constants/strings';
 
 const VELOCITY_PERIODS = [
   { days: 7, label: '7D', title: 'Last 7 days' },
@@ -24,7 +23,7 @@ const VELOCITY_PERIODS = [
 const weekdayFromDateStr = (dateStr) => {
   const [y, m, d] = (dateStr || '').split('-').map(Number);
   if (!y || !m || !d) return '---';
-  return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+  return Strings.WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
 };
 
 /** Shift a YYYY-MM-DD calendar date by `delta` days in UTC. */
@@ -55,20 +54,20 @@ const VelocityTooltip = ({ active, payload }) => {
   return (
     <div className="px-3.5 py-2.5 rounded-xl bg-[#0c0c0e] border border-white/[0.08] shadow-[0_16px_40px_rgba(0,0,0,0.75)]">
       <p className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400">
-        {point.isNow ? 'Live session' : (point.dateLabel || point.name)}
+        {point.isNow ? Strings.LIVE_SESSION : (point.dateLabel || point.name)}
       </p>
       <p className="mt-1 text-lg font-black tabular-nums text-white leading-none">
         {point.val}
-        <span className="ml-1.5 text-[11px] font-bold uppercase tracking-widest text-neutral-400">units</span>
+        <span className="ml-1.5 text-[11px] font-bold uppercase tracking-widest text-neutral-400">{Strings.UNITS.toLowerCase()}</span>
       </p>
     </div>
   );
 };
 
 const originMeta = (origin) => {
-  if (origin === 'DAY_RESET') return { label: 'Archived', tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
-  if (origin === 'MANUAL_ENTRY') return { label: 'Manual', tone: 'text-accent bg-accent/10 ring-accent/20' };
-  return { label: 'Entry', tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
+  if (origin === 'DAY_RESET') return { label: Strings.ARCHIVED, tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
+  if (origin === 'MANUAL_ENTRY') return { label: Strings.MANUAL, tone: 'text-accent bg-accent/10 ring-accent/20' };
+  return { label: Strings.ENTRY, tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
 };
 
 const STAT_TONES = {
@@ -174,9 +173,9 @@ export const HistoryScreen = React.memo(({
     return [
       ...historical,
       {
-        name: 'NOW',
+        name: Strings.NOW,
         date: today,
-        dateLabel: 'Today',
+        dateLabel: Strings.TODAY,
         val: m.count || 0,
         isNow: true,
       },
@@ -206,13 +205,13 @@ export const HistoryScreen = React.memo(({
       <Card className="p-5 md:p-8 overflow-hidden bg-bg-card">
         <div className="flex items-end justify-between gap-4 md:gap-6 mb-4 md:mb-5">
           <div className="flex flex-col gap-1 min-w-0">
-            <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Usage velocity</span>
+            <span className={cn(UI.LABEL, 'mb-0 ml-0')}>{Strings.USAGE_VELOCITY}</span>
             <h2 className="text-2xl md:text-3xl font-black tracking-tight text-white leading-none">
               {velocityPeriod.title}
             </h2>
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">
-            <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400">Now</span>
+            <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400">{Strings.NOW}</span>
             <div className="flex items-baseline gap-2">
               <span className="text-3xl md:text-4xl font-black tabular-nums text-white leading-none">
                 {velocityStats.nowVal}
@@ -270,7 +269,7 @@ export const HistoryScreen = React.memo(({
           {chartData.every((p) => (p.val || 0) === 0) ? (
             <div className="h-full flex items-center justify-center rounded-2xl border border-dashed border-white/[0.06]">
               <span className="text-[11px] font-black uppercase tracking-[0.18em] text-neutral-400">
-                No velocity yet — log a session
+                {Strings.NO_VELOCITY_MSG}
               </span>
             </div>
           ) : (
@@ -339,10 +338,10 @@ export const HistoryScreen = React.memo(({
         {velocityStats.peak > 0 && (
           <div className="mt-4 pt-4 border-t border-white/[0.05] flex items-center justify-between gap-4">
             <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400">
-              Peak in window
+              {Strings.PEAK_IN_WINDOW}
             </span>
             <span className="text-[11px] font-black uppercase tracking-widest text-neutral-300 tabular-nums">
-              {velocityStats.peak} units
+              {velocityStats.peak} {Strings.UNITS.toLowerCase()}
             </span>
           </div>
         )}
@@ -350,47 +349,47 @@ export const HistoryScreen = React.memo(({
 
       {historyIsTruncated && (
         <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-950/40 px-4 py-3 text-[11px] font-bold text-amber-200">
-          Showing the most recent 1,200 entries. Trend and streak views exclude older entries; lifetime totals remain authoritative.
+          {Strings.TRUNCATED_HISTORY_MSG}
         </div>
       )}
 
       {/* Bottom: 2-Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 md:gap-6 items-start">
         {/* Left: Secondary Stats */}
-        <section className="lg:col-span-4 space-y-3" aria-label="At a glance">
+        <section className="lg:col-span-4 space-y-3" aria-label={Strings.AT_A_GLANCE}>
           <div className="flex items-baseline justify-between gap-3 px-0.5">
-            <span className={cn(UI.LABEL, 'mb-0 ml-0')}>At a glance</span>
+            <span className={cn(UI.LABEL, 'mb-0 ml-0')}>{Strings.AT_A_GLANCE}</span>
             <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-neutral-400">
-              Live
+              {Strings.LIVE}
             </span>
           </div>
           <div className="grid grid-cols-2 gap-2.5">
             <StatTile
               icon={TrendingUp}
               value={m.streak || 0}
-              label="Streak"
+              label={Strings.STREAK}
               hint="Active days"
               tone="accent"
             />
             <StatTile
               icon={Wallet}
               value={SmokingCalculator.formatCurrency(m.spentToday ?? 0)}
-              label="Spent"
-              hint="Today"
+              label={Strings.SPENT}
+              hint={Strings.DAY}
               tone="rose"
             />
             <StatTile
               icon={PiggyBank}
               value={SmokingCalculator.formatCurrency(m.savedLifetime ?? 0)}
-              label="Saved"
+              label={Strings.SAVED}
               hint="Lifetime"
               tone="accent"
             />
             <StatTile
               icon={HeartPulse}
               value={SmokingCalculator.formatLifeMinutes(m.recovered ?? 0)}
-              label="Recovered"
-              hint={`Lost ${SmokingCalculator.formatLifeMinutes(m.lifeLost ?? 0)}`}
+              label={Strings.RECOVERED}
+              hint={`${Strings.LOST} ${SmokingCalculator.formatLifeMinutes(m.lifeLost ?? 0)}`}
               tone="neutral"
             />
           </div>
@@ -400,7 +399,7 @@ export const HistoryScreen = React.memo(({
         <Card className="lg:col-span-8 p-4 md:p-6 bg-bg-card">
           <div className="flex items-end justify-between gap-4 mb-5">
             <div className="flex flex-col gap-1 min-w-0">
-              <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Session log</span>
+              <span className={cn(UI.LABEL, 'mb-0 ml-0')}>{Strings.SESSION_LOG}</span>
               <h3 className="text-xl font-black tracking-tight text-white leading-none">
                 {visibleLogs.length} {visibleLogs.length === 1 ? 'entry' : 'entries'}
               </h3>
@@ -410,10 +409,10 @@ export const HistoryScreen = React.memo(({
                 type="button"
                 onClick={onAddEntry}
                 className="inline-flex items-center gap-2 h-10 px-3.5 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all"
-                title="Add manual entry"
+                title={Strings.ADD_ENTRY}
               >
                 <Plus size={15} strokeWidth={3} />
-                Add
+                {Strings.SAVE}
               </button>
             )}
           </div>
@@ -434,7 +433,7 @@ export const HistoryScreen = React.memo(({
                   <div className="flex flex-col gap-1.5 min-w-0 flex-1">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-[13px] font-black text-white tracking-tight truncate">
-                        {isToday ? 'Today' : formatDateDisplay(log.logDate)}
+                        {isToday ? Strings.DAY : formatDateDisplay(log.logDate)}
                       </span>
                       <span className={cn(
                         "shrink-0 inline-flex items-center px-1.5 h-5 rounded-md text-[10px] font-black uppercase tracking-[0.12em] ring-1 ring-inset",
@@ -444,13 +443,13 @@ export const HistoryScreen = React.memo(({
                       </span>
                     </div>
                     <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-500">
-                      {isToday ? 'Open day' : 'Logged session'}
+                      {isToday ? Strings.OPEN_DAY : Strings.LOGGED_SESSION}
                     </span>
                   </div>
 
                   <div className="flex flex-col items-end gap-0.5 shrink-0 mr-1">
                     <span className="text-lg font-black tabular-nums text-white leading-none">{units}</span>
-                    <span className="text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">units</span>
+                    <span className="text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">{Strings.UNITS.toLowerCase()}</span>
                   </div>
 
                   <div className="flex items-center gap-0.5 shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
@@ -475,9 +474,9 @@ export const HistoryScreen = React.memo(({
               );
             }) : (
               <div className="py-14 px-6 text-center">
-                <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">No sessions yet</p>
+                <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">{Strings.NO_SESSIONS_MSG}</p>
                 <p className="mt-2 text-xs text-neutral-500">
-                  End a tracking day or add a manual entry.
+                  {Strings.END_DAY_MSG}
                 </p>
                 {onAddEntry && (
                   <button
@@ -486,7 +485,7 @@ export const HistoryScreen = React.memo(({
                     className="mt-5 inline-flex items-center gap-2 h-10 px-4 rounded-full bg-white/[0.06] text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors"
                   >
                     <Plus size={14} strokeWidth={3} />
-                    Add entry
+                    {Strings.ADD_ENTRY}
                   </button>
                 )}
               </div>

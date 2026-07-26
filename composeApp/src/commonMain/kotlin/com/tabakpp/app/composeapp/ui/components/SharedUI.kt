@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import com.tabakpp.app.composeapp.theme.*
+import com.tabakpp.app.composeapp.ui.components.Strings
 
 /**
  * Platinum Modal Frame with Industrial Depth.
@@ -91,8 +92,8 @@ fun ModalFrame(
 fun ConfirmModal(
     title: String,
     message: String,
-    confirmLabel: String = "Confirm",
-    dismissLabel: String = "Cancel",
+    confirmLabel: String = Strings.CONFIRM,
+    dismissLabel: String = Strings.CANCEL,
     tintColor: Color = ErrorColor,
     icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Default.PriorityHigh,
     isLoading: Boolean = false,
@@ -106,7 +107,7 @@ fun ConfirmModal(
                     onClick = onDismiss,
                     modifier = Modifier.align(Alignment.TopEnd).offset(x = 16.dp, y = (-16).dp)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", tint = TextDisabled, modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Close, contentDescription = Strings.CLOSE, tint = TextDisabled, modifier = Modifier.size(20.dp))
                 }
             }
 
@@ -118,7 +119,7 @@ fun ConfirmModal(
                     border = BorderStroke(1.dp, tintColor.copy(alpha = 0.2f))
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(icon, contentDescription = "Alert", tint = tintColor, modifier = Modifier.size(24.dp))
+                        Icon(icon, contentDescription = Strings.ALERT, tint = tintColor, modifier = Modifier.size(24.dp))
                     }
                 }
                 
@@ -257,7 +258,7 @@ fun OfflineBanner(isOffline: Boolean) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "You're offline — some changes may fail until you're back online",
+                    Strings.OFFLINE_MSG,
                     style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp),
                     color = WarningColor
                 )

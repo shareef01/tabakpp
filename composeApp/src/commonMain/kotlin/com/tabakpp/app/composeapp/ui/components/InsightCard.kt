@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tabakpp.app.composeapp.theme.*
+import com.tabakpp.app.composeapp.ui.components.Strings
 
 @Composable
 fun InsightCard(
@@ -60,7 +61,7 @@ fun InsightCard(
                 ) {
                     Icon(
                         Icons.Default.Info,
-                        contentDescription = "Info",
+                        contentDescription = Strings.INFO_LABEL,
                         tint = TextDisabled,
                         modifier = Modifier.size(18.dp)
                     )
@@ -71,7 +72,7 @@ fun InsightCard(
             
             Text(
                 text = value,
-                style = TabakTypography.titleLarge.copy(fontSize = 24.sp),
+                style = MaterialTheme.typography.titleLarge,
                 color = TextPrimary
             )
             
@@ -91,11 +92,11 @@ fun InsightCard(
             containerColor = SurfaceCard.copy(alpha = 0.95f),
             titleContentColor = TextPrimary,
             textContentColor = TextMuted,
-            title = { Text(label, style = TabakTypography.titleLarge.copy(fontSize = 18.sp)) },
+            title = { Text(label, style = MaterialTheme.typography.titleMedium) },
             text = { Text(infoText, style = MaterialTheme.typography.bodyMedium) },
             confirmButton = {
                 TextButton(onClick = { showInfo = false }) {
-                    Text("GOT IT", style = TabakTypography.labelSmall, color = accentColor)
+                    Text(Strings.GOT_IT, style = TabakTypography.labelSmall, color = accentColor)
                 }
             }
         )

@@ -3,6 +3,7 @@ package com.tabakpp.app.composeapp.ui.components
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -21,6 +22,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -43,32 +45,34 @@ fun TrackerCard(
     onDecrement: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isOverLimit = (count >= config.limit) && (config.limit > 0)
+    val isLimitReached = (count >= config.limit) && (config.limit > 0)
+    val isOver = count > config.limit
     val isLarge = widgetSize == WidgetSize.LARGE
     val isSmall = widgetSize == WidgetSize.SMALL
     val reducedMotion = LocalReducedMotion.current
     
     // Scale parameters matched to PWA feel
     val cardHeight = when (widgetSize) {
-        WidgetSize.SMALL -> 220.dp
-        WidgetSize.MEDIUM -> 260.dp
-        WidgetSize.LARGE -> 320.dp
+        WidgetSize.SMALL -> 180.dp
+        WidgetSize.MEDIUM -> 220.dp
+        WidgetSize.LARGE -> 310.dp
     }
     val counterSize = when (widgetSize) {
-        WidgetSize.SMALL -> 52.sp
-        WidgetSize.MEDIUM -> 64.sp
-        WidgetSize.LARGE -> 84.sp
+        WidgetSize.SMALL -> 28.sp
+        WidgetSize.MEDIUM -> 36.sp
+        WidgetSize.LARGE -> 64.sp
     }
-    val gaugeHeight = if (isLarge) 60.dp else if (isSmall) 34.dp else 42.dp
-    val gaugeMaxWidth = 240.dp
-    val btnSize = if (isLarge) 64.dp else if (isSmall) 48.dp else 56.dp
+    val gaugeHeight = if (isLarge) 56.dp else if (isSmall) 24.dp else 30.dp
+    val gaugeMaxWidth = 220.dp
+    val btnSize = if (isLarge) 60.dp else if (isSmall) 36.dp else 44.dp
+    val iconSize = if (isLarge) 24.dp else if (isSmall) 14.dp else 18.dp
 
     // Smooth state transitions (Optimized spec)
     val cardBackground by animateColorAsState(
-        targetValue = if (isOverLimit) Color(0xFF2D0808) else SurfaceBase,
+        targetValue = if (isLimitReached) Color(0xFF2D0808) else SurfaceBase,
         animationSpec = if (reducedMotion) snap() else tween(durationMillis = 300)
     )
-    val btnAccent = if (isOverLimit) Color(0xFFFF5252) else accentColor
+    val btnAccent = if (isLimitReached) ErrorColor else accentColor
 
     val haptics = rememberTabakHaptics()
     val heavyHaptics = rememberTabakHaptics(heavier = true)
@@ -84,7 +88,7 @@ fun TrackerCard(
     ) {
         Column(
             modifier = Modifier
-                .padding(vertical = 20.dp, horizontal = 24.dp)
+                .padding(vertical = 16.dp, horizontal = 16.dp)
                 .fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
@@ -101,10 +105,14 @@ fun TrackerCard(
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.sp,
                         color = Color.White.copy(alpha = 0.72f)
-                    )
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "${config.limit}/day",
+                    text = "${config.limit}${Strings.DAY_LIMIT}",
                     style = TabakTypography.labelSmall.copy(
                         fontWeight = FontWeight.Bold,
                         color = Color.White.copy(alpha = 0.55f)
@@ -126,28 +134,9 @@ fun TrackerCard(
                 }
             )
 
-            // 3. Counter Zone (Rigid Slot for stability)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(if (isLarge) 100.dp else 80.dp)
-                    .clipToBounds(),
-                contentAlignment = Alignment.Center
-            ) {
-                SimpleCounter(count, isOverLimit, counterSize)
-            }
-
-            // 4. Organizational Separator
-            HorizontalDivider(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                color = Color.White.copy(alpha = 0.03f),
-                thickness = 0.5.dp
-            )
-
-            // 5. Action Row (Circular Industrial Controls - Centered)
+            // 3. Action Center (Fluid Circular Controls)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Decrement Circle
@@ -165,14 +154,64 @@ fun TrackerCard(
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Default.Remove,
-                            contentDescription = "Decrease ${config.name}",
+                            contentDescription = "${Strings.DECREASE} ${config.name}",
                             tint = if (count > 0) TextMuted else TextDisabled,
-                            modifier = Modifier.size(if (isLarge) 24.dp else 20.dp)
+                            modifier = Modifier.size(iconSize)
                         )
                     }
                 }
-                
-                Spacer(modifier = Modifier.width(if (isLarge) 32.dp else 24.dp))
+
+                // Counter Zone
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clipToBounds(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        SimpleCounter(count, isLimitReached, counterSize)
+
+                        val remaining = config.limit - count
+                        val progress = if (config.limit > 0) count.toFloat() / config.limit.toFloat() else 0f
+                        
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            val label = if (isOver) {
+                                "${count - config.limit} ${Strings.OVER}"
+                            } else {
+                                "${maxOf(0, remaining)} ${Strings.LEFT}"
+                            }
+
+                            Text(
+                                text = label.uppercase(),
+                                style = TabakTypography.labelSmall.copy(
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 0.5.sp,
+                                    fontSize = 8.sp,
+                                    color = if (isOver) ErrorColor else if (isLimitReached) WarningColor else TextMuted
+                                )
+                            )
+
+                            // Mini Progress Bar (Web Fidelity)
+                            Box(
+                                modifier = Modifier
+                                    .width(if (isSmall) 20.dp else 28.dp)
+                                    .height(2.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.08f))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(progress.coerceIn(0f, 1f))
+                                        .fillMaxHeight()
+                                        .background(if (isLimitReached) ErrorColor else accentColor)
+                                )
+                            }
+                        }
+                    }
+                }
 
                 // Increment Circle (Glow)
                 Surface(
@@ -193,9 +232,9 @@ fun TrackerCard(
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Default.Add,
-                            contentDescription = "Increase ${config.name}",
+                            contentDescription = "${Strings.INCREASE} ${config.name}",
                             tint = Color.White,
-                            modifier = Modifier.size(if (isLarge) 28.dp else 24.dp)
+                            modifier = Modifier.size(if (isLarge) 28.dp else (iconSize + 2.dp))
                         )
                     }
                 }

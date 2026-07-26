@@ -33,9 +33,9 @@ fun HistoryChart(
     val historical = SmokingCalculator.aggregateDailyChartTotals(logs)
     val dailyTotals = historical + SmokingCalculator.DateTotal("NOW", activeCount)
     val chartDescription = dailyTotals.joinToString(
-        prefix = "Usage trend. ",
+        prefix = Strings.USAGE_TREND_PREFIX,
         separator = "; "
-    ) { "${it.date}: ${it.total} units" }
+    ) { "${it.date}: ${it.total} ${Strings.UNITS_LC}" }
     
     Box(
         modifier = modifier
@@ -45,7 +45,7 @@ fun HistoryChart(
     ) {
         if (dailyTotals.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("NO DATA LOGGED", color = TextDisabled, style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp))
+                Text(Strings.NO_DATA_LOGGED, color = TextDisabled, style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp))
             }
         } else {
             val maxTotalVal = dailyTotals.maxOf { it.total }.coerceAtLeast(1)

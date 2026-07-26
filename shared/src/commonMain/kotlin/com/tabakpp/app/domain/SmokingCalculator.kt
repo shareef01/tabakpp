@@ -282,6 +282,9 @@ object SmokingCalculator {
             0
         }
 
+        val xp = calculateXP(logs, streak)
+        val rank = getRank(xp)
+
         return GlobalMetrics(
             count = primaryCount.toInt(),
             limit = primaryLimit,
@@ -292,6 +295,8 @@ object SmokingCalculator {
             progress = if (primaryLimit > 0) primaryCount / primaryLimit else 0.0,
             lifeLost = lifeLost,
             recovered = recovered,
+            xp = xp,
+            rank = rank,
             hasOpenSession = hasOpenSession(activeCounts)
         )
     }
@@ -306,8 +311,26 @@ object SmokingCalculator {
         val progress: Double,
         val lifeLost: Int,
         val recovered: Int,
+        val xp: Int = 0,
+        val rank: String = "Apprentice",
         val hasOpenSession: Boolean = false
     )
+
+    fun calculateXP(logs: List<LogEntry>, streak: Int): Int {
+        val uniqueDays = logs.mapNotNull { it.logDate.takeIf { d -> d.isNotEmpty() } }.distinct().size
+        val totalDays = if (uniqueDays > 0) uniqueDays else logs.size
+        return totalDays * 10 + streak * 15
+    }
+
+    fun getRank(xp: Int): String {
+        return when {
+            xp < 500 -> "Apprentice"
+            xp < 5000 -> "Scout"
+            xp < 10000 -> "Veteran"
+            xp < 20000 -> "Master"
+            else -> "Legend"
+        }
+    }
 
     fun formatCurrency(amount: Double): String {
         // Round in cent space: naive (amount - intPart) * 100 truncation
