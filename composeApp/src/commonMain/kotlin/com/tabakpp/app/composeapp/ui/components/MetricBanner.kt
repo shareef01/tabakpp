@@ -140,9 +140,9 @@ fun MetricBanner(
                     .fillMaxWidth()
                     .heightIn(min = 60.dp)
                     .tabakPressScale(),
-                color = Color.White.copy(alpha = 0.04f),
+                color = WarningColor.copy(alpha = 0.06f),
                 shape = RoundedCornerShape(14.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+                border = androidx.compose.foundation.BorderStroke(1.dp, WarningColor.copy(alpha = 0.18f))
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
@@ -157,9 +157,9 @@ fun MetricBanner(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        "END DAY",
+                        "END TRACKING DAY",
                         style = TabakTypography.labelSmall.copy(
-                            color = TextPrimary,
+                            color = Color(0xFFFEF3C7).copy(alpha = 0.9f),
                             fontWeight = FontWeight.Black,
                             letterSpacing = 2.sp
                         )

@@ -79,17 +79,16 @@ fun TrackerGauge(
             // Material definition pass — legacy JOINT uses the same cigarette look.
             val paperColor = Color(0xFFFAFAFA)
             
-            val filterBrush = remember(type) {
-                when (type) {
-                    TrackerType.SIMPLE -> Brush.verticalGradient(listOf(Color.Gray, Color.DarkGray))
-                    else -> Brush.verticalGradient(
-                        0.0f to Color(0xFF8B5E3C),
-                        1.0f to Color(0xFF5D4037)
-                    )
-                }
+            // Orange filter tip to match the web CigaretteGauge (#F4A261 -> #E76F3C).
+            val filterBrush = remember {
+                Brush.verticalGradient(
+                    0.0f to Color(0xFFF4A261),
+                    1.0f to Color(0xFFE76F3C)
+                )
             }
-            
-            val filterRatio = 0.22f
+
+            // Stubbier silhouette to match web (filterRatio 0.3).
+            val filterRatio = 0.30f
 
             PWAHighFidelityCanvas(
                 progress = animatedProgress.value,
@@ -110,8 +109,7 @@ private fun PWAHighFidelityCanvas(
     isOverLimit: Boolean,
     filterRatio: Float
 ) {
-    // Optimization: Cache constant DP values
-    val vergeStepDp = 4.dp
+    // Cache constant DP values
     val emberWidthDp = 6.dp
     val strokeWidthDp = 1.dp
 
@@ -126,72 +124,84 @@ private fun PWAHighFidelityCanvas(
         val height = size.height
         val filterWidth = width * filterRatio
         val burnableWidth = width - filterWidth
-        
+
         val ashWidth = burnableWidth * progress
-        val emberWidth = emberWidthDp.toPx()
-        
-        // 1. Ash Section (Dark Charcoal)
-        drawRect(
-            color = Color(0xFF1A1A1A),
-            size = Size(ashWidth, height)
-        )
-        
-        // 2. Paper Section (Textured Bone White)
         val paperStart = ashWidth
         val paperWidth = burnableWidth - ashWidth
-        if (paperWidth > 0) {
-            drawRect(
-                color = paperColor,
-                topLeft = Offset(paperStart, 0f),
-                size = Size(paperWidth, height)
-            )
-            
-            // Optimized "Verge" Texture Lines (Batched Draw if possible, but line by line is usually fine for these counts)
-            val step = vergeStepDp.toPx()
+
+        // 1. Ash Section (Dark Charcoal)
+        if (ashWidth > 0f) {
+            drawRect(color = Color(0xFF1A1A1A), size = Size(ashWidth, height))
+        }
+
+        // 2. Paper Section (bone white) with 15 faint vertical "verge" lines,
+        //    evenly spread across the current paper span (web parity).
+        if (paperWidth > 0f) {
+            drawRect(color = paperColor, topLeft = Offset(paperStart, 0f), size = Size(paperWidth, height))
+            val lines = 15
             val strokePx = strokeWidthDp.toPx()
-            var x = paperStart + (step / 2)
-            while (x < burnableWidth) {
+            var i = 1
+            while (i <= lines) {
+                val x = paperStart + paperWidth * (i / (lines + 1f))
                 drawLine(
-                    color = Color.Black.copy(alpha = 0.05f),
+                    color = Color.Black.copy(alpha = 0.04f),
                     start = Offset(x, 0f),
                     end = Offset(x, height),
                     strokeWidth = strokePx
                 )
-                x += step
+                i++
             }
         }
 
-        // 3. Filter Section
+        // 3. Filter Section (orange), with a thin dark seam at the paper join.
+        drawRect(brush = filterBrush, topLeft = Offset(burnableWidth, 0f), size = Size(filterWidth, height))
+        drawLine(
+            color = Color.Black.copy(alpha = 0.4f),
+            start = Offset(burnableWidth, 0f),
+            end = Offset(burnableWidth, height),
+            strokeWidth = strokeWidthDp.toPx()
+        )
+
+        // 4. Cylindrical surface shading — matte over ash/paper, glossy on the filter.
         drawRect(
-            brush = filterBrush,
+            brush = Brush.verticalGradient(
+                0.0f to Color.Black.copy(alpha = 0.10f),
+                0.5f to Color.Transparent,
+                1.0f to Color.Black.copy(alpha = 0.20f)
+            ),
+            size = Size(burnableWidth, height)
+        )
+        drawRect(
+            brush = Brush.verticalGradient(
+                0.0f to Color.White.copy(alpha = 0.10f),
+                0.5f to Color.Transparent,
+                1.0f to Color.Black.copy(alpha = 0.30f)
+            ),
             topLeft = Offset(burnableWidth, 0f),
             size = Size(filterWidth, height)
         )
-        
-        // 4. Vertical Glow Ember (PWA Style)
-        if (progress < 1f && progress > 0f) {
-            val emberColor = Color(0xFFFF4500)
+
+        // 5. Laser ember at the burn line — bright core + radiant glow, drawn on top.
+        if (progress > 0.0001f && progress < 0.9999f) {
+            val glowR = 13.dp.toPx()
             drawRect(
                 brush = Brush.horizontalGradient(
-                    colors = listOf(emberColor, emberColor.copy(alpha = 0.1f)),
-                    startX = ashWidth,
-                    endX = ashWidth + emberWidth
+                    0.0f to Color(0xFFFF4500).copy(alpha = 0f),
+                    0.5f to Color(0xFFFF4500).copy(alpha = 0.55f),
+                    1.0f to Color(0xFFFF4500).copy(alpha = 0f),
+                    startX = ashWidth - glowR,
+                    endX = ashWidth + glowR
                 ),
-                topLeft = Offset(ashWidth, 0f),
-                size = Size(emberWidth, height)
+                topLeft = Offset(ashWidth - glowR, 0f),
+                size = Size(glowR * 2, height)
+            )
+            val coreW = emberWidthDp.toPx()
+            drawRect(
+                color = Color(0xFFFF5A1F),
+                topLeft = Offset(ashWidth - coreW, 0f),
+                size = Size(coreW, height)
             )
         }
-        
-        // 5. Cylindrical Surface Shading (Top to Bottom)
-        // High-Performance single pass gradient
-        drawRect(
-            brush = Brush.verticalGradient(
-                0.0f to Color.Black.copy(alpha = 0.12f),
-                0.5f to Color.Transparent,
-                1.0f to Color.Black.copy(alpha = 0.22f)
-            ),
-            size = size
-        )
     }
 }
 
