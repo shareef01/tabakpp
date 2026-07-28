@@ -100,8 +100,6 @@ fun HistoryScreen(
                 // TREND ANALYSIS BLOCK
                 item {
                     Column {
-                        HistoryGroupHeader("vault statistics")
-                        Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -146,6 +144,7 @@ fun HistoryScreen(
                 // METRICS GRID
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        HistoryGroupHeader("at a glance")
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
