@@ -42,6 +42,16 @@ kotlin {
             implementation(libs.androidx.activity.compose)
             implementation(project.dependencies.platform(libs.firebase.bom))
         }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+            @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+            implementation(compose.uiTest)
+        }
+        androidUnitTest.dependencies {
+            implementation(libs.compose.ui.test.junit4.android)
+            implementation(libs.robolectric)
+            implementation(libs.androidx.test.core)
+        }
     }
 }
 
@@ -55,4 +65,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+}
+
+dependencies {
+    // Provides the ComponentActivity in the test manifest for createComposeRule().
+    debugImplementation(libs.compose.ui.test.manifest)
 }
