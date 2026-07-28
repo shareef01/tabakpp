@@ -43,11 +43,12 @@ fun TrackerGauge(
         if (reducedMotion) {
             animatedProgress.snapTo(progress.coerceIn(0f, 1f))
         } else {
+            // Matches the web gauge BURN_TRANSITION: 0.8s, cubic-bezier(0.16, 1, 0.3, 1).
             animatedProgress.animateTo(
                 targetValue = progress.coerceIn(0f, 1f),
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow // Faster response
+                animationSpec = tween(
+                    durationMillis = 800,
+                    easing = CubicBezierEasing(0.16f, 1f, 0.3f, 1f)
                 )
             )
         }
