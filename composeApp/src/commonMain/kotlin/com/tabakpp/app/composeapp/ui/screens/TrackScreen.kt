@@ -45,6 +45,7 @@ fun TrackScreen(
     innerPadding: PaddingValues = PaddingValues(0.dp)
 ) {
     val profile by viewModel.userProfile.collectAsStateWithLifecycle()
+    val activeCounts by viewModel.activeCounts.collectAsStateWithLifecycle()
     val metrics by viewModel.metrics.collectAsStateWithLifecycle()
     val configs by viewModel.configs.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
@@ -79,7 +80,7 @@ fun TrackScreen(
         } else {
             TrackerGrid(
                 configs = configs,
-                activeCounts = profile?.activeCounts,
+                activeCounts = activeCounts,
                 accentColor = accentColor,
                 widgetSize = profile?.widgetSize ?: com.tabakpp.app.data.WidgetSize.MEDIUM,
                 onIncrement = { config ->
