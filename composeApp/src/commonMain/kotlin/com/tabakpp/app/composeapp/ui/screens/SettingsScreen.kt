@@ -99,6 +99,7 @@ fun SettingsScreen(
                     SettingsHeader("profile")
                     IdentitySection(
                         profile = profile,
+                        email = authUser?.email,
                         onUpdateName = { raw ->
                             val name = InputSanitizer.displayName(raw)
                             viewModel.updateDisplayName(name)
@@ -547,6 +548,7 @@ fun SettingsGroupCard(content: @Composable () -> Unit) {
 @Composable
 fun IdentitySection(
     profile: UserProfile?,
+    email: String?,
     onUpdateName: (String) -> Unit,
     onUpdateAvatar: (String?) -> Unit,
     accentColor: Color
@@ -578,9 +580,10 @@ fun IdentitySection(
                     singleLine = true
                 )
                 Text(
-                    text = "IDENTIFIED COMMANDER",
-                    style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp),
-                    color = TextMuted
+                    text = email ?: "Signed in",
+                    style = TabakTypography.labelSmall.copy(letterSpacing = 0.5.sp),
+                    color = TextMuted,
+                    maxLines = 1
                 )
                 
                 // Debounced: one Firestore write after typing pauses, not per keystroke
