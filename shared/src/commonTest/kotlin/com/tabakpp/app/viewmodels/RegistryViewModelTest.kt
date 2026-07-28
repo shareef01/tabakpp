@@ -54,6 +54,8 @@ private class FakeRegistryRepository : RegistryRepository {
     var failWith: Exception? = null
     /** When set, endDay suspends on it — lets a test observe the in-flight state. */
     var endDayGate: CompletableDeferred<Unit>? = null
+    /** When set, updateLiveCounter suspends on it — for optimistic-flight tests. */
+    var liveCounterGate: CompletableDeferred<Unit>? = null
 
     val liveCounterCalls = mutableListOf<Triple<String, String, Double>>()
     val endDayCalls = mutableListOf<Pair<String, String>>()
@@ -66,7 +68,7 @@ private class FakeRegistryRepository : RegistryRepository {
     override fun subscribeToLogs(uid: String): Flow<List<LogEntry>> = logsFlow
 
     override suspend fun updateLiveCounter(uid: String, trackerId: String, delta: Double) {
-        maybeFail(); liveCounterCalls.add(Triple(uid, trackerId, delta))
+        liveCounterGate?.await(); maybeFail(); liveCounterCalls.add(Triple(uid, trackerId, delta))
     }
     override suspend fun endDay(uid: String, trackingDate: String) {
         endDayGate?.await(); maybeFail(); endDayCalls.add(uid to trackingDate)
@@ -228,5 +230,52 @@ class RegistryViewModelTest {
         assertNotNull(vm.error.value)
         vm.clearError()
         assertEquals(null, vm.error.value)
+    }
+
+    @Test
+    fun increment_bumpsActiveCountsOptimisticallyBeforeWriteSettles() {
+        val (vm, reg) = build()
+        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        scheduler.runCurrent() // overlay follows the server: cig = 2
+        reg.liveCounterGate = CompletableDeferred() // keep the write in flight
+
+        vm.increment("cig")
+        // the bump is synchronous — visible before the repo call (or runCurrent) settles
+        assertEquals(3.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun increment_rollsBackOptimisticBumpOnFailure() {
+        val (vm, reg) = build()
+        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        scheduler.runCurrent()
+        reg.failWith = RuntimeException("denied")
+
+        vm.increment("cig")
+        assertEquals(3.0, vm.activeCounts.value["cig"]) // optimistic
+        scheduler.runCurrent()
+        assertEquals(2.0, vm.activeCounts.value["cig"]) // rolled back after the write fails
+        assertNotNull(vm.error.value)
+    }
+
+    @Test
+    fun serverSnapshot_isDeferredWhileWriteInFlight_thenReconciles() {
+        val (vm, reg) = build()
+        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        scheduler.runCurrent()
+        reg.liveCounterGate = CompletableDeferred()
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(3.0, vm.activeCounts.value["cig"]) // optimistic; write parked on the gate
+
+        // A server snapshot arriving mid-flight must not stomp the optimistic value.
+        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 9.0))
+        scheduler.runCurrent()
+        assertEquals(3.0, vm.activeCounts.value["cig"])
+
+        reg.liveCounterGate!!.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(9.0, vm.activeCounts.value["cig"]) // reconciled to the held server snapshot
     }
 }

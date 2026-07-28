@@ -54,6 +54,15 @@ class RegistryViewModel(
     private val _endingDay = MutableStateFlow(false)
     val endingDay = _endingDay.asStateFlow()
 
+    // Optimistic counter overlay: bumped instantly on inc/dec for snappy taps,
+    // then reconciled with the server snapshot once no counter writes are in
+    // flight (matches the web useRegistry engine). Single-threaded on Main.
+    private val _activeCounts = MutableStateFlow<Map<String, Double>>(emptyMap())
+    val activeCounts: StateFlow<Map<String, Double>> = _activeCounts.asStateFlow()
+    private var counterInFlight = 0
+    private var latestServerCounts: Map<String, Double> = emptyMap()
+    private var deferredServerCounts = false
+
     private val _trackingDay = MutableStateFlow(SmokingCalculator.getTrackingDate(Clock.System.now()))
     val trackingDay = _trackingDay.asStateFlow()
 
@@ -123,16 +132,29 @@ class RegistryViewModel(
                 }
             }
         }
+
+        // Feed the optimistic overlay from the server profile; while counter
+        // writes are in flight, hold the snapshot so it can't stomp a tap.
+        viewModelScope.launch {
+            userProfile.collect { profile ->
+                latestServerCounts = profile?.activeCounts ?: emptyMap()
+                if (counterInFlight == 0) {
+                    _activeCounts.value = latestServerCounts
+                } else {
+                    deferredServerCounts = true
+                }
+            }
+        }
     }
 
     val metrics: StateFlow<SmokingCalculator.GlobalMetrics?> = combine(
-        logs, configs, userProfile, trackingDay
-    ) { l, c, p, td ->
+        logs, configs, _activeCounts, userProfile, trackingDay
+    ) { l, c, ac, p, td ->
         if (p == null || td.isEmpty()) null
         else SmokingCalculator.getGlobalMetrics(
             logs = l,
             configs = c,
-            activeCounts = p.activeCounts,
+            activeCounts = ac,
             trackingDay = td,
             userPrice = p.unitPrice,
             lifetimeAggregates = p.lifetimeAggregates
@@ -141,12 +163,17 @@ class RegistryViewModel(
 
     fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
         val uid = authUser.value?.uid ?: return
+        counterInFlight += 1
+        _activeCounts.update { it + (trackerId to ((it[trackerId] ?: 0.0) + 1.0)) }
         viewModelScope.launch {
             try {
                 registryRepository.updateLiveCounter(uid, trackerId, 1.0)
                 onSuccess()
             } catch (e: Exception) {
+                _activeCounts.update { it + (trackerId to maxOf(0.0, (it[trackerId] ?: 0.0) - 1.0)) }
                 setError(e, "Could not update the counter. Try again.")
+            } finally {
+                settleCounterFlight()
             }
         }
     }
@@ -157,14 +184,18 @@ class RegistryViewModel(
 
     fun decrement(trackerId: String) {
         val uid = authUser.value?.uid ?: return
-        val currentCount = userProfile.value?.activeCounts?.get(trackerId) ?: 0.0
-        if (currentCount <= 0.0) return // Domain validation: Prevent negative counts
+        if ((_activeCounts.value[trackerId] ?: 0.0) <= 0.0) return // Prevent negative counts
 
+        counterInFlight += 1
+        _activeCounts.update { it + (trackerId to maxOf(0.0, (it[trackerId] ?: 0.0) - 1.0)) }
         viewModelScope.launch {
             try {
                 registryRepository.updateLiveCounter(uid, trackerId, -1.0)
             } catch (e: Exception) {
+                _activeCounts.update { it + (trackerId to ((it[trackerId] ?: 0.0) + 1.0)) }
                 setError(e, "Could not update the counter. Try again.")
+            } finally {
+                settleCounterFlight()
             }
         }
     }
@@ -318,6 +349,15 @@ class RegistryViewModel(
         viewModelScope.launch {
             authRepository.updateDisplayName(name)
                 .onFailure { setError(it, "Could not update your display name. Try again.") }
+        }
+    }
+
+    /** One counter write finished; when none remain, apply any held snapshot. */
+    private fun settleCounterFlight() {
+        counterInFlight = maxOf(0, counterInFlight - 1)
+        if (counterInFlight == 0 && deferredServerCounts) {
+            deferredServerCounts = false
+            _activeCounts.value = latestServerCounts
         }
     }
 
