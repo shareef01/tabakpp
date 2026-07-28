@@ -96,7 +96,7 @@ fun SettingsScreen(
             // 1. Identity
             item {
                 Column {
-                    SettingsHeader("command identity")
+                    SettingsHeader("profile")
                     IdentitySection(
                         profile = profile,
                         onUpdateName = { raw ->
@@ -115,11 +115,11 @@ fun SettingsScreen(
             // 2. Visual Interface
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    SettingsHeader("visual interface")
+                    SettingsHeader("appearance")
                     
                     SettingsGroupCard {
                         Column(modifier = Modifier.padding(20.dp)) {
-                            Text("ACCENT SPECTRUM", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
+                            Text("ACCENT", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
                             Spacer(modifier = Modifier.height(16.dp))
                             AccentPalette(
                                 selectedColor = profile?.accent ?: "#10B981",
@@ -130,7 +130,7 @@ fun SettingsScreen(
 
                     SettingsGroupCard {
                         Column(modifier = Modifier.padding(20.dp)) {
-                            Text("DASHBOARD DENSITY", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
+                            Text("CARD DENSITY", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
                             Spacer(modifier = Modifier.height(16.dp))
                             WidgetSizeSelector(
                                 selectedSize = profile?.widgetSize ?: WidgetSize.MEDIUM,
@@ -145,7 +145,7 @@ fun SettingsScreen(
             // 3. Habit Configuration
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    SettingsHeader("habit configuration")
+                    SettingsHeader("trackers")
                     SettingsGroupCard {
                         Column {
                             configs.forEachIndexed { index, config ->

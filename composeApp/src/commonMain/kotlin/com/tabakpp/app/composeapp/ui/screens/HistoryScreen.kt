@@ -127,7 +127,7 @@ fun HistoryScreen(
                         ) {
                             Column(modifier = Modifier.padding(24.dp)) {
                                 Text(
-                                    "USAGE TRENDS", 
+                                    "USAGE VELOCITY",
                                     style = TabakTypography.labelSmall.copy(letterSpacing = 2.sp, fontWeight = FontWeight.Black),
                                     color = accentColor
                                 )
@@ -178,7 +178,7 @@ fun HistoryScreen(
                             )
                             MetricBlock(
                                 value = SmokingCalculator.formatLifeMinutes(metrics?.recovered ?: 0),
-                                label = "restored",
+                                label = "recovered",
                                 subLabel = "Lost ${SmokingCalculator.formatLifeMinutes(metrics?.lifeLost ?: 0)}",
                                 icon = Icons.Default.Favorite,
                                 modifier = Modifier.weight(1f)
@@ -194,7 +194,7 @@ fun HistoryScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        HistoryGroupHeader("tactical log")
+                        HistoryGroupHeader("session log")
                         IconButton(onClick = { showAddEntry = true }, modifier = Modifier.size(48.dp)) {
                             Icon(
                                 Icons.Default.Add,
