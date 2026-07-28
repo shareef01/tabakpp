@@ -258,19 +258,14 @@ fun BottomNavPillDock(navController: NavHostController, accentColor: Color) {
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = screen.icon,
-                                contentDescription = null,
-                                tint = if (selected) accentColor else TextMuted,
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Text(
-                                screen.label,
-                                color = if (selected) accentColor else TextMuted,
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        }
+                        // Icon-only dock to match the web BottomNav (label lives in
+                        // the accessible name; active icon is slightly larger).
+                        Icon(
+                            imageVector = screen.icon,
+                            contentDescription = screen.label,
+                            tint = if (selected) accentColor else TextMuted,
+                            modifier = Modifier.size(if (selected) 24.dp else 22.dp)
+                        )
                     }
                 }
             }

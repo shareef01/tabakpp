@@ -525,7 +525,7 @@ fun SettingsScreen(
 fun SettingsHeader(title: String) {
     Text(
         text = title.uppercase(),
-        style = TabakTypography.labelSmall.copy(color = DefaultAccent, letterSpacing = 2.sp, fontWeight = FontWeight.Black),
+        style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 2.sp, fontWeight = FontWeight.Black),
         modifier = Modifier.padding(start = 4.dp, bottom = 12.dp)
     )
 }
