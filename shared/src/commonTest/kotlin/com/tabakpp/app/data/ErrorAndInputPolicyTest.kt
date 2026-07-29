@@ -69,6 +69,16 @@ class ErrorAndInputPolicyTest {
     }
 
     @Test
+    fun deleteMapperSurfacesDataWipedRecovery() {
+        val mapped = AuthErrorMapper.map(
+            Exception("DATA_WIPED_AUTH_REMAINED: Auth delete failed"),
+            AuthErrorMapper.Context.DELETE
+        )
+        assertTrue(mapped.contains("erased", ignoreCase = true))
+        assertTrue(mapped.contains("retry", ignoreCase = true))
+    }
+
+    @Test
     fun inputSanitizerBoundsAndRemovesMarkup() {
         val tracker = InputSanitizer.trackerName("  <script>${"x".repeat(100)}  ")
         val displayName = InputSanitizer.displayName("A\u0000lice>")
@@ -107,6 +117,8 @@ class ErrorAndInputPolicyTest {
             put("negative", -1.0)
             put("infinite", Double.POSITIVE_INFINITY)
             put("excessive", 10_001.0)
+            put("bad key!", 1.0)
+            put("x".repeat(65), 1.0)
         }
 
         val normalized = InputSanitizer.counts(values)
@@ -115,5 +127,7 @@ class ErrorAndInputPolicyTest {
         assertFalse("negative" in normalized)
         assertFalse("infinite" in normalized)
         assertFalse("excessive" in normalized)
+        assertFalse("bad key!" in normalized)
+        assertFalse("x".repeat(65) in normalized)
     }
 }

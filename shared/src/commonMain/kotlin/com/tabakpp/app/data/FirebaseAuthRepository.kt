@@ -52,7 +52,9 @@ class FirebaseAuthRepository(
     }
 
     override suspend fun updateDisplayName(name: String): Result<Unit> = runCatching {
-        auth.currentUser?.updateProfile(displayName = name)
+        val safeName = InputSanitizer.displayName(name).takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("Display name required")
+        auth.currentUser?.updateProfile(displayName = safeName)
     }
 
     override suspend fun signInWithGoogle(): Result<Unit> = runCatching {
@@ -103,6 +105,9 @@ class FirebaseAuthRepository(
                 if (attempt < 2) kotlinx.coroutines.delay(400L * (attempt + 1))
             }
         }
+        // Data is gone but Auth user remains — drop the local session so the
+        // empty shell is not left signed-in, then surface the recovery code.
+        runCatching { auth.signOut() }
         throw Exception(
             "DATA_WIPED_AUTH_REMAINED: ${lastError?.message ?: "Auth delete failed"}"
         )

@@ -95,4 +95,49 @@ describe('Firestore ownership and write paths', () => {
     const snapshot = await getDoc(doc(db, 'users/alice'));
     expect(snapshot.data().lifetimeAggregates.saved).toBe(999);
   });
+
+  it('allows in-range activeCounts values on mutation writes', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+      activeCounts: { cig: 3, ryo: 1.5 },
+    }));
+  });
+
+  it('rejects out-of-range or non-numeric count map values', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      activeCounts: { cig: -1 },
+    }));
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      activeCounts: { cig: 10001 },
+    }));
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      activeCounts: { cig: 'lots' },
+    }));
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      activeCounts: { 'bad key!': 1 },
+    }));
+  });
+
+  it('rejects oversized count maps', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+
+    const oversized = Object.fromEntries(
+      Array.from({ length: 51 }, (_, i) => [`t${i}`, 1]),
+    );
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      activeCounts: oversized,
+    }));
+  });
 });

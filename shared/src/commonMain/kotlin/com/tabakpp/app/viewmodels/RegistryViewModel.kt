@@ -8,6 +8,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.Clock
 
@@ -54,14 +56,37 @@ class RegistryViewModel(
     private val _endingDay = MutableStateFlow(false)
     val endingDay = _endingDay.asStateFlow()
 
-    // Optimistic counter overlay: bumped instantly on inc/dec for snappy taps,
-    // then reconciled with the server snapshot once no counter writes are in
-    // flight (matches the web useRegistry engine). Single-threaded on Main.
+    // Optimistic counter overlay: pendingDelta holds in-flight inc/dec not yet
+    // folded into latestServerCounts. Display is always server + pending so a
+    // stale mid-flight snapshot cannot rewind burst taps.
     private val _activeCounts = MutableStateFlow<Map<String, Double>>(emptyMap())
     val activeCounts: StateFlow<Map<String, Double>> = _activeCounts.asStateFlow()
     private var counterInFlight = 0
     private var latestServerCounts: Map<String, Double> = emptyMap()
-    private var deferredServerCounts = false
+    private val pendingDelta = mutableMapOf<String, Double>()
+
+    private fun publishCounterOverlay() {
+        val pending = pendingDelta.toMap()
+        if (pending.isEmpty()) {
+            _activeCounts.value = latestServerCounts
+            return
+        }
+        val keys = latestServerCounts.keys + pending.keys
+        _activeCounts.value = keys.associateWith { id ->
+            maxOf(0.0, (latestServerCounts[id] ?: 0.0) + (pending[id] ?: 0.0))
+        }
+    }
+
+    private fun adjustPending(trackerId: String, delta: Double) {
+        val next = (pendingDelta[trackerId] ?: 0.0) + delta
+        if (kotlin.math.abs(next) < 1e-9) pendingDelta.remove(trackerId)
+        else pendingDelta[trackerId] = next
+    }
+
+    // Serialize settings writes and chain off the last submitted snapshot so
+    // rapid accent/size/name edits cannot overwrite each other mid-flight.
+    private val profileWriteMutex = Mutex()
+    private var lastSubmittedProfile: UserProfile? = null
 
     private val _trackingDay = MutableStateFlow(SmokingCalculator.getTrackingDate(Clock.System.now()))
     val trackingDay = _trackingDay.asStateFlow()
@@ -97,9 +122,14 @@ class RegistryViewModel(
         viewModelScope.launch {
             authUser.collectLatest { user ->
                 if (user == null) {
+                    lastSubmittedProfile = null
+                    pendingDelta.clear()
+                    latestServerCounts = emptyMap()
+                    publishCounterOverlay()
                     _loading.value = false
                     return@collectLatest
                 }
+                lastSubmittedProfile = null
                 _loading.value = true
                 try {
                     registryRepository.ensureUserDocument(user.uid, user.displayName)
@@ -133,16 +163,12 @@ class RegistryViewModel(
             }
         }
 
-        // Feed the optimistic overlay from the server profile; while counter
-        // writes are in flight, hold the snapshot so it can't stomp a tap.
+        // Feed the optimistic overlay from the server profile; pendingDelta
+        // keeps burst taps visible even when a stale snapshot arrives mid-flight.
         viewModelScope.launch {
             userProfile.collect { profile ->
                 latestServerCounts = profile?.activeCounts ?: emptyMap()
-                if (counterInFlight == 0) {
-                    _activeCounts.value = latestServerCounts
-                } else {
-                    deferredServerCounts = true
-                }
+                publishCounterOverlay()
             }
         }
     }
@@ -164,13 +190,22 @@ class RegistryViewModel(
     fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
         val uid = authUser.value?.uid ?: return
         counterInFlight += 1
-        _activeCounts.update { it + (trackerId to ((it[trackerId] ?: 0.0) + 1.0)) }
+        adjustPending(trackerId, 1.0)
+        publishCounterOverlay()
         viewModelScope.launch {
             try {
                 registryRepository.updateLiveCounter(uid, trackerId, 1.0)
+                // Fold this write into the local baseline so a delayed listener
+                // cannot double-count against pendingDelta.
+                latestServerCounts = latestServerCounts + (
+                    trackerId to maxOf(0.0, (latestServerCounts[trackerId] ?: 0.0) + 1.0)
+                )
+                adjustPending(trackerId, -1.0)
+                publishCounterOverlay()
                 onSuccess()
             } catch (e: Exception) {
-                _activeCounts.update { it + (trackerId to maxOf(0.0, (it[trackerId] ?: 0.0) - 1.0)) }
+                adjustPending(trackerId, -1.0)
+                publishCounterOverlay()
                 setError(e, "Could not update the counter. Try again.")
             } finally {
                 settleCounterFlight()
@@ -187,12 +222,19 @@ class RegistryViewModel(
         if ((_activeCounts.value[trackerId] ?: 0.0) <= 0.0) return // Prevent negative counts
 
         counterInFlight += 1
-        _activeCounts.update { it + (trackerId to maxOf(0.0, (it[trackerId] ?: 0.0) - 1.0)) }
+        adjustPending(trackerId, -1.0)
+        publishCounterOverlay()
         viewModelScope.launch {
             try {
                 registryRepository.updateLiveCounter(uid, trackerId, -1.0)
+                latestServerCounts = latestServerCounts + (
+                    trackerId to maxOf(0.0, (latestServerCounts[trackerId] ?: 0.0) - 1.0)
+                )
+                adjustPending(trackerId, 1.0)
+                publishCounterOverlay()
             } catch (e: Exception) {
-                _activeCounts.update { it + (trackerId to ((it[trackerId] ?: 0.0) + 1.0)) }
+                adjustPending(trackerId, 1.0)
+                publishCounterOverlay()
                 setError(e, "Could not update the counter. Try again.")
             } finally {
                 settleCounterFlight()
@@ -334,13 +376,17 @@ class RegistryViewModel(
 
     fun updateProfile(updater: (UserProfile) -> UserProfile) {
         val uid = authUser.value?.uid ?: return
-        val current = userProfile.value ?: UserProfile()
-        val updated = updater(current)
         viewModelScope.launch {
-            try {
-                registryRepository.updateProfileSettings(uid, updated)
-            } catch (e: Exception) {
-                setError(e, "Could not update settings. Try again.")
+            profileWriteMutex.withLock {
+                val current = lastSubmittedProfile ?: userProfile.value ?: return@withLock
+                val updated = updater(current)
+                try {
+                    registryRepository.updateProfileSettings(uid, updated)
+                    lastSubmittedProfile = updated
+                } catch (e: Exception) {
+                    lastSubmittedProfile = userProfile.value
+                    setError(e, "Could not update settings. Try again.")
+                }
             }
         }
     }
@@ -352,13 +398,9 @@ class RegistryViewModel(
         }
     }
 
-    /** One counter write finished; when none remain, apply any held snapshot. */
+    /** One counter write finished. Overlay already tracks pendingDelta. */
     private fun settleCounterFlight() {
         counterInFlight = maxOf(0, counterInFlight - 1)
-        if (counterInFlight == 0 && deferredServerCounts) {
-            deferredServerCounts = false
-            _activeCounts.value = latestServerCounts
-        }
     }
 
     private fun setError(throwable: Throwable, fallback: String) {

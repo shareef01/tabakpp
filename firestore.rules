@@ -1,4 +1,7 @@
 rules_version = '2';
+// Deploy: firebase deploy --only firestore:rules
+// Spark abuse control: enforce App Check on Firestore + Auth in Console
+// (SETUP_GUIDE.md → App Check enforce checklist) after release clients send tokens.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -36,11 +39,79 @@ service cloud.firestore {
         && (!('smokingUnits' in a) || a.smokingUnits == 0);
     }
 
-    // Dynamic tracker ids — bound size only. Firestore rules cannot type-check
-    // arbitrary map values; clients write numbers and App Check is the Spark
-    // defense against unofficial writers (enforce in Console when ready).
+    // Dynamic tracker ids — bound size, keys, and each numeric value (matches
+    // InputSanitizer.counts). Rules forbid recursion, so lists are unrolled.
+    function validCountValue(v) {
+      return isNumber(v) && v >= 0 && v <= 10000;
+    }
+
+    function validCountKey(k) {
+      return k is string
+        && k.size() >= 1
+        && k.size() <= 64
+        && k.matches('^[A-Za-z0-9_-]+$');
+    }
+
+    function validCountEntries(keys, vals) {
+      let n = vals.size();
+      return n <= 50
+        && keys.size() == n
+        && (n < 1 || (validCountKey(keys[0]) && validCountValue(vals[0])))
+        && (n < 2 || (validCountKey(keys[1]) && validCountValue(vals[1])))
+        && (n < 3 || (validCountKey(keys[2]) && validCountValue(vals[2])))
+        && (n < 4 || (validCountKey(keys[3]) && validCountValue(vals[3])))
+        && (n < 5 || (validCountKey(keys[4]) && validCountValue(vals[4])))
+        && (n < 6 || (validCountKey(keys[5]) && validCountValue(vals[5])))
+        && (n < 7 || (validCountKey(keys[6]) && validCountValue(vals[6])))
+        && (n < 8 || (validCountKey(keys[7]) && validCountValue(vals[7])))
+        && (n < 9 || (validCountKey(keys[8]) && validCountValue(vals[8])))
+        && (n < 10 || (validCountKey(keys[9]) && validCountValue(vals[9])))
+        && (n < 11 || (validCountKey(keys[10]) && validCountValue(vals[10])))
+        && (n < 12 || (validCountKey(keys[11]) && validCountValue(vals[11])))
+        && (n < 13 || (validCountKey(keys[12]) && validCountValue(vals[12])))
+        && (n < 14 || (validCountKey(keys[13]) && validCountValue(vals[13])))
+        && (n < 15 || (validCountKey(keys[14]) && validCountValue(vals[14])))
+        && (n < 16 || (validCountKey(keys[15]) && validCountValue(vals[15])))
+        && (n < 17 || (validCountKey(keys[16]) && validCountValue(vals[16])))
+        && (n < 18 || (validCountKey(keys[17]) && validCountValue(vals[17])))
+        && (n < 19 || (validCountKey(keys[18]) && validCountValue(vals[18])))
+        && (n < 20 || (validCountKey(keys[19]) && validCountValue(vals[19])))
+        && (n < 21 || (validCountKey(keys[20]) && validCountValue(vals[20])))
+        && (n < 22 || (validCountKey(keys[21]) && validCountValue(vals[21])))
+        && (n < 23 || (validCountKey(keys[22]) && validCountValue(vals[22])))
+        && (n < 24 || (validCountKey(keys[23]) && validCountValue(vals[23])))
+        && (n < 25 || (validCountKey(keys[24]) && validCountValue(vals[24])))
+        && (n < 26 || (validCountKey(keys[25]) && validCountValue(vals[25])))
+        && (n < 27 || (validCountKey(keys[26]) && validCountValue(vals[26])))
+        && (n < 28 || (validCountKey(keys[27]) && validCountValue(vals[27])))
+        && (n < 29 || (validCountKey(keys[28]) && validCountValue(vals[28])))
+        && (n < 30 || (validCountKey(keys[29]) && validCountValue(vals[29])))
+        && (n < 31 || (validCountKey(keys[30]) && validCountValue(vals[30])))
+        && (n < 32 || (validCountKey(keys[31]) && validCountValue(vals[31])))
+        && (n < 33 || (validCountKey(keys[32]) && validCountValue(vals[32])))
+        && (n < 34 || (validCountKey(keys[33]) && validCountValue(vals[33])))
+        && (n < 35 || (validCountKey(keys[34]) && validCountValue(vals[34])))
+        && (n < 36 || (validCountKey(keys[35]) && validCountValue(vals[35])))
+        && (n < 37 || (validCountKey(keys[36]) && validCountValue(vals[36])))
+        && (n < 38 || (validCountKey(keys[37]) && validCountValue(vals[37])))
+        && (n < 39 || (validCountKey(keys[38]) && validCountValue(vals[38])))
+        && (n < 40 || (validCountKey(keys[39]) && validCountValue(vals[39])))
+        && (n < 41 || (validCountKey(keys[40]) && validCountValue(vals[40])))
+        && (n < 42 || (validCountKey(keys[41]) && validCountValue(vals[41])))
+        && (n < 43 || (validCountKey(keys[42]) && validCountValue(vals[42])))
+        && (n < 44 || (validCountKey(keys[43]) && validCountValue(vals[43])))
+        && (n < 45 || (validCountKey(keys[44]) && validCountValue(vals[44])))
+        && (n < 46 || (validCountKey(keys[45]) && validCountValue(vals[45])))
+        && (n < 47 || (validCountKey(keys[46]) && validCountValue(vals[46])))
+        && (n < 48 || (validCountKey(keys[47]) && validCountValue(vals[47])))
+        && (n < 49 || (validCountKey(keys[48]) && validCountValue(vals[48])))
+        && (n < 50 || (validCountKey(keys[49]) && validCountValue(vals[49])));
+    }
+
     function validCountMap(counts) {
-      return counts is map && counts.size() <= 50;
+      return counts is map
+        && counts.size() <= 50
+        && validCountEntries(counts.keys(), counts.values());
     }
 
     // Canonical UserProfile keys (shared Android/KMP + web).
@@ -125,11 +196,19 @@ service cloud.firestore {
         ]);
     }
 
+    function validAggregateCredit(a) {
+      return a is map
+        && a.keys().hasOnly(['saved', 'wasted', 'smokingUnits'])
+        && (!('saved' in a) || boundNumber(a.saved, 100000000))
+        && (!('wasted' in a) || boundNumber(a.wasted, 100000000))
+        && (!('smokingUnits' in a) || (isNumber(a.smokingUnits) && a.smokingUnits >= 0 && a.smokingUnits <= 100000000));
+    }
+
     function validLogEntry() {
       let d = request.resource.data;
       return d.keys().hasOnly([
           'logDate', 'counts', 'origin', 'finalizedAt', 'clientTimestamp', 'id',
-          'isArchive', 'isManual'
+          'isArchive', 'isManual', 'aggregateCredit'
         ])
         && d.keys().hasAll(['logDate', 'counts'])
         && d.logDate is string
@@ -137,7 +216,8 @@ service cloud.firestore {
         && validCountMap(d.counts)
         && (!('origin' in d) || d.origin in ['DAY_RESET', 'MANUAL_ENTRY'])
         && (!('isArchive' in d) || d.isArchive is bool)
-        && (!('isManual' in d) || d.isManual is bool);
+        && (!('isManual' in d) || d.isManual is bool)
+        && (!('aggregateCredit' in d) || validAggregateCredit(d.aggregateCredit));
     }
 
     function validConfig() {

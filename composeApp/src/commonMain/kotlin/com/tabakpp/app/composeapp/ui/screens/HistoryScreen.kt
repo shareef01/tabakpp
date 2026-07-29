@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tabakpp.app.composeapp.theme.*
+import com.tabakpp.app.composeapp.ui.components.ConfirmModal
 import com.tabakpp.app.composeapp.ui.components.HistoryChart
 import com.tabakpp.app.composeapp.ui.components.ManualEntryForm
 import com.tabakpp.app.data.LogEntry
@@ -64,11 +65,14 @@ fun HistoryScreen(
 
     var logToEditId by rememberSaveable { mutableStateOf<String?>(null) }
     val logToEdit = logs.firstOrNull { it.id == logToEditId }
+    var logPendingDelete by remember { mutableStateOf<LogEntry?>(null) }
     var showAddEntry by rememberSaveable { mutableStateOf(false) }
     var historyPeriod by rememberSaveable { mutableStateOf(30) }
-    val periodLogs = remember(logs, historyPeriod) {
-        val cutoff = Clock.System.todayIn(TimeZone.currentSystemDefault())
-            .minus(historyPeriod - 1, DateTimeUnit.DAY)
+    val periodLogs = remember(logs, historyPeriod, trackingDay) {
+        val anchor = runCatching { LocalDate.parse(trackingDay) }.getOrElse {
+            Clock.System.todayIn(TimeZone.currentSystemDefault())
+        }
+        val cutoff = anchor.minus(historyPeriod - 1, DateTimeUnit.DAY)
         logs.filter { runCatching { LocalDate.parse(it.logDate) >= cutoff }.getOrDefault(false) }
     }
     val groupedLogs = remember(logs) { SmokingCalculator.groupLogsByDate(logs) }
@@ -240,20 +244,7 @@ fun HistoryScreen(
                             LogItem(
                                 log = log,
                                 onEdit = { logToEditId = log.id },
-                                onDelete = {
-                                    viewModel.deleteLog(log) {
-                                        scope.launch {
-                                            val result = snackbarHostState.showSnackbar(
-                                                message = "Entry deleted",
-                                                actionLabel = "Undo",
-                                                duration = SnackbarDuration.Short
-                                            )
-                                            if (result == SnackbarResult.ActionPerformed) {
-                                                viewModel.restoreLog(log)
-                                            }
-                                        }
-                                    }
-                                }
+                                onDelete = { logPendingDelete = log }
                             )
                         }
                     }
@@ -299,6 +290,31 @@ fun HistoryScreen(
                 onDismiss = { showAddEntry = false }
             )
         }
+    }
+
+    logPendingDelete?.let { pending ->
+        ConfirmModal(
+            title = "Delete entry?",
+            message = "This removes the session from history and adjusts lifetime totals. You can undo briefly afterward.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                val log = pending
+                logPendingDelete = null
+                viewModel.deleteLog(log) {
+                    scope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = "Entry deleted",
+                            actionLabel = "Undo",
+                            duration = SnackbarDuration.Short
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            viewModel.restoreLog(log)
+                        }
+                    }
+                }
+            },
+            onDismiss = { logPendingDelete = null }
+        )
     }
 }
 

@@ -1,6 +1,8 @@
 package com.tabakpp.app.data
 
 object InputSanitizer {
+    private val countKeyRegex = Regex("^[A-Za-z0-9_-]{1,64}$")
+
     fun displayName(value: String): String = text(value, maxLength = 100)
 
     fun trackerName(value: String): String = text(value, maxLength = 80)
@@ -8,7 +10,9 @@ object InputSanitizer {
     fun counts(values: Map<String, Double>): Map<String, Double> =
         values.entries
             .asSequence()
-            .filter { (_, value) -> value.isFinite() && value in 0.0..10_000.0 }
+            .filter { (key, value) ->
+                countKeyRegex.matches(key) && value.isFinite() && value in 0.0..10_000.0
+            }
             .take(50)
             .associate { it.toPair() }
 

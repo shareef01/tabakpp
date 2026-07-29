@@ -11,10 +11,12 @@ import platform.darwin.dispatch_queue_create
 
 /**
  * iOS reachability via NWPathMonitor (parity with AndroidNetworkObserver).
+ * Starts offline until the first path update so cold start does not pretend
+ * the device is online before NWPathMonitor reports.
  */
 @OptIn(ExperimentalForeignApi::class)
 class IosNetworkObserver : NetworkObserver {
-    private val _isOnline = MutableStateFlow(true)
+    private val _isOnline = MutableStateFlow(false)
     override val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
 
     private val monitor = NWPathMonitor()

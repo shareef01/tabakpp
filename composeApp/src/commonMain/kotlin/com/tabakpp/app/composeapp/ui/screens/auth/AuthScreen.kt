@@ -46,10 +46,11 @@ fun AuthScreen(viewModel: AuthViewModel) {
     val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
 
     var isSignUp by rememberSaveable { mutableStateOf(false) }
-    var email by rememberSaveable { mutableStateOf("") }
+    // Never rememberSaveable credentials or email — Survives process death into SavedState.
+    var email by remember { mutableStateOf("") }
     var displayName by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var passwordVisible by rememberSaveable { mutableStateOf(false) }
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
 
     val accentColor = DefaultAccent
     val premiumGradient = Brush.verticalGradient(listOf(Color(0xFF16161A), Color(0xFF09090B)))

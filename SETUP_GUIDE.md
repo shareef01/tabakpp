@@ -22,10 +22,14 @@ The following files are ignored by Git and must be copied manually from your ori
 - **Location**: Place it in the `androidApp/` directory.
 - **Source**: Download from Firebase Console (Settings > Your apps > Android App).
 
-### iOS (experimental)
-The Kotlin and Compose modules expose iOS targets, but this repository does not
-currently include a complete Xcode project, native Firebase bootstrap, or Google
-Sign-In implementation. Do not treat iOS as a supported release target yet.
+### iOS (not a release target)
+The Kotlin/Compose modules still compile iOS frameworks for experimentation, but
+the shipped shell **does not initialize Firebase, Koin, or Google Sign-In**.
+`MainViewController` shows an explicit “iOS is not supported yet” screen instead
+of launching the production `App` graph (which would crash without DI).
+
+Do not ship an App Store build from this repository until Firebase iOS bootstrap,
+`GoogleService-Info.plist`, and a supported sign-in path are implemented.
 
 ### Local Properties
 - **File**: `local.properties`
@@ -87,14 +91,27 @@ firebase apps:sdkconfig ANDROID <ANDROID_APP_ID> --project tabakpp-ff036 -o andr
    VITE_FIREBASE_APPCHECK_SITE_KEY=your_recaptcha_v3_site_key
    ```
 3. For local dev, either register a debug token (`VITE_FIREBASE_APPCHECK_DEBUG_TOKEN=...`) or leave unset — App Check only initializes when the site key is present. Never save tokens in repository log files.
-4. **Enforce checklist** (do last): Console → App Check → APIs → set Firestore and Authentication to **Enforced**. Confirm production PWA and release Android both send tokens first; keep debug tokens registered for local builds.
+4. **Enforce checklist** (do last — this is the remaining Spark abuse control):
+   - Console → App Check → APIs → set **Cloud Firestore** to **Enforced**
+   - Console → App Check → APIs → set **Firebase Authentication** to **Enforced**
+   - Confirm production PWA (`VITE_FIREBASE_APPCHECK_SITE_KEY` set) and Play-distributed Android both send tokens first
+   - Keep debug tokens registered only for local builds; revoke any token that appeared in logs or chat
+   - After enforcement, verify a release Android install and the hosted PWA can still sign in and write
+5. Until those APIs are **Enforced**, App Check is advisory only — unofficial clients can still hit Auth/Firestore with a stolen API key.
 
 ### Android App Check
-The Android app initializes Play Integrity only in release builds. Debug builds intentionally install no provider, so they cannot access enforced APIs. In Firebase Console → App Check:
+The Android app installs **Play Integrity** in release builds and
+**DebugAppCheckProviderFactory** in debug builds (`AppCheckInstaller` via
+debug/release source sets).
+
+In Firebase Console → App Check:
 1. Register the Android app with **Play Integrity**.
-2. Verify a Play-distributed release build receives valid tokens.
-3. Enforce only after both web and release Android ship tokens successfully.
-4. Revoke any debug token that has appeared in logs or chat history.
+2. Add your release (and debug) **SHA-256** under Project settings → Your apps → Android.
+3. For local debug while APIs are **Enforced**: run the app once, copy the debug
+   token from Logcat (`DebugAppCheckProvider` / `Enter this debug secret`), then
+   Console → App Check → Manage debug tokens → Add debug token.
+4. Verify a Play-distributed release build receives valid tokens.
+5. Revoke any debug token that has appeared in logs or chat history.
 
 ### Release signing
 The Android release build reads signing credentials from environment variables;

@@ -143,6 +143,12 @@ data class LogEntry(
     val isArchive: Boolean = false,
     val isManual: Boolean = false,
     val origin: String = "MANUAL_ENTRY", // "DAY_RESET" or "MANUAL_ENTRY"
+    /**
+     * Absolute lifetime contribution stamped when the log was last credited.
+     * Debit/restore/replace prefer this over recomputing from live configs so
+     * deleted or repriced trackers cannot drift aggregates.
+     */
+    val aggregateCredit: LifetimeAggregates? = null,
     @Serializable(with = BaseTimestampOrLongSerializer::class)
     val finalizedAt: BaseTimestamp? = null,
     @Serializable(with = BaseTimestampOrLongSerializer::class)

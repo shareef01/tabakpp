@@ -39,8 +39,8 @@ jobs:
             "configuration_version": "1"
           }
           JSON
-      - name: Test shared code and build Android
-        run: ./gradlew :shared:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+      - name: Test shared code, Compose UI, and build Android
+        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
 
   web-and-rules:
     runs-on: ubuntu-latest
