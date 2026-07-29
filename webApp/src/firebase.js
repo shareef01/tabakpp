@@ -35,17 +35,18 @@ const app = firebaseConfigError ? null : initializeApp(firebaseConfig);
 
 /**
  * Resolves when App Check is ready (or immediately if no site key).
- * Auth/Firestore still work without it until you enforce App Check in Console.
+ * Auth/Firestore still work without it until you enforce App Check in Console
+ * (SETUP_GUIDE.md → Web App Check → Enforce checklist).
  */
 export const appCheckReady = (async () => {
   if (!app) return null;
   const siteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
   if (!siteKey) {
     if (import.meta.env.PROD) {
-      console.warn(
+      console.error(
         '[firebase] App Check site key missing in production. ' +
-        'Set VITE_FIREBASE_APPCHECK_SITE_KEY and enforce App Check in Firebase Console ' +
-        'to protect Auth/Firestore quotas.'
+        'Set VITE_FIREBASE_APPCHECK_SITE_KEY, then enforce Firestore + Authentication ' +
+        'in Firebase Console → App Check → APIs (see SETUP_GUIDE.md).'
       );
     }
     return null;

@@ -109,13 +109,15 @@ class FirebaseRegistryRepository(
             // A second end-day on the same tracking date must merge into the
             // existing archive, not replace it. Aggregates were already credited
             // with fin(existing), so only the delta to fin(merged) is applied.
-            val existingCounts = if (existingSnap.exists) decodeLogEntry(existingSnap)?.counts else null
+            val existingEntry = if (existingSnap.exists) decodeLogEntry(existingSnap) else null
+            val existingCounts = existingEntry?.counts
             val dayEnd = RegistryMutations.endDay(
                 current = profile.lifetimeAggregates,
                 existingCounts = existingCounts,
                 activeCounts = activeCounts,
                 configs = configs,
-                unitPrice = profile.unitPrice
+                unitPrice = profile.unitPrice,
+                existingCredit = existingEntry?.aggregateCredit
             )
 
             val nowMs = Clock.System.now().toEpochMilliseconds()
@@ -125,6 +127,7 @@ class FirebaseRegistryRepository(
                 counts = dayEnd.mergedCounts,
                 isArchive = true,
                 origin = "DAY_RESET",
+                aggregateCredit = dayEnd.logCredit,
                 finalizedAt = Timestamp(nowMs / 1000, ((nowMs % 1000) * 1_000_000).toInt())
             )
 
@@ -153,7 +156,8 @@ class FirebaseRegistryRepository(
             val profile = userSnap.data<UserProfile>()
             val configs = loadConfigs(configsRef, configIds)
 
-            val agg = RegistryMutations.credit(profile.lifetimeAggregates, normalized, configs, profile.unitPrice)
+            val credit = RegistryMutations.contribution(normalized, configs, profile.unitPrice)
+            val agg = RegistryMutations.applyCredit(profile.lifetimeAggregates, credit)
             val now = Clock.System.now().toEpochMilliseconds()
             val entropy = (0..999).random().toString().padStart(3, '0')
             val logId = "${date}_M${now}_$entropy"
@@ -164,6 +168,7 @@ class FirebaseRegistryRepository(
                 counts = normalized,
                 isManual = true,
                 origin = "MANUAL_ENTRY",
+                aggregateCredit = credit,
                 clientTimestamp = Timestamp(now / 1000, ((now % 1000) * 1_000_000).toInt())
             )
 
@@ -191,7 +196,13 @@ class FirebaseRegistryRepository(
             val profile = userSnap.data<UserProfile>()
             val configs = loadConfigs(configsRef, configIds)
 
-            val agg = RegistryMutations.debit(profile.lifetimeAggregates, logEntry.counts, configs, profile.unitPrice)
+            val credit = RegistryMutations.resolveContribution(
+                logEntry.aggregateCredit,
+                logEntry.counts,
+                configs,
+                profile.unitPrice
+            )
+            val agg = RegistryMutations.applyDebit(profile.lifetimeAggregates, credit)
 
             delete(logRef)
             updateFields(userRef) {
@@ -207,6 +218,7 @@ class FirebaseRegistryRepository(
         val configsRef = userRef.collection("configs")
         val logRef = userRef.collection("logs").document(log.id)
         val configIds = listConfigIds(uid)
+        val normalized = log.copy(counts = InputSanitizer.counts(log.counts))
 
         firestore.runTransaction {
             val existing = get(logRef)
@@ -216,9 +228,16 @@ class FirebaseRegistryRepository(
             val profile = userSnap.data<UserProfile>()
             val configs = loadConfigs(configsRef, configIds)
 
-            val agg = RegistryMutations.credit(profile.lifetimeAggregates, log.counts, configs, profile.unitPrice)
+            val credit = RegistryMutations.resolveContribution(
+                normalized.aggregateCredit,
+                normalized.counts,
+                configs,
+                profile.unitPrice
+            )
+            val stamped = normalized.copy(aggregateCredit = credit)
+            val agg = RegistryMutations.applyCredit(profile.lifetimeAggregates, credit)
 
-            set(logRef, log)
+            set(logRef, stamped)
             updateFields(userRef) {
                 "lifetimeAggregates.saved" to agg.saved
                 "lifetimeAggregates.wasted" to agg.wasted
@@ -243,16 +262,20 @@ class FirebaseRegistryRepository(
             val profile = userSnap.data<UserProfile>()
             val configs = loadConfigs(configsRef, configIds)
 
-            val agg = RegistryMutations.replace(
-                current = profile.lifetimeAggregates,
-                oldCounts = oldLogEntry.counts,
-                newCounts = normalized,
-                configs = configs,
-                unitPrice = profile.unitPrice
+            val oldCredit = RegistryMutations.resolveContribution(
+                oldLogEntry.aggregateCredit,
+                oldLogEntry.counts,
+                configs,
+                profile.unitPrice
             )
+            val newCredit = RegistryMutations.contribution(normalized, configs, profile.unitPrice)
+            val agg = RegistryMutations.applyReplace(profile.lifetimeAggregates, oldCredit, newCredit)
 
             updateFields(logRef) {
                 "counts" to normalized
+                "aggregateCredit.saved" to newCredit.saved
+                "aggregateCredit.wasted" to newCredit.wasted
+                "aggregateCredit.smokingUnits" to newCredit.smokingUnits
             }
             updateFields(userRef) {
                 "lifetimeAggregates.saved" to agg.saved

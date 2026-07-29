@@ -12,8 +12,63 @@ import com.tabakpp.app.data.TrackerConfig
  * Every write that touches money or archives runs inside a Firestore
  * transaction; these helpers compute the resulting aggregates so counters,
  * day archives, and lifetime totals can never diverge.
+ *
+ * Logs stamp an absolute [LifetimeAggregates] credit when written. Later
+ * debit/restore/replace prefer that stamp so deleted or repriced trackers
+ * cannot change what was already applied to lifetime totals.
  */
 object RegistryMutations {
+
+    /** Absolute contribution of a counts map under the given configs/price. */
+    fun contribution(
+        counts: Map<String, Double>,
+        configs: List<TrackerConfig>,
+        unitPrice: Double
+    ): LifetimeAggregates {
+        val fin = SmokingCalculator.calculateFinancials(counts, configs, unitPrice)
+        val units = SmokingCalculator.sumSmokingUnits(counts, configs)
+        return LifetimeAggregates(
+            saved = fin.saved,
+            wasted = fin.wasted,
+            smokingUnits = units
+        )
+    }
+
+    /**
+     * Prefer a stamped credit from the log; fall back to live configs for
+     * legacy docs written before aggregateCredit existed.
+     */
+    fun resolveContribution(
+        stored: LifetimeAggregates?,
+        counts: Map<String, Double>,
+        configs: List<TrackerConfig>,
+        unitPrice: Double
+    ): LifetimeAggregates = stored ?: contribution(counts, configs, unitPrice)
+
+    fun applyCredit(current: LifetimeAggregates, credit: LifetimeAggregates): LifetimeAggregates =
+        LifetimeAggregates(
+            saved = current.saved + credit.saved,
+            wasted = current.wasted + credit.wasted,
+            smokingUnits = current.smokingUnits + credit.smokingUnits
+        )
+
+    fun applyDebit(current: LifetimeAggregates, credit: LifetimeAggregates): LifetimeAggregates =
+        LifetimeAggregates(
+            saved = current.saved - credit.saved,
+            wasted = current.wasted - credit.wasted,
+            smokingUnits = current.smokingUnits - credit.smokingUnits
+        )
+
+    fun applyReplace(
+        current: LifetimeAggregates,
+        oldCredit: LifetimeAggregates,
+        newCredit: LifetimeAggregates
+    ): LifetimeAggregates =
+        LifetimeAggregates(
+            saved = current.saved - oldCredit.saved + newCredit.saved,
+            wasted = current.wasted - oldCredit.wasted + newCredit.wasted,
+            smokingUnits = current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits
+        )
 
     /** Credit a single log's financials and smoking units (manual entry, restore). */
     fun credit(
@@ -21,15 +76,7 @@ object RegistryMutations {
         counts: Map<String, Double>,
         configs: List<TrackerConfig>,
         unitPrice: Double
-    ): LifetimeAggregates {
-        val fin = SmokingCalculator.calculateFinancials(counts, configs, unitPrice)
-        val units = SmokingCalculator.sumSmokingUnits(counts, configs)
-        return LifetimeAggregates(
-            saved = current.saved + fin.saved,
-            wasted = current.wasted + fin.wasted,
-            smokingUnits = current.smokingUnits + units
-        )
-    }
+    ): LifetimeAggregates = applyCredit(current, contribution(counts, configs, unitPrice))
 
     /** Debit a single log's financials and smoking units (delete). */
     fun debit(
@@ -37,15 +84,7 @@ object RegistryMutations {
         counts: Map<String, Double>,
         configs: List<TrackerConfig>,
         unitPrice: Double
-    ): LifetimeAggregates {
-        val fin = SmokingCalculator.calculateFinancials(counts, configs, unitPrice)
-        val units = SmokingCalculator.sumSmokingUnits(counts, configs)
-        return LifetimeAggregates(
-            saved = current.saved - fin.saved,
-            wasted = current.wasted - fin.wasted,
-            smokingUnits = current.smokingUnits - units
-        )
-    }
+    ): LifetimeAggregates = applyDebit(current, contribution(counts, configs, unitPrice))
 
     /** Swap an old log's contribution for new counts (historical edit). */
     fun replace(
@@ -54,21 +93,18 @@ object RegistryMutations {
         newCounts: Map<String, Double>,
         configs: List<TrackerConfig>,
         unitPrice: Double
-    ): LifetimeAggregates {
-        val oldFin = SmokingCalculator.calculateFinancials(oldCounts, configs, unitPrice)
-        val newFin = SmokingCalculator.calculateFinancials(newCounts, configs, unitPrice)
-        val oldUnits = SmokingCalculator.sumSmokingUnits(oldCounts, configs)
-        val newUnits = SmokingCalculator.sumSmokingUnits(newCounts, configs)
-        return LifetimeAggregates(
-            saved = current.saved - oldFin.saved + newFin.saved,
-            wasted = current.wasted - oldFin.wasted + newFin.wasted,
-            smokingUnits = current.smokingUnits - oldUnits + newUnits
-        )
-    }
+    ): LifetimeAggregates = applyReplace(
+        current,
+        contribution(oldCounts, configs, unitPrice),
+        contribution(newCounts, configs, unitPrice)
+    )
 
     data class DayEnd(
         val mergedCounts: Map<String, Double>,
-        val aggregates: LifetimeAggregates
+        /** New lifetime totals after applying the archive delta. */
+        val aggregates: LifetimeAggregates,
+        /** Absolute contribution stamped on the archive log document. */
+        val logCredit: LifetimeAggregates
     )
 
     /**
@@ -82,24 +118,21 @@ object RegistryMutations {
         existingCounts: Map<String, Double>?,
         activeCounts: Map<String, Double>,
         configs: List<TrackerConfig>,
-        unitPrice: Double
+        unitPrice: Double,
+        existingCredit: LifetimeAggregates? = null
     ): DayEnd {
         val mergedCounts = SmokingCalculator.mergeCounts(existingCounts, activeCounts)
-
-        val previousFin = existingCounts
-            ?.let { SmokingCalculator.calculateFinancials(it, configs, unitPrice) }
-            ?: SmokingCalculator.FinancialResult(0.0, 0.0)
-        val mergedFin = SmokingCalculator.calculateFinancials(mergedCounts, configs, unitPrice)
-        val previousUnits = existingCounts?.let { SmokingCalculator.sumSmokingUnits(it, configs) } ?: 0.0
-        val mergedUnits = SmokingCalculator.sumSmokingUnits(mergedCounts, configs)
+        val previousCredit = if (existingCounts == null) {
+            LifetimeAggregates()
+        } else {
+            resolveContribution(existingCredit, existingCounts, configs, unitPrice)
+        }
+        val mergedCredit = contribution(mergedCounts, configs, unitPrice)
 
         return DayEnd(
             mergedCounts = mergedCounts,
-            aggregates = LifetimeAggregates(
-                saved = current.saved + mergedFin.saved - previousFin.saved,
-                wasted = current.wasted + mergedFin.wasted - previousFin.wasted,
-                smokingUnits = current.smokingUnits + mergedUnits - previousUnits
-            )
+            aggregates = applyReplace(current, previousCredit, mergedCredit),
+            logCredit = mergedCredit
         )
     }
 }

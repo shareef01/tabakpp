@@ -5,5 +5,7 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.rules.test.js'],
     fileParallelism: false,
+    hookTimeout: 60_000,
+    testTimeout: 30_000,
   },
 });

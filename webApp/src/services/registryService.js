@@ -20,10 +20,45 @@ const LEGACY_ECO_KEYS = ['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryo
 
 const normalizeCounts = (counts) => Object.fromEntries(
   Object.entries(counts || {})
-    .map(([key, value]) => [key, Number(value)])
-    .filter(([, value]) => Number.isFinite(value) && value >= 0 && value <= 10_000)
+    .map(([key, value]) => [String(key), Number(value)])
+    .filter(([key, value]) =>
+      /^[A-Za-z0-9_-]{1,64}$/.test(key)
+      && Number.isFinite(value)
+      && value >= 0
+      && value <= 10_000
+    )
     .slice(0, 50)
 );
+
+/** Absolute lifetime contribution of a counts map (Android RegistryMutations.contribution). */
+const contributionFrom = (counts, configs, price) => {
+  const fin = SmokingCalculator.calculateDayFinancials(counts || {}, configs, price);
+  return {
+    saved: fin.saved,
+    wasted: fin.wasted,
+    smokingUnits: SmokingCalculator.sumSmokingUnits(counts || {}, configs),
+  };
+};
+
+/**
+ * Prefer a stamped aggregateCredit; fall back to live configs for legacy logs
+ * (Android RegistryMutations.resolveContribution).
+ */
+const resolveContribution = (storedCredit, counts, configs, price) => {
+  if (
+    storedCredit
+    && Number.isFinite(storedCredit.saved)
+    && Number.isFinite(storedCredit.wasted)
+    && Number.isFinite(storedCredit.smokingUnits)
+  ) {
+    return {
+      saved: storedCredit.saved,
+      wasted: storedCredit.wasted,
+      smokingUnits: storedCredit.smokingUnits,
+    };
+  }
+  return contributionFrom(counts, configs, price);
+};
 
 /**
  * RegistryService (Model Layer)
@@ -205,16 +240,13 @@ export const RegistryService = {
       }
 
       const existingCounts = logSnap.exists() ? (logSnap.data().counts || {}) : null;
+      const existingCredit = logSnap.exists() ? logSnap.data().aggregateCredit : null;
       const mergedCounts = SmokingCalculator.mergeCounts(existingCounts, activeCounts);
 
-      const previousFin = existingCounts
-        ? SmokingCalculator.calculateDayFinancials(existingCounts, configs, price)
-        : { wasted: 0, saved: 0 };
-      const mergedFin = SmokingCalculator.calculateDayFinancials(mergedCounts, configs, price);
-      const previousUnits = existingCounts
-        ? SmokingCalculator.sumSmokingUnits(existingCounts, configs)
-        : 0;
-      const mergedUnits = SmokingCalculator.sumSmokingUnits(mergedCounts, configs);
+      const previousCredit = existingCounts
+        ? resolveContribution(existingCredit, existingCounts, configs, price)
+        : { saved: 0, wasted: 0, smokingUnits: 0 };
+      const mergedCredit = contributionFrom(mergedCounts, configs, price);
 
       const logEntry = {
         id: `${date}_DAY`,
@@ -222,15 +254,16 @@ export const RegistryService = {
         counts: mergedCounts,
         isArchive: true,
         origin: "DAY_RESET",
+        aggregateCredit: mergedCredit,
         finalizedAt: serverTimestamp()
       };
 
       transaction.set(logRef, logEntry);
       transaction.update(userRef, {
         activeCounts: {},
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + mergedFin.saved - previousFin.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + mergedFin.wasted - previousFin.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + mergedUnits - previousUnits
+        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - previousCredit.saved + mergedCredit.saved,
+        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - previousCredit.wasted + mergedCredit.wasted,
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - previousCredit.smokingUnits + mergedCredit.smokingUnits
       });
     });
   },
@@ -254,16 +287,15 @@ export const RegistryService = {
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
-      const oldFin = SmokingCalculator.calculateDayFinancials(logSnap.data().counts || {}, configs, price);
-      const newFin = SmokingCalculator.calculateDayFinancials(normalized, configs, price);
-      const oldUnits = SmokingCalculator.sumSmokingUnits(logSnap.data().counts || {}, configs);
-      const newUnits = SmokingCalculator.sumSmokingUnits(normalized, configs);
+      const oldLog = logSnap.data();
+      const oldCredit = resolveContribution(oldLog.aggregateCredit, oldLog.counts || {}, configs, price);
+      const newCredit = contributionFrom(normalized, configs, price);
 
-      transaction.update(logRef, { counts: normalized });
+      transaction.update(logRef, { counts: normalized, aggregateCredit: newCredit });
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - oldFin.saved + newFin.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - oldFin.wasted + newFin.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldUnits + newUnits
+        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - oldCredit.saved + newCredit.saved,
+        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - oldCredit.wasted + newCredit.wasted,
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldCredit.smokingUnits + newCredit.smokingUnits
       });
     });
   },
@@ -286,14 +318,14 @@ export const RegistryService = {
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
-      const fin = SmokingCalculator.calculateDayFinancials(logSnap.data().counts || {}, configs, price);
-      const units = SmokingCalculator.sumSmokingUnits(logSnap.data().counts || {}, configs);
+      const logData = logSnap.data();
+      const credit = resolveContribution(logData.aggregateCredit, logData.counts || {}, configs, price);
 
       transaction.delete(logRef);
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - fin.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - fin.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - units
+        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - credit.saved,
+        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - credit.wasted,
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - credit.smokingUnits
       });
     });
   },
@@ -306,6 +338,7 @@ export const RegistryService = {
     if (!uid || !log?.id) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', log.id);
+    const normalizedCounts = normalizeCounts(log.counts || {});
 
     return runTransaction(db, async (transaction) => {
       const existing = await transaction.get(logRef);
@@ -317,15 +350,14 @@ export const RegistryService = {
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
-      const fin = SmokingCalculator.calculateDayFinancials(log.counts || {}, configs, price);
-      const units = SmokingCalculator.sumSmokingUnits(log.counts || {}, configs);
+      const credit = resolveContribution(log.aggregateCredit, normalizedCounts, configs, price);
 
       const { id, ...rest } = log;
-      transaction.set(logRef, { ...rest, id });
+      transaction.set(logRef, { ...rest, id, counts: normalizedCounts, aggregateCredit: credit });
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + fin.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + fin.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + units
+        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + credit.saved,
+        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + credit.wasted,
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits
       });
     });
   },
@@ -352,8 +384,7 @@ export const RegistryService = {
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
-      const fin = SmokingCalculator.calculateDayFinancials(normalized, configs, price);
-      const units = SmokingCalculator.sumSmokingUnits(normalized, configs);
+      const credit = contributionFrom(normalized, configs, price);
 
       transaction.set(logRef, {
         id: logId,
@@ -361,12 +392,13 @@ export const RegistryService = {
         counts: normalized,
         isManual: true,
         origin: 'MANUAL_ENTRY',
+        aggregateCredit: credit,
         clientTimestamp: serverTimestamp()
       });
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + fin.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + fin.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + units
+        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + credit.saved,
+        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + credit.wasted,
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits
       });
     });
   },

@@ -182,8 +182,8 @@ describe('useRegistry.endDay', () => {
   });
 });
 
-describe('useRegistry optimistic deferral', () => {
-  it('defers a server snapshot while an increment is in flight, then applies it on settle', async () => {
+describe('useRegistry optimistic overlay', () => {
+  it('merges mid-flight server snapshots with pending taps', async () => {
     let release;
     RegistryService.adjustCounter.mockImplementation(
       () => new Promise((resolve) => { release = resolve; })
@@ -194,13 +194,38 @@ describe('useRegistry optimistic deferral', () => {
     act(() => { pending = result.current.increment('cig'); });
     expect(result.current.metrics.activeCounts.cig).toBe(3);
 
-    // A server snapshot arriving mid-flight must not stomp the optimistic count.
+    // Higher mid-flight snapshot merges with the still-pending tap.
     act(() => cap.profileCb.current(profileSnap(defaultProfile({ activeCounts: { cig: 9 } }))));
-    expect(result.current.metrics.activeCounts.cig).toBe(3);
+    expect(result.current.metrics.activeCounts.cig).toBe(10);
 
-    // Once the write settles, the deferred server count is applied.
     await act(async () => { release(); await pending; });
-    expect(result.current.metrics.activeCounts.cig).toBe(9);
+    expect(result.current.metrics.activeCounts.cig).toBe(10);
+  });
+
+  it('does not snap back on a stale server echo during burst taps', async () => {
+    const releases = [];
+    RegistryService.adjustCounter.mockImplementation(
+      () => new Promise((resolve) => { releases.push(resolve); })
+    );
+    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: { cig: 2 } }) });
+
+    let pending1;
+    let pending2;
+    act(() => {
+      pending1 = result.current.increment('cig');
+      pending2 = result.current.increment('cig');
+    });
+    expect(result.current.metrics.activeCounts.cig).toBe(4);
+
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ activeCounts: { cig: 2 } }))));
+    expect(result.current.metrics.activeCounts.cig).toBe(4);
+
+    await act(async () => {
+      releases.forEach((release) => release());
+      await pending1;
+      await pending2;
+    });
+    expect(result.current.metrics.activeCounts.cig).toBe(4);
   });
 });
 

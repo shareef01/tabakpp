@@ -8,6 +8,8 @@ import com.tabakpp.app.data.NetworkObserver
 import com.tabakpp.app.data.User
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class AuthViewModel(
     private val authRepository: AuthRepository,
@@ -16,6 +18,8 @@ class AuthViewModel(
     companion object {
         const val MIN_PASSWORD_LENGTH = 12
     }
+
+    private val authActionMutex = Mutex()
 
     val isOnline = networkObserver.isOnline
 
@@ -39,8 +43,19 @@ class AuthViewModel(
     private val _success = MutableStateFlow<String?>(null)
     val success = _success.asStateFlow()
 
-    fun signIn(email: String, password: String) {
+    private fun launchAuthAction(block: suspend () -> Unit) {
         viewModelScope.launch {
+            if (!authActionMutex.tryLock()) return@launch
+            try {
+                block()
+            } finally {
+                authActionMutex.unlock()
+            }
+        }
+    }
+
+    fun signIn(email: String, password: String) {
+        launchAuthAction {
             _loading.value = true
             _error.value = null
             _success.value = null
@@ -51,14 +66,14 @@ class AuthViewModel(
     }
 
     fun signUp(email: String, password: String, displayName: String = "") {
-        viewModelScope.launch {
+        launchAuthAction {
             _loading.value = true
             _error.value = null
             _success.value = null
             if (password.length < MIN_PASSWORD_LENGTH) {
                 _error.value = "Use a password with at least $MIN_PASSWORD_LENGTH characters."
                 _loading.value = false
-                return@launch
+                return@launchAuthAction
             }
             authRepository.signUpWithEmail(
                 email,
@@ -71,7 +86,7 @@ class AuthViewModel(
     }
 
     fun signInWithGoogle() {
-        viewModelScope.launch {
+        launchAuthAction {
             _loading.value = true
             _error.value = null
             _success.value = null
@@ -82,7 +97,7 @@ class AuthViewModel(
     }
 
     fun resetPassword(email: String) {
-        viewModelScope.launch {
+        launchAuthAction {
             _loading.value = true
             _error.value = null
             _success.value = null
@@ -100,7 +115,7 @@ class AuthViewModel(
     }
 
     fun deleteAccount(password: String? = null, onDone: (Result<Unit>) -> Unit = {}) {
-        viewModelScope.launch {
+        launchAuthAction {
             _loading.value = true
             _error.value = null
             val result = authRepository.deleteAccount(password)

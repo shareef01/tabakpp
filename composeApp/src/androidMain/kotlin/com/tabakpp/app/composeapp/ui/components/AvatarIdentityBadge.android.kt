@@ -166,13 +166,27 @@ actual fun AvatarIdentityBadge(
     }
 }
 
+private const val MAX_AVATAR_DECODE_SIDE = 512
+
+private fun sampleSizeForMaxSide(width: Int, height: Int, maxSide: Int): Int {
+    var sample = 1
+    val longest = max(width, height)
+    while (longest / sample > maxSide) sample *= 2
+    return sample
+}
+
 private fun decodeAvatarBitmap(dataUrl: String?): Bitmap? {
     if (dataUrl.isNullOrBlank() || !dataUrl.startsWith("data:image")) return null
     return try {
         val b64 = dataUrl.substringAfter("base64,", missingDelimiterValue = "")
         if (b64.isBlank()) return null
         val bytes = Base64.decode(b64, Base64.DEFAULT)
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = sampleSizeForMaxSide(bounds.outWidth, bounds.outHeight, MAX_AVATAR_DECODE_SIDE)
+        }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
     } catch (_: Exception) {
         null
     }
@@ -186,7 +200,15 @@ internal fun compressAvatarBytes(
     if (bytes.size > MAX_AVATAR_INPUT_BYTES) {
         throw IllegalStateException("AVATAR_TOO_LARGE")
     }
-    val original = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+        throw IllegalStateException("DECODE_FAILED")
+    }
+    val opts = BitmapFactory.Options().apply {
+        inSampleSize = sampleSizeForMaxSide(bounds.outWidth, bounds.outHeight, max(maxSide * 2, MAX_AVATAR_DECODE_SIDE))
+    }
+    val original = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
         ?: throw IllegalStateException("DECODE_FAILED")
     var scaled: Bitmap? = null
     try {

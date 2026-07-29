@@ -27,14 +27,35 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   const [loading, setLoading] = useState(!!user);
   const [isEndingDay, setIsEndingDay] = useState(false);
   const [registryError, setRegistryError] = useState(null);
-  /** Skip snapshot stomps while optimistic counter writes are in flight. */
+  /** Optimistic overlay: display = server + pendingDelta (Android RegistryViewModel parity). */
   const counterInFlightRef = useRef(0);
   const latestServerCountsRef = useRef({});
-  const deferredServerCountsRef = useRef(false);
+  const pendingDeltaRef = useRef({});
   const activeCountsRef = useRef(activeCounts);
   activeCountsRef.current = activeCounts;
   const isEndingDayRef = useRef(isEndingDay);
   isEndingDayRef.current = isEndingDay;
+
+  const publishCounterOverlay = useCallback(() => {
+    const pending = pendingDeltaRef.current;
+    const server = latestServerCountsRef.current || {};
+    const keys = new Set([...Object.keys(server), ...Object.keys(pending)]);
+    if (keys.size === 0) {
+      setActiveCounts({});
+      return;
+    }
+    const next = {};
+    keys.forEach((id) => {
+      next[id] = Math.max(0, (server[id] || 0) + (pending[id] || 0));
+    });
+    setActiveCounts(next);
+  }, []);
+
+  const adjustPending = useCallback((id, delta) => {
+    const next = (pendingDeltaRef.current[id] || 0) + delta;
+    if (Math.abs(next) < 1e-9) delete pendingDeltaRef.current[id];
+    else pendingDeltaRef.current[id] = next;
+  }, []);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -55,6 +76,8 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       setActiveCounts(cleared.activeCounts);
       setLifetimeAggregates(cleared.lifetimeAggregates);
       setProfileSettings(cleared.profileSettings);
+      pendingDeltaRef.current = {};
+      latestServerCountsRef.current = {};
       setLoading(false);
       setRegistryError(null);
       return undefined;
@@ -70,7 +93,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     setRegistryError(null);
     counterInFlightRef.current = 0;
     latestServerCountsRef.current = {};
-    deferredServerCountsRef.current = false;
+    pendingDeltaRef.current = {};
 
     const onListenerError = (err) => {
       console.error('[REGISTRY] listener error', err);
@@ -83,11 +106,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       (s) => {
         if (!s.exists()) {
           latestServerCountsRef.current = {};
-          if (counterInFlightRef.current === 0) {
-            setActiveCounts({});
-          } else {
-            deferredServerCountsRef.current = true;
-          }
+          publishCounterOverlay();
           setLifetimeAggregates({ saved: 0, wasted: 0, smokingUnits: 0 });
           setProfileSettings({
             name: '',
@@ -104,11 +123,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
         }
         const d = s.data();
         latestServerCountsRef.current = d.activeCounts || {};
-        if (counterInFlightRef.current === 0) {
-          setActiveCounts(latestServerCountsRef.current);
-        } else {
-          deferredServerCountsRef.current = true;
-        }
+        publishCounterOverlay();
         setLifetimeAggregates(d.lifetimeAggregates || { saved: 0, wasted: 0, smokingUnits: 0 });
         setProfileSettings({
           name: d.name || '',
@@ -140,7 +155,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       unsubConfigs();
       unsubLogs();
     };
-  }, [user?.uid]);
+  }, [user?.uid, publishCounterOverlay]);
 
   const effectiveUnitPrice = profileSettings?.unitPrice ?? unitPrice;
 
@@ -175,45 +190,57 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
 
   const settleCounterFlight = useCallback(() => {
     counterInFlightRef.current = Math.max(0, counterInFlightRef.current - 1);
-    if (counterInFlightRef.current === 0 && deferredServerCountsRef.current) {
-      deferredServerCountsRef.current = false;
-      setActiveCounts(latestServerCountsRef.current);
-    }
   }, []);
 
   const increment = useCallback(async (id) => {
     if (!user) return;
     counterInFlightRef.current += 1;
-    setActiveCounts((c) => ({ ...c, [id]: (c[id] || 0) + 1 }));
+    adjustPending(id, 1);
+    publishCounterOverlay();
     try {
       await runMutation(
         () => RegistryService.adjustCounter(user.uid, id, 1),
         'Could not update counter.'
       );
+      latestServerCountsRef.current = {
+        ...latestServerCountsRef.current,
+        [id]: Math.max(0, (latestServerCountsRef.current[id] || 0) + 1),
+      };
+      adjustPending(id, -1);
+      publishCounterOverlay();
     } catch (e) {
-      setActiveCounts((c) => ({ ...c, [id]: Math.max(0, (c[id] || 0) - 1) }));
+      adjustPending(id, -1);
+      publishCounterOverlay();
       throw e;
     } finally {
       settleCounterFlight();
     }
-  }, [user?.uid, runMutation, settleCounterFlight]);
+  }, [user?.uid, runMutation, settleCounterFlight, adjustPending, publishCounterOverlay]);
 
   const decrement = useCallback(async (id) => {
     if (!user || (activeCountsRef.current[id] || 0) <= 0) return;
     counterInFlightRef.current += 1;
-    setActiveCounts((c) => ({ ...c, [id]: Math.max(0, (c[id] || 0) - 1) }));
+    adjustPending(id, -1);
+    publishCounterOverlay();
     try {
       await runMutation(
         () => RegistryService.adjustCounter(user.uid, id, -1),
         'Could not update counter.'
       );
+      latestServerCountsRef.current = {
+        ...latestServerCountsRef.current,
+        [id]: Math.max(0, (latestServerCountsRef.current[id] || 0) - 1),
+      };
+      adjustPending(id, 1);
+      publishCounterOverlay();
     } catch (e) {
-      setActiveCounts((c) => ({ ...c, [id]: (c[id] || 0) + 1 }));
+      adjustPending(id, 1);
+      publishCounterOverlay();
       throw e;
     } finally {
       settleCounterFlight();
     }
-  }, [user?.uid, runMutation, settleCounterFlight]);
+  }, [user?.uid, runMutation, settleCounterFlight, adjustPending, publishCounterOverlay]);
 
   const endDay = useCallback(async () => {
     if (!user || isEndingDayRef.current) return;

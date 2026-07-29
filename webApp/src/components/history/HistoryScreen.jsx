@@ -10,6 +10,7 @@ import { cn } from '../../utils/utils';
 import { formatDateDisplay } from '../../utils/formatters';
 import { mapFirestoreError } from '../../utils/errorHandlers';
 import { UndoToast, UNDO_TOAST_MS } from '../feedback/UndoToast';
+import { ConfirmModal } from '../modals/ConfirmModal';
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -107,6 +108,7 @@ export const HistoryScreen = React.memo(({
   onDeleteLog, onRestoreLog, historyIsTruncated = false
 }) => {
   const [undo, setUndo] = useState(null); // { log, key } after successful purge
+  const [pendingDelete, setPendingDelete] = useState(null);
   const [hiddenLogIds, setHiddenLogIds] = useState(() => new Set());
   const [actionError, setActionError] = useState(null);
   const [velocityDays, setVelocityDays] = useState(7);
@@ -130,6 +132,11 @@ export const HistoryScreen = React.memo(({
       });
       setActionError(mapFirestoreError(err, 'Could not delete entry.'));
     }
+  };
+
+  const requestDelete = (snapshot) => {
+    if (!snapshot || !userId) return;
+    setPendingDelete(snapshot);
   };
 
   const handleUndo = useCallback(async () => {
@@ -464,7 +471,7 @@ export const HistoryScreen = React.memo(({
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDelete(log)}
+                      onClick={() => requestDelete(log)}
                       aria-label="Delete entry"
                       className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-600 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
                     >
@@ -517,6 +524,18 @@ export const HistoryScreen = React.memo(({
         duration={UNDO_TOAST_MS}
         onUndo={handleUndo}
         onDismiss={() => setUndo(null)}
+      />
+      <ConfirmModal
+        isOpen={!!pendingDelete}
+        onClose={() => setPendingDelete(null)}
+        onConfirm={async () => {
+          const snapshot = pendingDelete;
+          setPendingDelete(null);
+          if (snapshot) await handleDelete(snapshot);
+        }}
+        title="Delete entry?"
+        message="This removes the session from history and adjusts lifetime totals. You can undo briefly afterward."
+        confirmText="Delete"
       />
     </div>
   );

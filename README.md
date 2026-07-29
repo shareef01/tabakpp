@@ -120,7 +120,7 @@ Owner-only access under `users/{uid}`. Settings updates cannot touch counters; c
 |---|---|
 | **Android** | Native app (`androidApp` + `composeApp` + `shared`) |
 | **Web** | PWA at [tabakpp.web.app](https://tabakpp.web.app) |
-| **iOS** | Experimental Compose target — see setup guide |
+| **iOS** | Not a release target — shell shows unsupported gate (see setup guide) |
 
 ## Get started
 

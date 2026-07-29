@@ -260,6 +260,11 @@ describe('RegistryService.endDay', () => {
     expect(archive.counts).toEqual({ cig: 8, ryo: 2 });
     expect(archive.isArchive).toBe(true);
     expect(archive.origin).toBe('DAY_RESET');
+    expect(archive.aggregateCredit).toEqual({
+      saved: 3.5,
+      wasted: 9,
+      smokingUnits: 10,
+    });
   });
 
   it('merges a second end-day by delta without double-counting', async () => {
@@ -342,6 +347,26 @@ describe('RegistryService.deleteLog', () => {
     await RegistryService.deleteLog(UID, 'missing');
     expect(userDoc().lifetimeAggregates).toEqual(baseAgg());
   });
+
+  it('uses stamped aggregateCredit when live configs changed', async () => {
+    seedLog({
+      id: 'L1',
+      logDate: '2026-07-10',
+      counts: { cig: 2 },
+      // Stamped under old economics (saved 8 wasted 2 units 2)
+      aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2 },
+    });
+    seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });
+    // Reprice / remove the tracker that originally produced the stamp.
+    seedConfig({ ...CIG, pricePerUnit: 99 });
+
+    await RegistryService.deleteLog(UID, 'L1');
+
+    const u = userDoc();
+    expect(u.lifetimeAggregates.saved).toBeCloseTo(42);
+    expect(u.lifetimeAggregates.wasted).toBeCloseTo(48);
+    expect(u.lifetimeAggregates.smokingUnits).toBe(48);
+  });
 });
 
 describe('RegistryService.restoreLog', () => {
@@ -359,6 +384,34 @@ describe('RegistryService.restoreLog', () => {
     expect(u.lifetimeAggregates.wasted).toBeCloseTo(53);
     expect(u.lifetimeAggregates.smokingUnits).toBe(53);
     expect(logDoc('L9').counts).toEqual({ cig: 3 });
+    expect(logDoc('L9').aggregateCredit).toEqual({
+      saved: 7,
+      wasted: 3,
+      smokingUnits: 3,
+    });
+  });
+
+  it('re-credits from stamped aggregateCredit even if configs are gone', async () => {
+    seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });
+    // No configs seeded — live recompute would be zero.
+    const log = {
+      id: 'L9',
+      logDate: '2026-07-01',
+      counts: { cig: 3 },
+      aggregateCredit: { saved: 7, wasted: 3, smokingUnits: 3 },
+    };
+
+    await RegistryService.restoreLog(UID, log);
+
+    const u = userDoc();
+    expect(u.lifetimeAggregates.saved).toBeCloseTo(57);
+    expect(u.lifetimeAggregates.wasted).toBeCloseTo(53);
+    expect(u.lifetimeAggregates.smokingUnits).toBe(53);
+    expect(logDoc('L9').aggregateCredit).toEqual({
+      saved: 7,
+      wasted: 3,
+      smokingUnits: 3,
+    });
   });
 
   it('does not double-credit when the log already exists', async () => {
@@ -394,6 +447,11 @@ describe('RegistryService.createManualEntry', () => {
     expect(entry.isManual).toBe(true);
     expect(entry.logDate).toBe('2026-07-05');
     expect(entry.counts).toEqual({ cig: 2 });
+    expect(entry.aggregateCredit).toEqual({
+      saved: 8,
+      wasted: 2,
+      smokingUnits: 2,
+    });
   });
 });
 

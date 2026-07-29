@@ -70,7 +70,8 @@ fun SettingsScreen(
     var showLogoutConfirm by rememberSaveable { mutableStateOf(false) }
     var showDeleteAccount by rememberSaveable { mutableStateOf(false) }
     var showPrivacyNotice by rememberSaveable { mutableStateOf(false) }
-    var deletePassword by rememberSaveable { mutableStateOf("") }
+    // Never rememberSaveable credentials — Survives process death into SavedState.
+    var deletePassword by remember { mutableStateOf("") }
     var isDeletingAccount by remember { mutableStateOf(false) }
     val authLoading by authViewModel.loading.collectAsStateWithLifecycle()
     val authError by authViewModel.error.collectAsStateWithLifecycle()

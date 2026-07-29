@@ -105,5 +105,57 @@ class RegistryMutationsTest {
         )
         // Only cig counts toward smoking units; simple is excluded.
         assertEquals(5.0, result.aggregates.smokingUnits, 1e-9)
+        assertEquals(5.0, result.logCredit.smokingUnits, 1e-9)
+    }
+
+    @Test
+    fun resolveContribution_prefersStampedCredit_whenConfigsWouldDiffer() {
+        // Stamped when cig cost €1 and limit produced saved=8 wasted=2 units=2.
+        val stamped = LifetimeAggregates(saved = 8.0, wasted = 2.0, smokingUnits = 2.0)
+        // Live configs are gone / empty — recomputing would yield zeros.
+        val resolved = RegistryMutations.resolveContribution(
+            stamped,
+            mapOf("cig" to 2.0),
+            emptyList(),
+            price
+        )
+        assertAgg(Triple(8.0, 2.0, 2.0), resolved)
+
+        val afterDebit = RegistryMutations.applyDebit(
+            LifetimeAggregates(50.0, 50.0, 50.0),
+            resolved
+        )
+        assertAgg(Triple(42.0, 48.0, 48.0), afterDebit)
+    }
+
+    @Test
+    fun endDay_secondArchive_usesStampedExistingCredit() {
+        // Existing archive was credited under old economics; live configs changed.
+        val stampedExisting = LifetimeAggregates(saved = 3.5, wasted = 9.0, smokingUnits = 10.0)
+        val expensiveCig = cig.copy(pricePerUnit = 9.0)
+        val result = RegistryMutations.endDay(
+            current = LifetimeAggregates(saved = 103.5, wasted = 59.0, smokingUnits = 210.0),
+            existingCounts = mapOf("cig" to 8.0, "ryo" to 2.0),
+            activeCounts = mapOf("cig" to 2.0),
+            configs = listOf(expensiveCig, ryo),
+            unitPrice = price,
+            existingCredit = stampedExisting
+        )
+        // Delta must use stamped previous credit, not recomputed expensive prices.
+        assertEquals(mapOf("cig" to 10.0, "ryo" to 2.0), result.mergedCounts)
+        val expectedNew = RegistryMutations.contribution(
+            mapOf("cig" to 10.0, "ryo" to 2.0),
+            listOf(expensiveCig, ryo),
+            price
+        )
+        assertAgg(
+            Triple(
+                103.5 - stampedExisting.saved + expectedNew.saved,
+                59.0 - stampedExisting.wasted + expectedNew.wasted,
+                210.0 - stampedExisting.smokingUnits + expectedNew.smokingUnits
+            ),
+            result.aggregates
+        )
+        assertAgg(Triple(expectedNew.saved, expectedNew.wasted, expectedNew.smokingUnits), result.logCredit)
     }
 }

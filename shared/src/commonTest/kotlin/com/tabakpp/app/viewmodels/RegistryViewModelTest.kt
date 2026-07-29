@@ -56,10 +56,13 @@ private class FakeRegistryRepository : RegistryRepository {
     var endDayGate: CompletableDeferred<Unit>? = null
     /** When set, updateLiveCounter suspends on it — for optimistic-flight tests. */
     var liveCounterGate: CompletableDeferred<Unit>? = null
+    /** When set, updateProfileSettings suspends on it — for settings write serialization. */
+    var profileSettingsGate: CompletableDeferred<Unit>? = null
 
     val liveCounterCalls = mutableListOf<Triple<String, String, Double>>()
     val endDayCalls = mutableListOf<Pair<String, String>>()
     val addConfigCalls = mutableListOf<Pair<String, TrackerConfig>>()
+    val profileSettingsCalls = mutableListOf<Pair<String, UserProfile>>()
 
     private fun maybeFail() { failWith?.let { throw it } }
 
@@ -81,7 +84,9 @@ private class FakeRegistryRepository : RegistryRepository {
     override suspend fun updateConfig(uid: String, config: TrackerConfig) { maybeFail() }
     override suspend fun deleteConfig(uid: String, configId: String) { maybeFail() }
     override suspend fun reorderConfigs(uid: String, configId1: String, order1: Int, configId2: String, order2: Int) { maybeFail() }
-    override suspend fun updateProfileSettings(uid: String, profile: UserProfile) { maybeFail() }
+    override suspend fun updateProfileSettings(uid: String, profile: UserProfile) {
+        profileSettingsGate?.await(); maybeFail(); profileSettingsCalls.add(uid to profile)
+    }
     override suspend fun ensureUserDocument(uid: String, displayName: String?) {}
     override suspend fun migrateSmokingUnitsIfNeeded(uid: String) {}
     override suspend fun deleteAllUserData(uid: String) { maybeFail() }
@@ -259,7 +264,7 @@ class RegistryViewModelTest {
     }
 
     @Test
-    fun serverSnapshot_isDeferredWhileWriteInFlight_thenReconciles() {
+    fun serverSnapshot_whileWriteInFlight_mergesWithPendingDelta() {
         val (vm, reg) = build()
         reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
         scheduler.runCurrent()
@@ -267,15 +272,74 @@ class RegistryViewModelTest {
 
         vm.increment("cig")
         scheduler.runCurrent()
-        assertEquals(3.0, vm.activeCounts.value["cig"]) // optimistic; write parked on the gate
+        assertEquals(3.0, vm.activeCounts.value["cig"]) // server 2 + pending 1
 
-        // A server snapshot arriving mid-flight must not stomp the optimistic value.
+        // A higher mid-flight snapshot merges with the still-pending tap.
         reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 9.0))
         scheduler.runCurrent()
-        assertEquals(3.0, vm.activeCounts.value["cig"])
+        assertEquals(10.0, vm.activeCounts.value["cig"]) // server 9 + pending 1
 
         reg.liveCounterGate!!.complete(Unit)
         scheduler.runCurrent()
-        assertEquals(9.0, vm.activeCounts.value["cig"]) // reconciled to the held server snapshot
+        // Write folded into baseline; pending cleared → follow server (or local fold).
+        assertEquals(10.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun burstTaps_doNotSnapBackOnStaleServerSnapshot() {
+        val (vm, reg) = build()
+        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        scheduler.runCurrent()
+        reg.liveCounterGate = CompletableDeferred()
+
+        vm.increment("cig")
+        vm.increment("cig")
+        assertEquals(4.0, vm.activeCounts.value["cig"])
+
+        // Stale echo of the pre-burst value must not rewind the overlay.
+        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        scheduler.runCurrent()
+        assertEquals(4.0, vm.activeCounts.value["cig"])
+
+        reg.liveCounterGate!!.complete(Unit)
+        scheduler.runCurrent()
+        // Both writes folded locally: baseline 4, pending 0.
+        assertEquals(4.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun updateProfile_chainsOffLastSubmitted_soRapidEditsDoNotClobber() {
+        val (vm, reg) = build()
+        reg.profileFlow.value = UserProfile(name = "Alice", accent = "#FF5F5F")
+        scheduler.runCurrent()
+        reg.profileSettingsGate = CompletableDeferred()
+
+        vm.updateProfile { it.copy(accent = "#111111") }
+        scheduler.runCurrent()
+        assertEquals(0, reg.profileSettingsCalls.size) // parked on the gate
+
+        // Second edit while the first write is in flight must chain from the
+        // pending submitted profile (accent already #111111), not the stale server snap.
+        vm.updateProfile { it.copy(name = "Bob") }
+        scheduler.runCurrent()
+        assertEquals(0, reg.profileSettingsCalls.size)
+
+        reg.profileSettingsGate!!.complete(Unit)
+        scheduler.runCurrent()
+
+        assertEquals(2, reg.profileSettingsCalls.size)
+        assertEquals("#111111", reg.profileSettingsCalls[0].second.accent)
+        assertEquals("Alice", reg.profileSettingsCalls[0].second.name)
+        assertEquals("#111111", reg.profileSettingsCalls[1].second.accent)
+        assertEquals("Bob", reg.profileSettingsCalls[1].second.name)
+    }
+
+    @Test
+    fun updateProfile_withNullProfile_isNoop() {
+        val (vm, reg) = build()
+        // profileFlow stays null — must not seed UserProfile() defaults
+        vm.updateProfile { it.copy(accent = "#000000") }
+        scheduler.runCurrent()
+        assertTrue(reg.profileSettingsCalls.isEmpty())
     }
 }
