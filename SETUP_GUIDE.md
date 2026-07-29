@@ -148,11 +148,14 @@ GOOGLE_SERVICES_JSON_BASE64
 After installing a new device build, register its App Check debug token (see Android App Check above).
 
 ### Account deletion
-Settings → Delete Account (web) / DELETE ACCOUNT (Android) reauthenticates, deletes `users/{uid}/configs` + `logs` + the user doc in batches, then deletes the Auth user. No Cloud Functions required (Spark-safe).
+Settings → Delete Account (web) / DELETE ACCOUNT (Android) reauthenticates, deletes `users/{uid}/configs` + `logs` + the user doc in batches, then deletes the Auth user (with retries). If Auth delete still fails after the wipe, both clients sign out and show recovery copy (`DATA_WIPED_AUTH_REMAINED` on Android). No Cloud Functions required (Spark-safe).
 
 - **Email/password** accounts: enter password to confirm.
 - **Google** accounts: confirm via Google (Credential Manager on Android, popup on web).
 - **Linked** accounts: either method works.
+
+### Password policy
+Firebase Auth enforces **minimum 12 characters** server-side (`passwordPolicyConfig`, Require mode, no force-upgrade on sign-in). Clients keep the same client-side check for faster UX.
 
 ### Android Google Sign-In
 1. In Firebase Console → Authentication, enable **Google**.
