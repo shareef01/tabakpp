@@ -5,7 +5,7 @@ import { getFirestore } from "firebase/firestore";
 
 /**
  * TABAK++ Firebase Configuration
- * Client config is public (VITE_FIREBASE_*). App Check (reCAPTCHA v3) is
+ * Client config is public (VITE_FIREBASE_*). App Check (reCAPTCHA Enterprise) is
  * strongly recommended on Spark to protect Auth/Firestore quotas:
  * set VITE_FIREBASE_APPCHECK_SITE_KEY from Firebase Console → App Check.
  */
@@ -55,9 +55,9 @@ export const appCheckReady = (async () => {
     // Register debug tokens in Firebase Console → App Check → Manage debug tokens
     self.FIREBASE_APPCHECK_DEBUG_TOKEN = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN || true;
   }
-  const { initializeAppCheck, ReCaptchaV3Provider } = await import("firebase/app-check");
+  const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import("firebase/app-check");
   return initializeAppCheck(app, {
-    provider: new ReCaptchaV3Provider(siteKey),
+    provider: new ReCaptchaEnterpriseProvider(siteKey),
     isTokenAutoRefreshEnabled: true
   });
 })();

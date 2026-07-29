@@ -85,10 +85,11 @@ firebase apps:sdkconfig ANDROID <ANDROID_APP_ID> --project tabakpp-ff036 -o andr
 (Delete the existing file first if `-o` refuses to overwrite.)
 
 ### Web App Check (recommended on Spark)
-1. In Firebase Console → App Check, register the web app with **reCAPTCHA v3**.
+1. In Firebase Console → App Check, register the web app with **reCAPTCHA Enterprise**
+   (or reCAPTCHA v3). Production uses `ReCaptchaEnterpriseProvider`.
 2. Add to `webApp/.env.local`:
    ```
-   VITE_FIREBASE_APPCHECK_SITE_KEY=your_recaptcha_v3_site_key
+   VITE_FIREBASE_APPCHECK_SITE_KEY=your_recaptcha_enterprise_site_key
    ```
 3. For local dev, either register a debug token (`VITE_FIREBASE_APPCHECK_DEBUG_TOKEN=...`) or leave unset — App Check only initializes when the site key is present. Never save tokens in repository log files.
 4. **Enforce checklist** (do last — this is the remaining Spark abuse control):
