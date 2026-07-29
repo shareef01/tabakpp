@@ -8,8 +8,8 @@ import org.koin.android.ext.koin.androidContext
 class TabakApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        // Release: Play Integrity. Debug: DebugAppCheckProviderFactory (token in logcat;
-        // register under Console → App Check → Manage debug tokens while APIs are Enforced).
+        // Debug + GitHub release: DebugAppCheckProviderFactory (register device token
+        // in Console → App Check). Play Integrity is unused — APKs are sideloaded.
         FirebaseApp.initializeApp(this)
         AppCheckInstaller.install()
         initKoin {
