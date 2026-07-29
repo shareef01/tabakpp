@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
 import { User, Check, Plus, ArrowUp, ArrowDown, Edit2, Trash2, Camera, Loader2, Package, Wind, Moon, Square, Columns2, LayoutGrid, AlertTriangle } from 'lucide-react';
-import { updateProfile, EmailAuthProvider, GoogleAuthProvider, reauthenticateWithCredential, reauthenticateWithPopup, reauthenticateWithRedirect, deleteUser } from 'firebase/auth';
+import { updateProfile, EmailAuthProvider, GoogleAuthProvider, reauthenticateWithCredential, reauthenticateWithPopup, reauthenticateWithRedirect } from 'firebase/auth';
+import { deleteAuthUserAfterWipe, DELETE_INCOMPLETE_MESSAGE } from '../../utils/deleteAuthUserAfterWipe';
 import { auth } from '../../firebase';
 import { RegistryService } from '../../services/registryService';
 import { Input, Button, UI, Card } from '../Common';
@@ -294,13 +295,12 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
       }
       await RegistryService.deleteAllUserData(user.uid);
       try {
-        await deleteUser(auth.currentUser);
+        await deleteAuthUserAfterWipe(auth, auth.currentUser);
       } catch (authErr) {
-        // Firestore already wiped — ask user to retry Auth deletion.
         console.error(authErr);
         setNotification({
           title: 'Delete incomplete',
-          message: 'Your data was erased but login removal failed. Sign in again and retry Delete Account.',
+          message: DELETE_INCOMPLETE_MESSAGE,
           type: 'error'
         });
         return;

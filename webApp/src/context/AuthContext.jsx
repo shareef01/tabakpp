@@ -4,6 +4,7 @@ import { onAuthStateChanged, setPersistence, browserLocalPersistence, getRedirec
 import { RegistryService } from '../services/registryService';
 import { AUTH_INTENT_KEY, PENDING_DELETE_KEY } from '../utils/platform';
 import { mapAuthError } from '../utils/errorHandlers';
+import { deleteAuthUserAfterWipe, DELETE_INCOMPLETE_MESSAGE } from '../utils/deleteAuthUserAfterWipe';
 
 const AuthContext = createContext({
   user: null,
@@ -86,27 +87,16 @@ export const AuthProvider = ({ children }) => {
       try {
         await RegistryService.deleteAllUserData(user.uid);
         if (cancelled) return;
-        // Retry the Auth user removal a few times — Firestore is already wiped,
-        // so a transient failure shouldn't strand a half-deleted account.
-        let lastErr = null;
-        for (let attempt = 1; attempt <= 3 && !cancelled; attempt++) {
-          try {
-            await auth.currentUser.delete();
-            lastErr = null;
-            break;
-          } catch (authErr) {
-            lastErr = authErr;
-            // auth/requires-recent-login is not retryable; bail immediately.
-            if (authErr?.code === 'auth/requires-recent-login') break;
-            if (attempt < 3) await new Promise((r) => setTimeout(r, 400 * attempt));
+        try {
+          await deleteAuthUserAfterWipe(auth, auth.currentUser);
+        } catch (authErr) {
+          if (!cancelled) {
+            console.error(authErr);
+            setDeleteError({
+              title: 'Delete incomplete',
+              message: DELETE_INCOMPLETE_MESSAGE,
+            });
           }
-        }
-        if (!cancelled && lastErr) {
-          console.error(lastErr);
-          setDeleteError({
-            title: 'Delete incomplete',
-            message: 'Your data was erased but login removal failed. Sign in again and retry Delete Account.',
-          });
         }
       } catch (err) {
         console.error(err);
