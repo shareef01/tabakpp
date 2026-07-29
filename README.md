@@ -102,7 +102,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  Client["Signed-in client"] --> AC{"App Check<br/>Play Integrity / reCAPTCHA"}
+  Client["Signed-in client"] --> AC{"App Check<br/>debug tokens / reCAPTCHA"}
   AC --> Auth["Firebase Auth"]
   Auth --> Rules["Firestore rules"]
 

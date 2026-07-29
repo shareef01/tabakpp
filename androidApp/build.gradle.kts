@@ -75,8 +75,8 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 dependencies {
     implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.appcheck.playintegrity)
-    debugImplementation(libs.firebase.appcheck.debug)
+    // Sideloaded GitHub APKs cannot use Play Integrity; debug provider + registered tokens.
+    implementation(libs.firebase.appcheck.debug)
     implementation(project(":composeApp"))
     implementation(project(":shared"))
     implementation(libs.androidx.activity.compose)

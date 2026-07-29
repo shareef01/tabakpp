@@ -101,18 +101,17 @@ firebase apps:sdkconfig ANDROID <ANDROID_APP_ID> --project tabakpp-ff036 -o andr
 5. Until those APIs are **Enforced**, App Check is advisory only — unofficial clients can still hit Auth/Firestore with a stolen API key.
 
 ### Android App Check
-The Android app installs **Play Integrity** in release builds and
-**DebugAppCheckProviderFactory** in debug builds (`AppCheckInstaller` via
-debug/release source sets).
+Android is distributed via **GitHub Releases** (sideloaded APK), not Play Store.
+Play Integrity attestation fails for sideloads, so both debug and release builds
+use **DebugAppCheckProviderFactory** (`AppCheckInstaller`).
 
 In Firebase Console → App Check:
-1. Register the Android app with **Play Integrity**.
-2. Add your release (and debug) **SHA-256** under Project settings → Your apps → Android.
-3. For local debug while APIs are **Enforced**: run the app once, copy the debug
-   token from Logcat (`DebugAppCheckProvider` / `Enter this debug secret`), then
-   Console → App Check → Manage debug tokens → Add debug token.
-4. Verify a Play-distributed release build receives valid tokens.
-5. Revoke any debug token that has appeared in logs or chat history.
+1. Add your release and debug **SHA-1 / SHA-256** under Project settings → Your apps → Android
+   (also add the release SHA-1 to the Android API key restrictions in Google Cloud).
+2. Install the APK, open Logcat, copy the debug token from
+   `DebugAppCheckProvider` / `Enter this debug secret`.
+3. Console → App Check → Manage debug tokens → Add debug token (once per device).
+4. Revoke any debug token that has appeared in public logs or chat history.
 
 ### Release signing
 The Android release build reads signing credentials from environment variables;
@@ -127,6 +126,26 @@ TABAKPP_KEY_PASSWORD
 
 Without all four variables, Gradle still produces an unsigned release artifact
 for R8 verification.
+
+### GitHub Releases (Android APK)
+Push a version tag to publish a signed APK:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+Workflow: `.github/workflows/release-android.yml`. Required repo secrets:
+
+```text
+TABAKPP_KEYSTORE_BASE64
+TABAKPP_KEYSTORE_PASSWORD
+TABAKPP_KEY_ALIAS
+TABAKPP_KEY_PASSWORD
+GOOGLE_SERVICES_JSON_BASE64
+```
+
+After installing a new device build, register its App Check debug token (see Android App Check above).
 
 ### Account deletion
 Settings → Delete Account (web) / DELETE ACCOUNT (Android) reauthenticates, deletes `users/{uid}/configs` + `logs` + the user doc in batches, then deletes the Auth user. No Cloud Functions required (Spark-safe).
