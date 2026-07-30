@@ -5,6 +5,36 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
+/**
+ * Version comes from the release tag so every published APK is distinguishable.
+ * The workflow passes TABAKPP_VERSION_NAME=<tag without "v">; locally (and in CI
+ * builds that are not releases) it falls back to the dev placeholder below.
+ *
+ * versionCode is derived as MAJOR*10000 + MINOR*100 + PATCH, so 1.0.1 -> 10001
+ * and it increases monotonically with semver. Previously both were hardcoded,
+ * which shipped v1.0.0 and v1.0.1 as an identical versionCode 1 / "1.0".
+ */
+val DEV_VERSION_NAME = "0.0.0-dev"
+
+val resolvedVersionName: String =
+    providers.environmentVariable("TABAKPP_VERSION_NAME").orNull
+        ?.trim()
+        ?.removePrefix("v")
+        ?.takeIf { it.isNotEmpty() }
+        ?: DEV_VERSION_NAME
+
+val resolvedVersionCode: Int = run {
+    val parts = resolvedVersionName
+        .substringBefore('-')
+        .split('.')
+        .mapNotNull { it.toIntOrNull() }
+    val derived =
+        if (parts.size < 3) 0
+        else parts[0] * 10000 + parts[1] * 100 + parts[2]
+    // AGP rejects versionCode 0, which the 0.0.0-dev fallback would produce.
+    derived.coerceAtLeast(1)
+}
+
 val releaseStorePath = providers.environmentVariable("TABAKPP_KEYSTORE_PATH").orNull
 val releaseStorePassword = providers.environmentVariable("TABAKPP_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("TABAKPP_KEY_ALIAS").orNull
@@ -27,8 +57,8 @@ android {
         applicationId = "com.tabakpp.app"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = resolvedVersionCode
+        versionName = resolvedVersionName
     }
     packaging {
         resources {

@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
           cache: gradle
 
       - uses: gradle/actions/setup-gradle@v4
@@ -51,6 +51,8 @@ jobs:
           TABAKPP_KEYSTORE_PASSWORD: ${{ secrets.TABAKPP_KEYSTORE_PASSWORD }}
           TABAKPP_KEY_ALIAS: ${{ secrets.TABAKPP_KEY_ALIAS }}
           TABAKPP_KEY_PASSWORD: ${{ secrets.TABAKPP_KEY_PASSWORD }}
+          # Tag drives versionName/versionCode (see androidApp/build.gradle.kts).
+          TABAKPP_VERSION_NAME: ${{ github.ref_name }}
         run: ./gradlew :androidApp:assembleRelease --no-daemon
 
       - name: Prepare artifact
