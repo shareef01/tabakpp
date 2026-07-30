@@ -29,8 +29,6 @@
 
 <p align="center">
   <img src="assets/screenshots/showcase/web-history.png" width="440" alt="Web — History" />
-  &nbsp;
-  <img src="assets/screenshots/showcase/web-settings.png" width="440" alt="Web — Settings" />
 </p>
 
 ### Android
@@ -39,8 +37,6 @@
   <img src="assets/screenshots/showcase/phone-track.png" width="220" alt="Android — Track" />
   &nbsp;
   <img src="assets/screenshots/showcase/phone-history.png" width="220" alt="Android — History" />
-  &nbsp;
-  <img src="assets/screenshots/showcase/phone-settings.png" width="220" alt="Android — Settings" />
 </p>
 
 ## Why it exists
