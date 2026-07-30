@@ -86,19 +86,28 @@ only, so a direct REST call can register a weaker password.
 If Android email/password sign-in fails with **Requests from this Android client application com.tabakpp.app are blocked**, the API key’s Android app restriction is missing the signing cert for that APK. Add both fingerprints (package `com.tabakpp.app`):
 
 ```text
-# debug (default ~/.android/debug.keystore)
-ED:B5:69:97:3B:1F:A5:F0:25:A7:BC:CF:B7:17:94:37:C5:FB:EC:BD
+# debug (~/.android/debug.keystore — machine-specific, regenerate invalidates it)
+A2:14:6D:57:A5:5B:06:7D:3F:56:E8:CF:34:A4:3C:1A:16:09:6B:06
 
 # release (also keep it on the Firebase Android app)
 SHA-1   E9:1D:C8:B7:A6:1E:82:6E:3C:D7:6B:64:3B:5F:BE:27:4B:84:23:95
 SHA-256 31:C7:DA:2E:0B:FF:5E:ED:60:CB:CD:FC:DE:06:A4:67:03:AD:A9:A1:90:AA:F4:65:38:EB:F4:F8:F4:EC:05:EE
 ```
 
-Read them back off any published APK with:
+The debug fingerprint is per-machine and changes if `debug.keystore` is
+regenerated. Derive the current one rather than trusting this file:
 
 ```bash
+keytool -list -v -keystore ~/.android/debug.keystore \
+  -storepass android -alias androiddebugkey | grep SHA1
+
+# release fingerprints, read back off any published APK
 apksigner verify --print-certs tabakpp-<version>.apk
 ```
+
+When a debug keystore is replaced, **remove the old fingerprint from the Android
+API key** in Google Cloud Console — a stale entry keeps authorising a key you no
+longer control.
 
 Refresh local config after Firebase SHA changes:
 
