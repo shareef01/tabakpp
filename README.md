@@ -109,14 +109,16 @@ flowchart LR
   Rules --> Shape["Schema + bounds<br/>on profile · configs · logs"]
   Rules --> Deny["Default deny<br/>/{document=**}"]
 
-  AC["App Check — ENFORCED<br/>Firestore · Auth"] --> Auth
+  AC["App Check<br/>integrated · not enforced"] -. advisory .-> Auth
 ```
 
 Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing. Every write path is covered by rules tests run against the Firestore emulator in CI.
 
-**On App Check:** it is **enforced** on Cloud Firestore and Firebase Authentication, so unattested requests are rejected — it is a live control, not decoration. Web attests through reCAPTCHA Enterprise and works for anyone.
+**On App Check:** integrated on both clients (reCAPTCHA Enterprise on web, debug provider on Android) with enforcement **deliberately off**, so it is advisory rather than part of the security boundary.
 
-**Android does not.** Release APKs use the debug App Check provider, which mints a random secret per install that has to be registered by hand in the Firebase Console. Combined with enforcement, that means **a sideloaded APK cannot sign in until its device token is registered** — in practice the Android build only works on the maintainer's own devices. Fixing that means Play Integrity, which needs a Play Console project link. See [SETUP_GUIDE.md](SETUP_GUIDE.md) for the full picture and the upgrade path.
+That is a considered trade, not an oversight. Enforcement is per Firebase product and hits every client at once. Android release APKs use the debug provider, which mints a random secret per install that has to be registered by hand — so enforcing makes the APK unusable for anyone whose device you have not personally allow-listed, including anyone who downloads it from Releases. Since a working download matters more here than attestation, enforcement stays off and the load is carried by the **Firestore rules** above plus **API key restrictions** (package + signing certificate on Android, HTTP referrer on web).
+
+Enforcing becomes the right call once Android can attest for real — that means Play Integrity, which needs a Play Console project link. Upgrade path in [SETUP_GUIDE.md](SETUP_GUIDE.md).
 
 ## Platforms
 
