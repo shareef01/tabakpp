@@ -703,10 +703,14 @@ fun AccentPalette(
                 modifier = Modifier
                     .size(48.dp)
                     .padding(5.dp)
+                    // shadow must precede clip/background: Modifier order is
+                    // outside-in, so a trailing shadow() creates its layer after
+                    // the swatch has already been drawn, which blanks the
+                    // selected circle instead of casting a shadow behind it.
+                    .shadow(if (isSelected) 12.dp else 0.dp, CircleShape, spotColor = color)
                     .clip(CircleShape)
                     .background(color)
                     .border(width = if (isSelected) 2.dp else 0.dp, color = Color.White, shape = CircleShape)
-                    .shadow(if (isSelected) 12.dp else 0.dp, CircleShape, spotColor = color)
                     .tabakPressScale()
                     .semantics {
                         role = Role.RadioButton
