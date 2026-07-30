@@ -62,10 +62,26 @@ firebase deploy --only firestore:rules
 ```
 After deploying, verify in the Firebase Console (Firestore > Rules) that the published rules match `firestore.rules`.
 
-**Spark residual:** forging self-stats via a dedicated mutation write remains possible without Cloud Functions. Mitigate with App Check + the write-path split + restricted API keys.
+**Spark residual:** forging self-stats via a dedicated mutation write remains possible without Cloud Functions. The write-path split and restricted API keys narrow it; App Check would too, but it is not enforced (see "Why App Check is not enforced"). The blast radius is limited to the signed-in user's own numbers — no cross-user access.
 
 ### API Key Hygiene
-`google-services.json` is git-ignored and must never be committed. Additionally, in Google Cloud Console (APIs & Services > Credentials), restrict the Android API key to the `com.tabakpp.app` package + release/debug signing certificate fingerprints, and consider enabling **Firebase App Check** to block requests from unofficial clients.
+`google-services.json` is git-ignored and must never be committed.
+
+**API key restrictions are the primary abuse control on this project**, since App
+Check is not enforced. In Google Cloud Console → APIs & Services → Credentials:
+
+- **Android key** → Application restrictions → Android apps → package
+  `com.tabakpp.app` + the release and debug SHA-1 fingerprints below.
+- **Browser key** → Application restrictions → HTTP referrers →
+  `tabakpp.web.app/*` and `tabakpp.firebaseapp.com/*`.
+- Both keys → API restrictions → limit to the APIs actually used (Identity
+  Toolkit, Cloud Firestore, Token Service).
+
+Also worth setting: Firebase Console → Authentication → Settings → upgrade to
+**Authentication with Identity Platform** (free on Spark, capped at 3,000 daily
+active users), then **Password policy** → minimum length 12. Without it the
+server floor is 6 and the 12-character rule in `AuthViewModel` is client-side
+only, so a direct REST call can register a weaker password.
 
 If Android email/password sign-in fails with **Requests from this Android client application com.tabakpp.app are blocked**, the API key’s Android app restriction is missing the signing cert for that APK. Add both fingerprints (package `com.tabakpp.app`):
 
@@ -73,7 +89,15 @@ If Android email/password sign-in fails with **Requests from this Android client
 # debug (default ~/.android/debug.keystore)
 ED:B5:69:97:3B:1F:A5:F0:25:A7:BC:CF:B7:17:94:37:C5:FB:EC:BD
 
-# release (your upload/app-signing key — also keep it on the Firebase Android app)
+# release (also keep it on the Firebase Android app)
+SHA-1   E9:1D:C8:B7:A6:1E:82:6E:3C:D7:6B:64:3B:5F:BE:27:4B:84:23:95
+SHA-256 31:C7:DA:2E:0B:FF:5E:ED:60:CB:CD:FC:DE:06:A4:67:03:AD:A9:A1:90:AA:F4:65:38:EB:F4:F8:F4:EC:05:EE
+```
+
+Read them back off any published APK with:
+
+```bash
+apksigner verify --print-certs tabakpp-<version>.apk
 ```
 
 Refresh local config after Firebase SHA changes:
@@ -92,26 +116,57 @@ firebase apps:sdkconfig ANDROID <ANDROID_APP_ID> --project tabakpp-ff036 -o andr
    VITE_FIREBASE_APPCHECK_SITE_KEY=your_recaptcha_enterprise_site_key
    ```
 3. For local dev, either register a debug token (`VITE_FIREBASE_APPCHECK_DEBUG_TOKEN=...`) or leave unset — App Check only initializes when the site key is present. Never save tokens in repository log files.
-4. **Enforce checklist** (do last — this is the remaining Spark abuse control):
-   - Console → App Check → APIs → set **Cloud Firestore** to **Enforced**
-   - Console → App Check → APIs → set **Firebase Authentication** to **Enforced**
-   - Confirm production PWA (`VITE_FIREBASE_APPCHECK_SITE_KEY` set) and Play-distributed Android both send tokens first
-   - Keep debug tokens registered only for local builds; revoke any token that appeared in logs or chat
-   - After enforcement, verify a release Android install and the hosted PWA can still sign in and write
-5. Until those APIs are **Enforced**, App Check is advisory only — unofficial clients can still hit Auth/Firestore with a stolen API key.
+4. Leave Console → App Check → APIs → **Cloud Firestore** and **Firebase
+   Authentication** on **Unenforced**. See "Why App Check is not enforced" below
+   before changing this — enforcing today locks out every Android install.
 
-### Android App Check
-Android is distributed via **GitHub Releases** (sideloaded APK), not Play Store.
-Play Integrity attestation fails for sideloads, so both debug and release builds
-use **DebugAppCheckProviderFactory** (`AppCheckInstaller`).
+### Why App Check is not enforced
 
-In Firebase Console → App Check:
-1. Add your release and debug **SHA-1 / SHA-256** under Project settings → Your apps → Android
-   (also add the release SHA-1 to the Android API key restrictions in Google Cloud).
+App Check is wired on both clients but is **deliberately unenforced**, so it is
+not part of the security boundary. Two facts drive that:
+
+- **Enforcement is per Firebase product, not per platform.** Setting Cloud
+  Firestore to Enforced rejects unattested requests from *every* client. There
+  is no way to enforce for web only.
+- **Android cannot attest in this distribution model.** Release APKs ship via
+  GitHub Releases. The `DebugAppCheckProviderFactory` used by both build types
+  mints a random per-install token that must be pasted into the Console by hand,
+  which obviously does not scale past the maintainer's own devices.
+
+So enforcing would break every sideloaded install, including yours. Until that
+changes, the controls that actually hold are the **Firestore rules** and the
+**API key restrictions** above — not App Check.
+
+**Upgrade path (if this ever ships properly).** Contrary to a common
+misconception, Play Integrity *does* support apps distributed outside Google
+Play — the blocker is configuration, not the distribution channel. To switch:
+
+1. Register a Google Play developer account (one-time fee) and add an app entry.
+   Publishing and a store listing are **not** required.
+2. Play Console → your app → Release → **App integrity** → Play Integrity API →
+   link the Cloud project.
+3. Firebase Console → App Check → Apps → your Android app → advanced settings:
+   set **PLAY_RECOGNIZED** to not required, **LICENSED** to not required, and
+   minimum device integrity to **Device integrity**. Non-Play apps can never
+   receive `PLAY_RECOGNIZED`, which is why the default config fails for sideloads.
+4. Swap `DebugAppCheckProviderFactory` for `PlayIntegrityAppCheckProviderFactory`
+   in `androidApp/src/release/.../AppCheckInstaller.kt` and add the
+   `firebase-appcheck-playintegrity` dependency.
+5. Watch App Check metrics until release clients report verified, *then* enforce.
+
+### Android App Check (current: debug provider)
+Both debug and release builds use **DebugAppCheckProviderFactory**
+(`AppCheckInstaller`). With enforcement off this is effectively inert, so the
+setup below is only worth doing if you want App Check metrics.
+
+1. Add your release and debug **SHA-1 / SHA-256** under Project settings → Your
+   apps → Android (also add the release SHA-1 to the Android API key
+   restrictions in Google Cloud — that part *does* matter).
 2. Install the APK, open Logcat, copy the debug token from
    `DebugAppCheckProvider` / `Enter this debug secret`.
 3. Console → App Check → Manage debug tokens → Add debug token (once per device).
-4. Revoke any debug token that has appeared in public logs or chat history.
+4. **Revoke any debug token that has appeared in logs, screenshots, or chat.** A
+   debug token is a bearer secret that bypasses attestation from anywhere.
 
 ### Release signing
 The Android release build reads signing credentials from environment variables;
