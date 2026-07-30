@@ -7,6 +7,11 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/setupTests.js',
-    exclude: [...configDefaults.exclude, 'src/**/*.rules.test.js'],
+    // Emulator-backed suites need a live Firestore; they run via `npm run test:rules`.
+    exclude: [
+      ...configDefaults.exclude,
+      'src/**/*.rules.test.js',
+      'src/**/*.emulator.test.js',
+    ],
   },
 });
