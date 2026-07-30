@@ -238,37 +238,6 @@ fun EmptyDashboard(accentColor: Color, onAddClick: () -> Unit) {
 }
 
 @Composable
-private fun ErrorBanner(message: String?, onDismiss: () -> Unit) {
-    AnimatedVisibility(
-        visible = message != null,
-        enter = expandVertically() + fadeIn(),
-        exit = shrinkVertically() + fadeOut()
-    ) {
-        message?.let { msg ->
-            Surface(
-                color = ErrorColor.copy(alpha = 0.95f),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = msg.uppercase(),
-                        color = Color.White,
-                        style = TabakTypography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Black),
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color.White, modifier = Modifier.size(16.dp))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun TrackerGrid(
     configs: List<com.tabakpp.app.data.TrackerConfig>,
     activeCounts: Map<String, Double>?,
