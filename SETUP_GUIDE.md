@@ -62,13 +62,14 @@ firebase deploy --only firestore:rules
 ```
 After deploying, verify in the Firebase Console (Firestore > Rules) that the published rules match `firestore.rules`.
 
-**Spark residual:** forging self-stats via a dedicated mutation write remains possible without Cloud Functions. The write-path split and restricted API keys narrow it; App Check would too, but it is not enforced (see "Why App Check is not enforced"). The blast radius is limited to the signed-in user's own numbers — no cross-user access.
+**Spark residual:** forging self-stats via a dedicated mutation write remains possible without Cloud Functions. The write-path split, restricted API keys, and enforced App Check all narrow it. The blast radius is limited to the signed-in user's own numbers — no cross-user access.
 
 ### API Key Hygiene
 `google-services.json` is git-ignored and must never be committed.
 
-**API key restrictions are the primary abuse control on this project**, since App
-Check is not enforced. In Google Cloud Console → APIs & Services → Credentials:
+**API key restrictions are the layer that holds when App Check does not** — a
+lifted key is useless from another origin or an unsigned build. In Google Cloud
+Console → APIs & Services → Credentials:
 
 - **Android key** → Application restrictions → Android apps → package
   `com.tabakpp.app` + the release and debug SHA-1 fingerprints below.
@@ -125,26 +126,45 @@ firebase apps:sdkconfig ANDROID <ANDROID_APP_ID> --project tabakpp-ff036 -o andr
    VITE_FIREBASE_APPCHECK_SITE_KEY=your_recaptcha_enterprise_site_key
    ```
 3. For local dev, either register a debug token (`VITE_FIREBASE_APPCHECK_DEBUG_TOKEN=...`) or leave unset — App Check only initializes when the site key is present. Never save tokens in repository log files.
-4. Leave Console → App Check → APIs → **Cloud Firestore** and **Firebase
-   Authentication** on **Unenforced**. See "Why App Check is not enforced" below
-   before changing this — enforcing today locks out every Android install.
+4. Console → App Check → APIs shows **Cloud Firestore** and **Firebase
+   Authentication** as **Enforced**. Web attests through reCAPTCHA Enterprise
+   and works for any visitor. Read the Android consequence below before
+   assuming the same holds there.
 
-### Why App Check is not enforced
+### App Check is enforced — and that breaks sideloaded Android
 
-App Check is wired on both clients but is **deliberately unenforced**, so it is
-not part of the security boundary. Two facts drive that:
+Current state, read from the App Check API rather than assumed:
 
-- **Enforcement is per Firebase product, not per platform.** Setting Cloud
-  Firestore to Enforced rejects unattested requests from *every* client. There
-  is no way to enforce for web only.
-- **Android cannot attest in this distribution model.** Release APKs ship via
-  GitHub Releases. The `DebugAppCheckProviderFactory` used by both build types
-  mints a random per-install token that must be pasted into the Console by hand,
-  which obviously does not scale past the maintainer's own devices.
+```
+firestore.googleapis.com        ENFORCED
+identitytoolkit.googleapis.com  ENFORCED
+firebasestorage.googleapis.com  UNENFORCED
+```
 
-So enforcing would break every sideloaded install, including yours. Until that
-changes, the controls that actually hold are the **Firestore rules** and the
-**API key restrictions** above — not App Check.
+Enforcement is per Firebase product and applies to every client at once; there
+is no per-platform switch. So this is a live control, not decoration — and it
+has a sharp edge on Android.
+
+Release APKs use `DebugAppCheckProviderFactory`, which mints a **random secret
+per install**. That secret must be pasted into Console → App Check → Manage
+debug tokens before the install can attest. With Authentication enforced, an
+unregistered token means **sign-in fails outright**.
+
+Two consequences that are easy to miss:
+
+- **Reinstalling regenerates the token.** Upgrading in place keeps it; a fresh
+  install (or clearing app data) does not, and sign-in stops working until the
+  new secret is registered.
+- **Anyone else who downloads the APK cannot use it.** Their token is not on
+  your allow list and they have no way to add it. The Android build effectively
+  only works on the maintainer's own devices.
+
+The Firestore rules and API key restrictions above still carry the owner-scoping
+and origin-locking. App Check adds attestation on top — genuinely, for web; only
+for registered devices on Android.
+
+**The real fix is Play Integrity** (below), which attests without a per-device
+allow list.
 
 **Upgrade path (if this ever ships properly).** Contrary to a common
 misconception, Play Integrity *does* support apps distributed outside Google
