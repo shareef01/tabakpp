@@ -28,7 +28,6 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   const [isEndingDay, setIsEndingDay] = useState(false);
   const [registryError, setRegistryError] = useState(null);
   /** Optimistic overlay: display = server + pendingDelta (Android RegistryViewModel parity). */
-  const counterInFlightRef = useRef(0);
   const latestServerCountsRef = useRef({});
   const pendingDeltaRef = useRef({});
   const activeCountsRef = useRef(activeCounts);
@@ -91,7 +90,6 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     setProfileSettings(null);
     setLoading(true);
     setRegistryError(null);
-    counterInFlightRef.current = 0;
     latestServerCountsRef.current = {};
     pendingDeltaRef.current = {};
 
@@ -188,13 +186,8 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     }
   }, []);
 
-  const settleCounterFlight = useCallback(() => {
-    counterInFlightRef.current = Math.max(0, counterInFlightRef.current - 1);
-  }, []);
-
   const increment = useCallback(async (id) => {
     if (!user) return;
-    counterInFlightRef.current += 1;
     adjustPending(id, 1);
     publishCounterOverlay();
     try {
@@ -212,14 +205,11 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       adjustPending(id, -1);
       publishCounterOverlay();
       throw e;
-    } finally {
-      settleCounterFlight();
     }
-  }, [user?.uid, runMutation, settleCounterFlight, adjustPending, publishCounterOverlay]);
+  }, [user?.uid, runMutation, adjustPending, publishCounterOverlay]);
 
   const decrement = useCallback(async (id) => {
     if (!user || (activeCountsRef.current[id] || 0) <= 0) return;
-    counterInFlightRef.current += 1;
     adjustPending(id, -1);
     publishCounterOverlay();
     try {
@@ -237,10 +227,8 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       adjustPending(id, 1);
       publishCounterOverlay();
       throw e;
-    } finally {
-      settleCounterFlight();
     }
-  }, [user?.uid, runMutation, settleCounterFlight, adjustPending, publishCounterOverlay]);
+  }, [user?.uid, runMutation, adjustPending, publishCounterOverlay]);
 
   const endDay = useCallback(async () => {
     if (!user || isEndingDayRef.current) return;

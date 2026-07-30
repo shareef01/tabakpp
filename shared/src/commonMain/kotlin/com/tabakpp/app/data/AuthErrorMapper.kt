@@ -29,8 +29,11 @@ object AuthErrorMapper {
                     "Google Sign-In is not available on this device."
                 lower.contains("cancelled") || lower.contains("canceled") ->
                     "Sign-in cancelled."
+                // Misconfigured API-key/SHA-1 restrictions. The remedy is the
+                // maintainer's, not the user's — don't print build internals into
+                // a login screen (see SETUP_GUIDE.md → Android API key).
                 lower.contains("are blocked") || lower.contains("android client") ->
-                    "This Android build is blocked by Firebase. Add the debug SHA-1 to the Android API key."
+                    "Sign-in is unavailable for this app build. Please try again later."
                 lower.contains("password") || lower.contains("credential") ||
                     lower.contains("user-not-found") || lower.contains("invalid") ->
                     "Invalid email or password."

@@ -34,17 +34,31 @@ class ErrorAndInputPolicyTest {
     }
 
     @Test
-    fun loginMapsCancellationAndBlockedAndroidClient() {
+    fun loginMapsCancellation() {
         assertEquals(
             "Sign-in cancelled.",
             AuthErrorMapper.map(Exception("Google sign-in cancelled"), AuthErrorMapper.Context.LOGIN)
         )
-        assertTrue(
-            AuthErrorMapper.map(
-                Exception("An internal error has occurred. [ Requests from this Android client application com.tabakpp.app are blocked. ]"),
-                AuthErrorMapper.Context.LOGIN
-            ).contains("blocked", ignoreCase = true)
+    }
+
+    @Test
+    fun blockedAndroidClientErrorLeaksNoBuildInternals() {
+        // A misconfigured API key / SHA-1 restriction is the maintainer's problem.
+        // The user gets a plain retry message — never the package name, the raw
+        // Firebase text, or remediation steps naming SHA-1 / API keys.
+        val mapped = AuthErrorMapper.map(
+            Exception(
+                "An internal error has occurred. [ Requests from this Android client " +
+                    "application com.tabakpp.app are blocked. ]"
+            ),
+            AuthErrorMapper.Context.LOGIN
         )
+
+        assertFalse(mapped.contains("SHA", ignoreCase = true))
+        assertFalse(mapped.contains("API key", ignoreCase = true))
+        assertFalse(mapped.contains("com.tabakpp.app"))
+        assertFalse(mapped.contains("internal error", ignoreCase = true))
+        assertTrue(mapped.isNotBlank())
     }
 
     @Test
