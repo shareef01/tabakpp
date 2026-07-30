@@ -13,7 +13,9 @@ const BURN_TRANSITION = { duration: 0.8, ease: [0.16, 1, 0.3, 1] };
  * 2. Textured Verge: Vertical material lines on paper.
  * 3. Laser Ember: Sharp vertical neon ignition strip.
  */
-export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type, isLarge }) => {
+// `_type` is accepted and ignored so callers can spread a tracker config in
+// uniformly across gauge variants.
+export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, isLarge }) => {
   const progress = Math.min(1, count / (limit || 1));
   // Slightly longer filter → shorter paper body for a stubbier silhouette
   const filterRatio = 0.3;

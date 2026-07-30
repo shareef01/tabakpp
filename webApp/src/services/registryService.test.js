@@ -94,10 +94,14 @@ vi.mock('firebase/firestore', () => {
 
   const runTransaction = async (_db, fn) => {
     const tx = {
+      // The real client SDK's Transaction.get takes a DocumentReference ONLY.
+      // Handing it a Query/CollectionReference throws
+      // "TypeError: Cannot read properties of undefined (reading 'path')"
+      // because the SDK dereferences ref._key. This fake must refuse the same
+      // shapes, or it silently blesses a call that always fails in production.
       get: async (ref) => {
-        if (ref && ref.__collection) {
-          const docs = collectionDocs(ref.path);
-          return { docs, empty: docs.length === 0, size: docs.length };
+        if (!ref || !ref.__doc) {
+          throw new TypeError("Cannot read properties of undefined (reading 'path')");
         }
         return snap(ref.path);
       },
