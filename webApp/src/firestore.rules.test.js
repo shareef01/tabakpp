@@ -196,4 +196,39 @@ describe('Firestore ownership and write paths', () => {
       ryoYield: deleteField(),
     }));
   });
+
+  it('refuses to let a settings write rewrite createdAt', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), {
+        ...emptyProfile,
+        createdAt: new Date('2020-01-01T00:00:00Z'),
+      });
+    });
+
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      name: 'Alice',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    }));
+  });
+
+  it('pins logDate on a history edit but allows re-counting the same day', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      await setDoc(doc(adminDb, 'users/alice'), emptyProfile);
+      await setDoc(doc(adminDb, 'users/alice/logs/2026-07-28_DAY'), {
+        logDate: '2026-07-28',
+        counts: { cig: 3 },
+        origin: 'DAY_RESET',
+        isArchive: true,
+      });
+    });
+
+    const db = testEnv.authenticatedContext('alice').firestore();
+    const logRef = doc(db, 'users/alice/logs/2026-07-28_DAY');
+
+    await assertSucceeds(updateDoc(logRef, { counts: { cig: 5 } }));
+    // Relabelling the day would move counts while lifetimeAggregates stayed put.
+    await assertFails(updateDoc(logRef, { logDate: '2026-07-01' }));
+  });
 });
