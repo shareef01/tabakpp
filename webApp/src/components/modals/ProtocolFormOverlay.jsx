@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { X, Activity, Cigarette, Wind } from 'lucide-react';
 import { Input, UI, Button } from '../Common';
 import { cn } from '../../utils/utils';
-import { sanitizeString } from '../../utils/security';
+import { sanitizeTrackerName, MAX_TRACKER_NAME } from '../../utils/security';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
 
@@ -44,18 +44,21 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
 
   const handleSubmit = async (ev) => {
     ev?.preventDefault?.();
-    const cleanName = sanitizeString(name);
+    const cleanName = sanitizeTrackerName(name);
     if (!cleanName) {
       setError('Enter a counter name.');
       return;
     }
+    // `parseInt(x) || 20` turned a deliberate limit of 0 into 20, because 0 is
+    // falsy. Fall back only when the field is genuinely unparseable.
+    const parsedLimit = parseInt(limit, 10);
     const parsedPrice = parseFloat(String(pricePerUnit).replace(',', '.'));
     setSaving(true);
     setError('');
     try {
       await onApply({
         name: cleanName,
-        limit: parseInt(limit, 10) || 20,
+        limit: Number.isFinite(parsedLimit) ? parsedLimit : 20,
         type,
         isPrimaryTracked: isPrimary,
         isFinanciallyTracked: isFinancial,
@@ -102,7 +105,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
 
         <form className="space-y-10" onSubmit={handleSubmit}>
           <div>
-            <Input label="Counter name" value={name} onChange={(value) => { setName(value); if (error) setError(''); }} isDark placeholder="e.g. Cigarettes" autoComplete="off" name="counter-name" enterKeyHint="next" aria-invalid={!!error} aria-describedby={error ? 'counter-form-error' : undefined} />
+            <Input label="Counter name" value={name} onChange={(value) => { setName(value); if (error) setError(''); }} isDark placeholder="e.g. Cigarettes" autoComplete="off" name="counter-name" maxLength={MAX_TRACKER_NAME} enterKeyHint="next" aria-invalid={!!error} aria-describedby={error ? 'counter-form-error' : undefined} />
             {error && <p id="counter-form-error" role="alert" className="mt-2 text-[10px] font-bold text-rose-400">{error}</p>}
           </div>
 
