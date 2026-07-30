@@ -100,17 +100,21 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  Client["Signed-in client"] --> AC{"App Check<br/>reCAPTCHA / debug tokens"}
-  AC --> Auth["Firebase Auth"]
+  Client["Signed-in client"] --> Key["API key restrictions<br/>package + SHA · HTTP referrer"]
+  Key --> Auth["Firebase Auth"]
   Auth --> Rules["Firestore rules"]
 
   Rules --> Owner["request.auth.uid == userId"]
   Rules --> Split["Settings vs mutation<br/>write-path split"]
   Rules --> Shape["Schema + bounds<br/>on profile · configs · logs"]
   Rules --> Deny["Default deny<br/>/{document=**}"]
+
+  AC["App Check<br/>wired, not enforced"] -. advisory .-> Auth
 ```
 
-Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing. Web uses reCAPTCHA Enterprise App Check; Android GitHub builds use registered debug tokens (sideloaded APKs cannot use Play Integrity). Details in [SETUP_GUIDE.md](SETUP_GUIDE.md).
+Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing. Every write path is covered by rules tests run against the Firestore emulator in CI.
+
+**On App Check:** it is integrated (reCAPTCHA Enterprise on web, debug provider on Android) but deliberately **left unenforced**, so it is not part of the security boundary today. Enforcement is per Firebase product and applies to every client at once — turning it on would lock out sideloaded Android installs, which cannot attest without linking a Play Console project to the Play Integrity API. Since this app ships via GitHub Releases rather than Play, the enforceable controls are the Firestore rules above plus API key restrictions. Details and the upgrade path in [SETUP_GUIDE.md](SETUP_GUIDE.md).
 
 ## Platforms
 

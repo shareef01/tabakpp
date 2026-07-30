@@ -105,7 +105,9 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 dependencies {
     implementation(platform(libs.firebase.bom))
-    // Sideloaded GitHub APKs cannot use Play Integrity; debug provider + registered tokens.
+    // Debug provider in both build types; App Check stays unenforced as a result.
+    // Switching to Play Integrity needs a Play Console link, not a code change
+    // alone — SETUP_GUIDE.md → "Why App Check is not enforced".
     implementation(libs.firebase.appcheck.debug)
     implementation(project(":composeApp"))
     implementation(project(":shared"))
