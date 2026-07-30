@@ -140,4 +140,60 @@ describe('Firestore ownership and write paths', () => {
       activeCounts: oversized,
     }));
   });
+
+  it('allows settings updates even when existing activeCounts would fail validCountMap', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), {
+        ...emptyProfile,
+        // Legacy / invalid key that current rules reject on mutation writes.
+        activeCounts: { 'bad key!': 2 },
+      });
+    });
+
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+      name: 'Alice',
+      accent: '#10B981',
+    }));
+  });
+
+  it('allows settings updates when an existing avatar is oversized but unchanged', async () => {
+    const hugeAvatar = `data:image/jpeg;base64,${'A'.repeat(120000)}`;
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), {
+        ...emptyProfile,
+        avatar: hugeAvatar,
+      });
+    });
+
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+      name: 'Alice',
+      dayStartHour: 7,
+    }));
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      avatar: `${hugeAvatar}B`,
+    }));
+  });
+
+  it('allows stripping legacy eco fields alongside a settings change', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), {
+        ...emptyProfile,
+        ecoMode: true,
+        retailPrice: 8,
+      });
+    });
+
+    const db = testEnv.authenticatedContext('alice').firestore();
+    const { deleteField } = await import('firebase/firestore');
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+      name: 'Alice',
+      ecoMode: deleteField(),
+      retailPrice: deleteField(),
+      retailQty: deleteField(),
+      ryoPrice: deleteField(),
+      ryoYield: deleteField(),
+    }));
+  });
 });

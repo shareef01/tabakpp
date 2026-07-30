@@ -165,15 +165,28 @@ service cloud.firestore {
         && (!changed.hasAny(['smokingUnitsMigrated']) || d.smokingUnitsMigrated is bool);
     }
 
-    // Settings path: validate settings shape on the resulting doc, but do not
-    // require hasOnly — legacy unknown keys must not brick settings saves.
-    // Still forbid touching counters/aggregates via isSettingsOnlyUpdate().
+    // Settings path: validate only fields this write changes (parity with
+    // validMutationUpdate). Do NOT re-check activeCounts / aggregates / an
+    // existing oversized avatar — those would brick every settings save.
     function validSettingsUpdate() {
       let d = request.resource.data;
-      return validSettingsShape(d)
-        && (!('lifetimeAggregates' in d) || validLifetimeAggregates(d.lifetimeAggregates))
-        && (!('activeCounts' in d) || validCountMap(d.activeCounts))
-        && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool);
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return (!changed.hasAny(['name']) || (d.name is string && d.name.size() <= 100))
+        && (!changed.hasAny(['accent'])
+          || (d.accent is string && d.accent.matches('^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$')))
+        && (!changed.hasAny(['purchaseType']) || d.purchaseType in ['PACK', 'POUCH'])
+        && (!changed.hasAny(['dayStartHour'])
+          || (isWholeNumber(d.dayStartHour) && d.dayStartHour >= 0 && d.dayStartHour <= 23))
+        && (!changed.hasAny(['unitPrice'])
+          || (isNumber(d.unitPrice) && d.unitPrice >= 0 && d.unitPrice <= 1000))
+        && (!changed.hasAny(['pouchPrice'])
+          || (isNumber(d.pouchPrice) && d.pouchPrice >= 0 && d.pouchPrice <= 10000))
+        && (!changed.hasAny(['estimatedYield'])
+          || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
+        && (!changed.hasAny(['widgetSize']) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
+        && (!changed.hasAny(['avatar'])
+          || d.avatar == null
+          || (d.avatar is string && d.avatar.size() <= 100000));
     }
 
     // Spark-safe defense (no Cloud Functions): settings writes cannot touch
