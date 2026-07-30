@@ -26,15 +26,23 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import com.tabakpp.app.composeapp.theme.*
 
 /**
  * Platinum Modal Frame with Industrial Depth.
  */
+/**
+ * @param paneTitle announced by TalkBack when the dialog opens. Compose's
+ * [Dialog] traps focus but says nothing about what just appeared, so without
+ * this a screen-reader user is dropped into an unnamed surface. This is the
+ * Android counterpart to the web's `useDialogA11y` contract.
+ */
 @Composable
 fun ModalFrame(
     onDismissRequest: () -> Unit,
+    paneTitle: String? = null,
     content: @Composable () -> Unit
 ) {
     Dialog(
@@ -70,6 +78,13 @@ fun ModalFrame(
                     .padding(16.dp)
                     .widthIn(max = 500.dp)
                     .heightIn(max = 720.dp)
+                    .then(
+                        if (paneTitle != null) {
+                            Modifier.semantics { this.paneTitle = paneTitle }
+                        } else {
+                            Modifier
+                        }
+                    )
                     .tabakCardShadow(MaterialTheme.shapes.large),
                 shape = MaterialTheme.shapes.large,
                 color = Color(0xFF0F0F12),
@@ -99,7 +114,10 @@ fun ConfirmModal(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    ModalFrame(onDismissRequest = { if (!isLoading) onDismiss() }) {
+    ModalFrame(
+        onDismissRequest = { if (!isLoading) onDismiss() },
+        paneTitle = title
+    ) {
         Box(modifier = Modifier.padding(32.dp)) {
             if (!isLoading) {
                 IconButton(
@@ -239,13 +257,24 @@ fun SkeletonBox(
     )
 }
 
+/**
+ * Mirrors the real Track layout — a two-column card grid with the metric banner
+ * spanning underneath. The previous version stacked full-width blocks, so every
+ * card jumped sideways the moment data arrived.
+ */
 @Composable
 fun TrackSkeleton() {
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        SkeletonBox(modifier = Modifier.fillMaxWidth().height(80.dp).padding(bottom = 24.dp))
-        SkeletonBox(modifier = Modifier.fillMaxWidth().height(260.dp).padding(bottom = 16.dp))
-        SkeletonBox(modifier = Modifier.fillMaxWidth().height(260.dp).padding(bottom = 16.dp))
-        Spacer(modifier = Modifier.weight(1f))
+    Column(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        repeat(2) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                SkeletonBox(modifier = Modifier.weight(1f).height(210.dp))
+                SkeletonBox(modifier = Modifier.weight(1f).height(210.dp))
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
         SkeletonBox(modifier = Modifier.fillMaxWidth().height(120.dp))
     }
 }
