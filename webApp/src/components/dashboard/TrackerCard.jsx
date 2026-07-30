@@ -1,15 +1,37 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Plus, Minus } from 'lucide-react';
 import { cn } from '../../utils/utils';
 import { CigaretteGauge } from '../gauges/Gauges';
 import { UI } from '../Common';
 
-/** Fire on pointer down for zero click-delay; ignore non-primary mouse buttons. */
-const bindTap = (handler) => (e) => {
-  if (e.pointerType === 'mouse' && e.button !== 0) return;
-  e.preventDefault();
-  handler?.();
+/** Ignore a real tap's trailing click for this long (ms). */
+const CLICK_SUPPRESS_MS = 700;
+
+/**
+ * Fire on pointer down for zero click-delay, but keep a real `onClick` too.
+ *
+ * Screen readers, Switch Access and Voice Control activate a button by
+ * dispatching a synthetic `click` — they never produce a `pointerdown`. With a
+ * pointer-only binding the button was focusable and correctly labelled but did
+ * nothing when activated, making the app's primary action unusable with
+ * assistive tech. The timestamp guard stops a genuine tap counting twice, since
+ * cancelling `pointerdown` suppresses compatibility mouse events but not `click`.
+ */
+const useTapHandlers = (handler) => {
+  const lastPointerAt = useRef(0);
+  return useMemo(() => ({
+    onPointerDown: (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      lastPointerAt.current = Date.now();
+      e.preventDefault();
+      handler?.();
+    },
+    onClick: () => {
+      if (Date.now() - lastPointerAt.current < CLICK_SUPPRESS_MS) return;
+      handler?.();
+    },
+  }), [handler]);
 };
 
 /**
@@ -37,8 +59,10 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
       : 'w-12 h-12 md:w-14 md:h-14';
   const iconPx = isSmall ? 18 : isLarge ? 24 : 20;
 
-  const handleInc = useCallback(bindTap(() => onInc(config?.id)), [onInc, config?.id]);
-  const handleDec = useCallback(bindTap(() => onDec(config?.id)), [onDec, config?.id]);
+  const incAction = useCallback(() => onInc?.(config?.id), [onInc, config?.id]);
+  const decAction = useCallback(() => onDec?.(config?.id), [onDec, config?.id]);
+  const incHandlers = useTapHandlers(incAction);
+  const decHandlers = useTapHandlers(decAction);
 
   return (
     <motion.div
@@ -52,6 +76,17 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
         isLimitReached ? 'bg-red-950/10 border-red-500/25' : 'bg-bg-card border-white/[0.06] hover:border-white/[0.1]'
       )}
     >
+      {/*
+        Counting is the app's main action, so the result has to be spoken.
+        The visible number alone is silent to a screen reader — the user taps
+        and hears nothing until they navigate back to it manually.
+      */}
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {`${config?.name || 'Counter'}: ${count} of ${limit}, ${
+          isOver ? `${count - limit} over limit` : `${remaining} left`
+        }`}
+      </span>
+
       <div className="flex flex-col gap-3 w-full">
         {/* Header */}
         <div className="w-full flex items-center justify-between gap-2">
@@ -80,13 +115,7 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
         <div className="w-full flex items-center justify-center gap-4 md:gap-5 pt-0.5">
           <button
             type="button"
-            onPointerDown={handleDec}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onDec?.(config?.id);
-              }
-            }}
+            {...decHandlers}
             aria-label={`Decrease ${config?.name || 'counter'}`}
             className={cn(
               'rounded-full flex items-center justify-center transition-transform duration-75 active:scale-90 border aspect-square shrink-0 touch-manipulation',
@@ -127,13 +156,7 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
 
           <button
             type="button"
-            onPointerDown={handleInc}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onInc?.(config?.id);
-              }
-            }}
+            {...incHandlers}
             aria-label={`Increase ${config?.name || 'counter'}`}
             className={cn(
               'rounded-full flex items-center justify-center transition-transform duration-75 active:scale-95 text-black shadow-lg aspect-square shrink-0 touch-manipulation',

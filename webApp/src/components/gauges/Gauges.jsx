@@ -28,7 +28,10 @@ export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, i
   const filterColors = 'bg-gradient-to-b from-[#F4A261] to-[#E76F3C]';
 
   return (
-    <div className={cn(
+    // Purely decorative: the count, limit and over/under state are already
+    // announced by the live region in TrackerCard, so exposing this stack of
+    // nested divs to a screen reader is noise between the two buttons.
+    <div aria-hidden="true" className={cn(
       "relative w-full max-w-[220px] mx-auto rounded-full bg-black/40 border border-white/[0.08] shadow-inner p-1.5 overflow-hidden transition-all duration-700",
       isLarge ? "h-16 md:h-[4.5rem]" : "h-14 md:h-16",
       ignited && "border-red-500/20 bg-red-950/20"
