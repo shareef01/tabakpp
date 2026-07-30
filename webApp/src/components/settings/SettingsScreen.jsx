@@ -223,6 +223,23 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
     }
   };
 
+  /**
+   * Commit whatever the slider settles on, regardless of how it was moved.
+   *
+   * This previously fired only from onMouseUp / onTouchEnd / onKeyUp, which
+   * missed two cases: ArrowUp and ArrowDown also adjust a range input but were
+   * absent from the key list, and assistive tech that sets the value
+   * programmatically emits no pointer or key event at all. In both the hour
+   * changed on screen and was never saved, which reads as a successful edit.
+   */
+  const commitDayStartRef = useRef(commitDayStart);
+  commitDayStartRef.current = commitDayStart;
+  useEffect(() => {
+    if (pendingDayStart === (settings.dayStartHour ?? 6)) return undefined;
+    const timer = setTimeout(() => commitDayStartRef.current(pendingDayStart), 600);
+    return () => clearTimeout(timer);
+  }, [pendingDayStart, settings.dayStartHour]);
+
   const handleApplyName = async () => {
     const name = sanitizeString(displayName);
     if (!name) {
@@ -584,14 +601,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 step={1}
                 value={pendingDayStart}
                 aria-label="Day start hour"
+                // Commit is handled by the settle effect above, so every input
+                // method — drag, any arrow key, or assistive tech — saves.
                 onChange={(e) => setPendingDayStart(Number(e.target.value))}
-                onMouseUp={(e) => commitDayStart(Number(e.currentTarget.value))}
-                onTouchEnd={(e) => commitDayStart(Number(e.currentTarget.value))}
-                onKeyUp={(e) => {
-                  if (['ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
-                    commitDayStart(Number(e.currentTarget.value));
-                  }
-                }}
                 className="w-full h-2 rounded-full appearance-none cursor-pointer accent-[var(--accent)]
                   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
                   [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:shadow-[0_0_0_3px_rgba(0,0,0,0.45)]
