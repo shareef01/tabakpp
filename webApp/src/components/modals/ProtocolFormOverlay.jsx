@@ -110,9 +110,14 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
           </div>
 
           <div className="flex flex-col gap-2">
-            <span className={UI.LABEL}>Daily Quota</span>
+            {/* A <span> is not a label: without htmlFor this field announced as
+                "edit box, blank" to a screen reader. */}
+            <label htmlFor="counter-limit" className={UI.LABEL}>Daily Quota</label>
             <input
+              id="counter-limit"
               type="number"
+              min="0"
+              max="10000"
               value={limit}
               onChange={(e) => setLimit(e.target.value)}
               className={UI.INPUT}
@@ -165,11 +170,13 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
             </label>
             {isFinancial && (
               <div className="flex flex-col gap-2 pt-2">
-                <span className={UI.LABEL}>Unit price (€)</span>
+                <label htmlFor="counter-price" className={UI.LABEL}>Unit price (€)</label>
                 <input
+                  id="counter-price"
                   type="number"
                   step="0.01"
                   min="0"
+                  max="1000"
                   value={pricePerUnit}
                   onChange={(e) => setPricePerUnit(e.target.value)}
                   className={UI.INPUT}
