@@ -4,21 +4,41 @@
  */
 
 /**
- * Sanitizes user-generated strings to prevent XSS and NoSQL injection patterns.
- * Legacy support for 'sanitizeString' alias.
- * @param {string} str - Raw input
+ * Field length caps. These are not cosmetic — firestore.rules rejects a write
+ * that exceeds them, so truncating here is what turns "Save blocked by security
+ * rules" into a silent, successful save. Keep in lock-step with
+ * shared/.../InputSanitizer.kt and the bounds in firestore.rules.
+ */
+export const MAX_DISPLAY_NAME = 100; // rules: users.name.size() <= 100
+export const MAX_TRACKER_NAME = 80; // rules: configs.name.size() <= 80
+
+// ISO control characters (C0 + C1) plus angle brackets, matching Kotlin's
+// Char.isISOControl() filter in InputSanitizer.text.
+// eslint-disable-next-line no-control-regex
+const UNSAFE_CHARS = /[\u0000-\u001F\u007F-\u009F<>]/g;
+
+/**
+ * Sanitizes a user-supplied string: drops control characters and angle
+ * brackets, trims, then truncates to `maxLength`.
+ *
+ * Deliberately does NOT rewrite `$`. Firestore has no query-operator injection
+ * surface for field values (unlike Mongo), and the old `$` → `﹩` substitution
+ * silently corrupted legitimate input — a tracker named "$5 pack" saved from
+ * the web no longer matched the same name saved from Android.
+ *
+ * @param {string} str Raw input
+ * @param {number} [maxLength] Cap; defaults to the display-name limit
  * @returns {string} Sanitized output
  */
-export const sanitizeInput = (str) => {
+export const sanitizeInput = (str, maxLength = MAX_DISPLAY_NAME) => {
   if (typeof str !== 'string') return '';
-  return str
-    .replace(/[<>]/g, '') // Strips HTML tags
-    .replace(/\$/g, '﹩') // Neutralizes NoSQL operator characters
-    .trim()
-    .substring(0, 100); // Enforce reasonable length limits
+  return str.replace(UNSAFE_CHARS, '').trim().substring(0, maxLength);
 };
 
 export const sanitizeString = sanitizeInput;
+
+/** Tracker/counter name — 80 chars to match firestore.rules validConfig. */
+export const sanitizeTrackerName = (str) => sanitizeInput(str, MAX_TRACKER_NAME);
 
 const looksLikeImage = (file) => {
   const type = (file.type || '').toLowerCase();

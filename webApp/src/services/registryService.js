@@ -5,6 +5,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { SmokingCalculator } from '../utils/smokingCalculator';
+import { sanitizeTrackerName } from '../utils/security';
 
 /** Doc id always wins over any payload `id` field (Android parity). */
 const withDocId = (d) => ({ ...d.data(), id: d.id });
@@ -29,6 +30,29 @@ const normalizeCounts = (counts) => Object.fromEntries(
     )
     .slice(0, 50)
 );
+
+const clampNumber = (value, min, max, fallback) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+};
+
+/**
+ * Coerce a tracker config into the bounds firestore.rules enforces, mirroring
+ * Android RegistryViewModel.addTracker/updateTracker. Without this, an
+ * out-of-range limit or price surfaces to the user as "Save blocked by security
+ * rules" instead of being quietly clamped like it is on mobile.
+ */
+const sanitizeConfigPayload = (data = {}) => {
+  const out = { ...data };
+  if ('name' in out) out.name = sanitizeTrackerName(out.name);
+  if ('limit' in out) out.limit = Math.round(clampNumber(out.limit, 0, 10_000, 20));
+  if ('order' in out) out.order = Math.round(clampNumber(out.order, 0, 1_000, 0));
+  if ('pricePerUnit' in out && out.pricePerUnit !== null) {
+    out.pricePerUnit = clampNumber(out.pricePerUnit, 0, 1_000, 0.5);
+  }
+  return out;
+};
 
 /** Absolute lifetime contribution of a counts map (Android RegistryMutations.contribution). */
 const contributionFrom = (counts, configs, price) => {
@@ -81,11 +105,18 @@ export const RegistryService = {
 
   addProtocol: async (uid, data) => {
     const ref = doc(collection(db, 'users', uid, 'configs'));
-    return setDoc(ref, { ...data, id: ref.id, createdAt: serverTimestamp() });
+    return setDoc(ref, {
+      ...sanitizeConfigPayload(data),
+      id: ref.id,
+      createdAt: serverTimestamp(),
+    });
   },
 
   updateProtocol: async (uid, pid, data) => {
-    return updateDoc(doc(db, 'users', uid, 'configs', pid), { ...data, updatedAt: serverTimestamp() });
+    return updateDoc(doc(db, 'users', uid, 'configs', pid), {
+      ...sanitizeConfigPayload(data),
+      updatedAt: serverTimestamp(),
+    });
   },
 
   deleteProtocol: async (uid, pid) => {
@@ -224,12 +255,13 @@ export const RegistryService = {
 
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', `${date}_DAY`);
+    const configIds = await listConfigIds(uid);
 
     return runTransaction(db, async (transaction) => {
       const userSnap = await transaction.get(userRef);
       if (!userSnap.exists()) return;
       const logSnap = await transaction.get(logRef);
-      const configs = await getConfigsInTransaction(transaction, uid);
+      const configs = await loadConfigsInTransaction(transaction, uid, configIds);
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
@@ -277,13 +309,14 @@ export const RegistryService = {
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const normalized = normalizeCounts(counts);
+    const configIds = await listConfigIds(uid);
 
     return runTransaction(db, async (transaction) => {
       const logSnap = await transaction.get(logRef);
       if (!logSnap.exists()) throw new Error("LOG_NOT_FOUND");
       const userSnap = await transaction.get(userRef);
       if (!userSnap.exists()) return;
-      const configs = await getConfigsInTransaction(transaction, uid);
+      const configs = await loadConfigsInTransaction(transaction, uid, configIds);
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
@@ -308,13 +341,14 @@ export const RegistryService = {
     if (!uid || !logId) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', logId);
+    const configIds = await listConfigIds(uid);
 
     return runTransaction(db, async (transaction) => {
       const logSnap = await transaction.get(logRef);
       if (!logSnap.exists()) return;
       const userSnap = await transaction.get(userRef);
       if (!userSnap.exists()) return;
-      const configs = await getConfigsInTransaction(transaction, uid);
+      const configs = await loadConfigsInTransaction(transaction, uid, configIds);
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
@@ -339,6 +373,7 @@ export const RegistryService = {
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', log.id);
     const normalizedCounts = normalizeCounts(log.counts || {});
+    const configIds = await listConfigIds(uid);
 
     return runTransaction(db, async (transaction) => {
       const existing = await transaction.get(logRef);
@@ -346,7 +381,7 @@ export const RegistryService = {
 
       const userSnap = await transaction.get(userRef);
       if (!userSnap.exists()) return;
-      const configs = await getConfigsInTransaction(transaction, uid);
+      const configs = await loadConfigsInTransaction(transaction, uid, configIds);
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
@@ -368,7 +403,10 @@ export const RegistryService = {
    */
   createManualEntry: async (uid, date, counts, unitPrice = 0.5) => {
     if (!uid || !date) throw new Error("INVALID_PAYLOAD");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("INVALID_DATE");
+    // Full calendar validation, not just the shape — firestore.rules only checks
+    // the YYYY-MM-DD pattern, so a regex-only guard here would let 2026-02-31
+    // reach Firestore. Android uses LocalDate.parse for the same reason.
+    if (!SmokingCalculator.isValidDate(date)) throw new Error("INVALID_DATE");
 
     const userRef = doc(db, 'users', uid);
     const normalized = normalizeCounts(counts);
@@ -376,11 +414,12 @@ export const RegistryService = {
     const entropy = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
     const logId = `${date}_M${now}_${entropy}`;
     const logRef = doc(db, 'users', uid, 'logs', logId);
+    const configIds = await listConfigIds(uid);
 
     return runTransaction(db, async (transaction) => {
       const userSnap = await transaction.get(userRef);
       if (!userSnap.exists()) return;
-      const configs = await getConfigsInTransaction(transaction, uid);
+      const configs = await loadConfigsInTransaction(transaction, uid, configIds);
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
@@ -445,15 +484,36 @@ async function getAllLogs(uid, pageSize = 400) {
 }
 
 /**
- * Read all configs inside the transaction via a query, so a config added
- * between a pre-transaction read and the commit is still included in the
- * financial math (closes the client-side TOCTOU window).
+ * List config ids ahead of a transaction.
+ *
+ * The web client SDK's `Transaction.get` accepts a DocumentReference ONLY —
+ * there is no query overload (that exists in the Admin SDK). Passing a Query
+ * throws `TypeError: Cannot read properties of undefined (reading 'path')`
+ * because the SDK reaches for `ref._key`. So ids are listed here, outside the
+ * transaction, and each document is read transactionally by reference in
+ * loadConfigsInTransaction. Mirrors Android
+ * FirebaseRegistryRepository.listConfigIds + Transaction.loadConfigs.
  */
-async function getConfigsInTransaction(transaction, uid) {
-  const snap = await transaction.get(
+async function listConfigIds(uid) {
+  const snap = await getDocs(
     query(collection(db, 'users', uid, 'configs'), orderBy('order', 'asc'))
   );
-  return snap.docs.map(withDocId);
+  return snap.docs.map((d) => d.id);
+}
+
+/**
+ * Re-read each config by reference inside the transaction, so config contents
+ * (price, limit, type) used for the financial math are transactionally
+ * consistent with the profile and log reads. A config created after
+ * listConfigIds is not included — same window Android accepts.
+ */
+async function loadConfigsInTransaction(transaction, uid, configIds) {
+  const out = [];
+  for (const id of configIds) {
+    const snap = await transaction.get(doc(db, 'users', uid, 'configs', id));
+    if (snap.exists()) out.push({ ...snap.data(), id });
+  }
+  return out;
 }
 
 /** Paginated collection wipe for Spark (no Admin recursive delete). */
