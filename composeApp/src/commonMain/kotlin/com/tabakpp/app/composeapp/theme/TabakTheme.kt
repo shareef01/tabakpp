@@ -6,7 +6,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 
-val LocalAccentColor = staticCompositionLocalOf { DefaultAccent }
+/**
+ * Non-static on purpose. This is fed an [animateColorAsState] value that changes
+ * every frame for the 300ms accent tween, and `staticCompositionLocalOf` skips
+ * per-read invalidation in exchange for force-recomposing the *entire* provided
+ * subtree on every change — roughly 18 whole-tree recompositions per accent tap.
+ * `compositionLocalOf` invalidates only the composables that actually read it.
+ */
+val LocalAccentColor = compositionLocalOf { DefaultAccent }
 val LocalSnackbarHostState = staticCompositionLocalOf<SnackbarHostState> { error("No SnackbarHostState provided") }
 
 @Composable
