@@ -6,6 +6,17 @@ vi.mock('../../hooks/useKeyboardInset', () => ({
   useKeyboardInset: () => 0,
 }));
 
+describe('ProtocolFormOverlay accessibility', () => {
+  // Regression: these were <span> labels with no htmlFor, so a screen reader
+  // announced both fields as an unnamed edit box.
+  it('associates a real label with every field', () => {
+    render(<ProtocolFormOverlay isOpen onClose={vi.fn()} onApply={vi.fn()} title="Create Counter" />);
+    expect(screen.getByLabelText(/counter name/i)).toBeTruthy();
+    expect(screen.getByLabelText(/daily quota/i)).toBeTruthy();
+    expect(screen.getByLabelText(/unit price/i)).toBeTruthy();
+  });
+});
+
 describe('ProtocolFormOverlay', () => {
   it('shows inline validation for blank counter names', async () => {
     const onApply = vi.fn();

@@ -256,8 +256,16 @@ private fun TrackerGrid(
             EmptyDashboard(accentColor, onAddClick)
         }
     } else {
+        // Adaptive rather than Fixed(2): a fixed column count stretched cards to
+        // absurd widths on tablets and unfolded foldables. Minimum widths are
+        // tuned per density so phones still land on the intended 1/2 columns.
+        val minCardWidth = when (widgetSize) {
+            com.tabakpp.app.data.WidgetSize.LARGE -> 340.dp
+            com.tabakpp.app.data.WidgetSize.SMALL -> 150.dp
+            else -> 170.dp
+        }
         LazyVerticalGrid(
-            columns = if (widgetSize == com.tabakpp.app.data.WidgetSize.LARGE) GridCells.Fixed(1) else GridCells.Fixed(2),
+            columns = GridCells.Adaptive(minSize = minCardWidth),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxSize(),
