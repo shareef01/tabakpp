@@ -50,6 +50,7 @@ class RegistryViewModel(
     private val _loading = MutableStateFlow(true)
     val loading = _loading.asStateFlow()
 
+    /** Already mapped to user-safe copy by [RegistryErrorMapper] in [setError]. */
     private val _error = MutableStateFlow<String?>(null)
     val error = _error.asStateFlow()
 
@@ -61,7 +62,6 @@ class RegistryViewModel(
     // stale mid-flight snapshot cannot rewind burst taps.
     private val _activeCounts = MutableStateFlow<Map<String, Double>>(emptyMap())
     val activeCounts: StateFlow<Map<String, Double>> = _activeCounts.asStateFlow()
-    private var counterInFlight = 0
     private var latestServerCounts: Map<String, Double> = emptyMap()
     private val pendingDelta = mutableMapOf<String, Double>()
 
@@ -97,10 +97,6 @@ class RegistryViewModel(
     )
     val localAccent = _localAccent.asStateFlow()
 
-    val friendlyError = _error.map { raw ->
-        raw
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
-
     init {
         // Refresh tracking day periodically
         viewModelScope.launch {
@@ -108,9 +104,8 @@ class RegistryViewModel(
                 val profile = userProfile.value
                 val dayStartHour = profile?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR
                 _trackingDay.value = SmokingCalculator.getTrackingDate(
-                    now = Clock.System.now(), 
-                    dayStartHour = dayStartHour,
-                    timeZone = kotlinx.datetime.TimeZone.currentSystemDefault()
+                    now = Clock.System.now(),
+                    dayStartHour = dayStartHour
                 )
                 delay(30000) // 30 seconds
             }
@@ -171,6 +166,26 @@ class RegistryViewModel(
                 publishCounterOverlay()
             }
         }
+
+        // Release the settings write-chain baseline as soon as the server echoes
+        // back exactly what we last submitted.
+        //
+        // lastSubmittedProfile exists so a burst of local edits chains off the
+        // in-flight value instead of a not-yet-updated snapshot. But it was never
+        // cleared, so it pinned this device's local view forever: a settings
+        // change made on another device got silently reverted by the next edit
+        // here. Clearing it on *any* snapshot would reintroduce the burst bug (a
+        // stale snapshot could land between two rapid edits), so clear it only on
+        // a snapshot that matches our own write — that is the confirmation our
+        // value landed, after which server state is the better baseline.
+        viewModelScope.launch {
+            userProfile.collect { profile ->
+                val submitted = lastSubmittedProfile
+                if (profile != null && submitted != null && sameSettings(profile, submitted)) {
+                    lastSubmittedProfile = null
+                }
+            }
+        }
     }
 
     val metrics: StateFlow<SmokingCalculator.GlobalMetrics?> = combine(
@@ -189,7 +204,6 @@ class RegistryViewModel(
 
     fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
         val uid = authUser.value?.uid ?: return
-        counterInFlight += 1
         adjustPending(trackerId, 1.0)
         publishCounterOverlay()
         viewModelScope.launch {
@@ -207,8 +221,6 @@ class RegistryViewModel(
                 adjustPending(trackerId, -1.0)
                 publishCounterOverlay()
                 setError(e, "Could not update the counter. Try again.")
-            } finally {
-                settleCounterFlight()
             }
         }
     }
@@ -221,7 +233,6 @@ class RegistryViewModel(
         val uid = authUser.value?.uid ?: return
         if ((_activeCounts.value[trackerId] ?: 0.0) <= 0.0) return // Prevent negative counts
 
-        counterInFlight += 1
         adjustPending(trackerId, -1.0)
         publishCounterOverlay()
         viewModelScope.launch {
@@ -236,8 +247,6 @@ class RegistryViewModel(
                 adjustPending(trackerId, 1.0)
                 publishCounterOverlay()
                 setError(e, "Could not update the counter. Try again.")
-            } finally {
-                settleCounterFlight()
             }
         }
     }
@@ -391,16 +400,23 @@ class RegistryViewModel(
         }
     }
 
+    /** Compares only the fields [RegistryRepository.updateProfileSettings] writes. */
+    private fun sameSettings(a: UserProfile, b: UserProfile): Boolean =
+        a.name == b.name &&
+            a.accent == b.accent &&
+            a.widgetSize == b.widgetSize &&
+            a.purchaseType == b.purchaseType &&
+            a.unitPrice == b.unitPrice &&
+            a.pouchPrice == b.pouchPrice &&
+            a.estimatedYield == b.estimatedYield &&
+            a.dayStartHour == b.dayStartHour &&
+            a.avatar == b.avatar
+
     fun updateDisplayName(name: String) {
         viewModelScope.launch {
             authRepository.updateDisplayName(name)
                 .onFailure { setError(it, "Could not update your display name. Try again.") }
         }
-    }
-
-    /** One counter write finished. Overlay already tracks pendingDelta. */
-    private fun settleCounterFlight() {
-        counterInFlight = maxOf(0, counterInFlight - 1)
     }
 
     private fun setError(throwable: Throwable, fallback: String) {

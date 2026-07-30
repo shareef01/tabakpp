@@ -111,7 +111,7 @@ fun MainApp(registryViewModel: RegistryViewModel, accentColor: Color, snackbarHo
     val authViewModel = koinInject<AuthViewModel>()
     val isOnline by registryViewModel.isOnline.collectAsStateWithLifecycle()
     val profile by registryViewModel.userProfile.collectAsStateWithLifecycle()
-    val registryError by registryViewModel.friendlyError.collectAsStateWithLifecycle()
+    val registryError by registryViewModel.error.collectAsStateWithLifecycle()
 
     LaunchedEffect(registryError) {
         val message = registryError ?: return@LaunchedEffect

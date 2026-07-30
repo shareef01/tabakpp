@@ -15,7 +15,20 @@ object SmokingCalculator {
         return activeCounts?.values?.any { it > 0 } ?: false
     }
 
-    fun getTrackingDate(now: Instant, dayStartHour: Int = DEFAULT_DAY_START_HOUR, timeZone: TimeZone = TimeZone.UTC): String {
+    /**
+     * Tracking day for [now]: before [dayStartHour] the session still belongs to
+     * the previous day (night-owl mode).
+     *
+     * [timeZone] defaults to the device zone because the tracking day is a
+     * *local* concept — a UTC default silently shifted the day by one for
+     * anyone east of Greenwich after midnight, and by one the other way for the
+     * Americas. Pass an explicit zone in tests.
+     */
+    fun getTrackingDate(
+        now: Instant,
+        dayStartHour: Int = DEFAULT_DAY_START_HOUR,
+        timeZone: TimeZone = TimeZone.currentSystemDefault()
+    ): String {
         val localDateTime = now.toLocalDateTime(timeZone)
         
         val date = if (localDateTime.hour < dayStartHour) {

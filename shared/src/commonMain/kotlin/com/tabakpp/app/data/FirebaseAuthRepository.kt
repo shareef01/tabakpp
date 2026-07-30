@@ -102,7 +102,7 @@ class FirebaseAuthRepository(
                 return@runCatching
             } catch (e: Exception) {
                 lastError = e
-                if (attempt < 2) kotlinx.coroutines.delay(400L * (attempt + 1))
+                if (attempt < 2) delay(400L * (attempt + 1))
             }
         }
         // Data is gone but Auth user remains — drop the local session so the
