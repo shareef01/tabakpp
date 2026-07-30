@@ -12,6 +12,8 @@
 <p align="center">
   <a href="https://tabakpp.web.app"><strong>Open the web app</strong></a>
   ·
+  <a href="https://github.com/shareef01/tabakpp/releases/latest"><strong>Download Android APK</strong></a>
+  ·
   <a href="SETUP_GUIDE.md">Setup</a>
   ·
   <a href="PRIVACY.md">Privacy</a>
@@ -59,7 +61,7 @@ Two clients, one backend. Shared domain logic on Android lives in a Kotlin Multi
 |---|---|
 | **Android** | Kotlin · Jetpack Compose (Compose Multiplatform UI) · GitLive Firebase |
 | **Web** | React 18 · Vite · Tailwind · Firebase JS SDK · installable PWA |
-| **Backend** | Firebase Auth (email + Google) · Cloud Firestore · App Check on release |
+| **Backend** | Firebase Auth (email + Google) · Cloud Firestore · App Check |
 | **Shared (KMP)** | Models, repositories, day-rollover / streak / spend math |
 
 Realtime listeners keep Track / History / Settings in sync across devices. Firestore rules gate reads and writes to the signed-in owner.
@@ -102,7 +104,7 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  Client["Signed-in client"] --> AC{"App Check<br/>debug tokens / reCAPTCHA"}
+  Client["Signed-in client"] --> AC{"App Check<br/>reCAPTCHA / debug tokens"}
   AC --> Auth["Firebase Auth"]
   Auth --> Rules["Firestore rules"]
 
@@ -112,15 +114,15 @@ flowchart LR
   Rules --> Deny["Default deny<br/>/{document=**}"]
 ```
 
-Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing. App Check and API-key restrictions are the Spark-side abuse controls — details in [SETUP_GUIDE.md](SETUP_GUIDE.md).
+Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing. Web uses reCAPTCHA Enterprise App Check; Android GitHub builds use registered debug tokens (sideloaded APKs cannot use Play Integrity). Details in [SETUP_GUIDE.md](SETUP_GUIDE.md).
 
 ## Platforms
 
 | | |
 |---|---|
-| **Android** | Native app (`androidApp` + `composeApp` + `shared`) |
+| **Android** | Native app — install the latest APK from [GitHub Releases](https://github.com/shareef01/tabakpp/releases/latest) |
 | **Web** | PWA at [tabakpp.web.app](https://tabakpp.web.app) |
-| **iOS** | Not a release target — shell shows unsupported gate (see setup guide) |
+| **iOS** | Not a release target — shell shows an unsupported gate (see setup guide) |
 
 ## Get started
 
@@ -131,6 +133,7 @@ Full Firebase, signing, and App Check notes: **[SETUP_GUIDE.md](SETUP_GUIDE.md)*
 cd webApp && npm install && npm run dev
 
 # Android — open in Android Studio, add google-services.json, run androidApp
+# Or install a signed APK from GitHub Releases (tag v*)
 ```
 
 ---
