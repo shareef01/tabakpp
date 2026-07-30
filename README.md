@@ -109,12 +109,14 @@ flowchart LR
   Rules --> Shape["Schema + bounds<br/>on profile · configs · logs"]
   Rules --> Deny["Default deny<br/>/{document=**}"]
 
-  AC["App Check<br/>wired, not enforced"] -. advisory .-> Auth
+  AC["App Check — ENFORCED<br/>Firestore · Auth"] --> Auth
 ```
 
 Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing. Every write path is covered by rules tests run against the Firestore emulator in CI.
 
-**On App Check:** it is integrated (reCAPTCHA Enterprise on web, debug provider on Android) but deliberately **left unenforced**, so it is not part of the security boundary today. Enforcement is per Firebase product and applies to every client at once — turning it on would lock out sideloaded Android installs, which cannot attest without linking a Play Console project to the Play Integrity API. Since this app ships via GitHub Releases rather than Play, the enforceable controls are the Firestore rules above plus API key restrictions. Details and the upgrade path in [SETUP_GUIDE.md](SETUP_GUIDE.md).
+**On App Check:** it is **enforced** on Cloud Firestore and Firebase Authentication, so unattested requests are rejected — it is a live control, not decoration. Web attests through reCAPTCHA Enterprise and works for anyone.
+
+**Android does not.** Release APKs use the debug App Check provider, which mints a random secret per install that has to be registered by hand in the Firebase Console. Combined with enforcement, that means **a sideloaded APK cannot sign in until its device token is registered** — in practice the Android build only works on the maintainer's own devices. Fixing that means Play Integrity, which needs a Play Console project link. See [SETUP_GUIDE.md](SETUP_GUIDE.md) for the full picture and the upgrade path.
 
 ## Platforms
 
