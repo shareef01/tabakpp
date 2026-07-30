@@ -36,11 +36,11 @@
 ### Android
 
 <p align="center">
-  <img src="assets/screenshots/showcase/android-track.png" width="220" alt="Android — Track" />
+  <img src="assets/screenshots/showcase/phone-track.png" width="220" alt="Android — Track" />
   &nbsp;
-  <img src="assets/screenshots/showcase/android-history.png" width="220" alt="Android — History" />
+  <img src="assets/screenshots/showcase/phone-history.png" width="220" alt="Android — History" />
   &nbsp;
-  <img src="assets/screenshots/showcase/android-settings.png" width="220" alt="Android — Settings" />
+  <img src="assets/screenshots/showcase/phone-settings.png" width="220" alt="Android — Settings" />
 </p>
 
 ## Why it exists
