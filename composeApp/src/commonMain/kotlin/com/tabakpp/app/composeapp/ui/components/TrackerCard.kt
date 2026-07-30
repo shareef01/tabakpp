@@ -22,6 +22,10 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -172,10 +176,25 @@ fun TrackerCard(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    // Counting is the app's main action, so the result has to be
+                    // spoken. Without this a TalkBack user taps "Increase" and
+                    // hears nothing — the new value is only rendered visually.
+                    // Merged (not on the card) so the +/- buttons stay separately
+                    // focusable rather than being swallowed into one node.
                     Box(
                         modifier = Modifier
                             .height(if (isLarge) 84.dp else 66.dp)
-                            .clipToBounds(),
+                            .clipToBounds()
+                            .semantics(mergeDescendants = true) {
+                                liveRegion = LiveRegionMode.Polite
+                                contentDescription = buildString {
+                                    append("${config.name}: $count of ${config.limit}, ")
+                                    append(
+                                        if (isOver) "${count - config.limit} over limit"
+                                        else "$remaining left"
+                                    )
+                                }
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         SimpleCounter(count, isOverLimit, counterSize)

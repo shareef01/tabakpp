@@ -159,12 +159,16 @@ fun ConfirmModal(
                         }
                     }
                     
+                    // TextMuted, not TextDisabled: this is the safe way out of a
+                    // destructive dialog, and TextDisabled (#71717A, ~4.3:1 on
+                    // this surface) both fails AA for body text and reads as an
+                    // unavailable control.
                     TextButton(
                         onClick = onDismiss,
                         modifier = Modifier.fillMaxWidth().height(56.dp).tabakPressScale(),
                         enabled = !isLoading
                     ) {
-                        Text(dismissLabel.uppercase(), style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black), color = TextDisabled)
+                        Text(dismissLabel.uppercase(), style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black), color = TextMuted)
                     }
                 }
             }
@@ -192,9 +196,13 @@ fun TabakSnackbar(snackbarData: SnackbarData) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
+                // Not uppercased: these are full sentences from RegistryErrorMapper
+                // ("Could not update the counter. Try again."). Caps strips the
+                // word shapes that carry reading speed and reads as shouting at
+                // someone whose action just failed. Caps stays on chrome labels.
                 Text(
-                    text = snackbarData.visuals.message.uppercase(),
-                    style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, color = TextPrimary, letterSpacing = 1.sp),
+                    text = snackbarData.visuals.message,
+                    style = TabakTypography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = TextPrimary),
                     modifier = Modifier.weight(1f)
                 )
                 
