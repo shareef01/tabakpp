@@ -193,11 +193,13 @@ service cloud.firestore {
     // counters/aggregates, and mutation writes cannot touch identity/economics.
     // Owners can still forge aggregates in a dedicated mutation write on Spark;
     // App Check + API key restrictions are the remaining mitigations.
+    // 'createdAt' is deliberately absent: it is set once at profile creation and
+    // a settings save has no business rewriting account age.
     function isSettingsOnlyUpdate() {
       return request.resource.data.diff(resource.data).affectedKeys()
         .hasOnly([
           'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'pouchPrice',
-          'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt', 'createdAt',
+          'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt',
           'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'
         ]);
     }
@@ -207,14 +209,6 @@ service cloud.firestore {
         .hasOnly([
           'activeCounts', 'lifetimeAggregates', 'smokingUnitsMigrated', 'updatedAt'
         ]);
-    }
-
-    function validAggregateCredit(a) {
-      return a is map
-        && a.keys().hasOnly(['saved', 'wasted', 'smokingUnits'])
-        && (!('saved' in a) || boundNumber(a.saved, 100000000))
-        && (!('wasted' in a) || boundNumber(a.wasted, 100000000))
-        && (!('smokingUnits' in a) || (isNumber(a.smokingUnits) && a.smokingUnits >= 0 && a.smokingUnits <= 100000000));
     }
 
     function validLogEntry() {
@@ -230,7 +224,8 @@ service cloud.firestore {
         && (!('origin' in d) || d.origin in ['DAY_RESET', 'MANUAL_ENTRY'])
         && (!('isArchive' in d) || d.isArchive is bool)
         && (!('isManual' in d) || d.isManual is bool)
-        && (!('aggregateCredit' in d) || validAggregateCredit(d.aggregateCredit));
+        // Same shape and bounds as the profile totals it accumulates into.
+        && (!('aggregateCredit' in d) || validLifetimeAggregates(d.aggregateCredit));
     }
 
     function validConfig() {
@@ -271,7 +266,13 @@ service cloud.firestore {
 
       match /logs/{logId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && validLogEntry();
+        allow create: if isOwner(userId) && validLogEntry();
+        // logDate is immutable: an edit may only re-count the day it already
+        // belongs to. Relabelling a log to another date would move counts
+        // between days while lifetimeAggregates stayed put.
+        allow update: if isOwner(userId)
+          && validLogEntry()
+          && request.resource.data.logDate == resource.data.logDate;
         allow delete: if isOwner(userId);
       }
     }
