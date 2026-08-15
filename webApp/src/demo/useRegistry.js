@@ -58,7 +58,7 @@ export const useRegistry = () => {
   const today = SmokingCalculator.getTrackingDate(new Date(), 6);
   const base = SmokingCalculator.getGlobalMetrics(logs, configs, activeCounts, today, 0.55, lifetimeAggregates);
   const xp = SmokingCalculator.calculateXP(logs, base.streak);
-  const metrics = { ...base, budgetLeft: base.budgetLeftToday, rank: SmokingCalculator.getRank(xp) };
+  const metrics = { ...base, budgetLeft: base.budgetLeftToday, rank: SmokingCalculator.getRank(xp), xp };
   const profileSettings = {
     accent: demoAccent(),
     widgetSize: 'MEDIUM',
