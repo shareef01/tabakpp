@@ -17,6 +17,8 @@ object RegistryErrorMapper {
                 "Profile is not ready yet. Refresh and try again."
             normalized.contains("log_not_found") ->
                 "That history entry no longer exists. Refresh and try again."
+            normalized.contains("config_not_found") ->
+                "That tracker no longer exists. Refresh and try again."
             normalized.contains("nothing_to_archive") ->
                 "Nothing to archive — counters are at zero."
             normalized.contains("invalid_date") ->
