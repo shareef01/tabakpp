@@ -77,9 +77,14 @@ class FirebaseRegistryRepository(
 
     override suspend fun updateLiveCounter(uid: String, trackerId: String, delta: Double) {
         val userRef = firestore.collection("users").document(uid)
+        val configsRef = userRef.collection("configs")
         firestore.runTransaction {
             val snapshot = get(userRef)
             if (!snapshot.exists) throw Exception("USER_NOT_FOUND")
+            // Reject counters for trackers that no longer exist (or were never
+            // created) so a modified client cannot plant junk keys in activeCounts.
+            val configSnap = get(configsRef.document(trackerId))
+            if (!configSnap.exists) throw Exception("CONFIG_NOT_FOUND")
             val profile = snapshot.data<UserProfile>()
             val counts = profile.activeCounts.toMutableMap()
             counts[trackerId] = maxOf(0.0, (counts[trackerId] ?: 0.0) + delta)
