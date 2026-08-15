@@ -12,7 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -126,7 +126,7 @@ fun TrackScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
                     ) {
-                        Icon(Icons.Default.Undo, contentDescription = null, modifier = Modifier.size(18.dp), tint = accentColor)
+                        Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(18.dp), tint = accentColor)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             "UNDO LOG",
