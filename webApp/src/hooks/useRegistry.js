@@ -170,7 +170,8 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     return {
       ...base,
       budgetLeft: base.budgetLeftToday,
-      rank: SmokingCalculator.getRank(xp)
+      rank: SmokingCalculator.getRank(xp),
+      xp
     };
   }, [logs, configs, activeCounts, effectiveUnitPrice, today, lifetimeAggregates]);
 

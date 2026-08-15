@@ -2,7 +2,7 @@ import React from 'react';
 import { cn } from '../../utils/utils';
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { Card } from '../Common';
-import { Target, Zap, Activity, Wallet, Sun, Loader2 } from 'lucide-react';
+import { Target, Zap, Activity, Wallet, Award, Sun, Loader2 } from 'lucide-react';
 
 const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning }) => (
   <div className="flex flex-col items-center justify-center gap-2 px-3 py-5 md:px-5 md:py-6 transition-colors duration-300 group/metric">
@@ -42,7 +42,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
 
   return (
     <Card className="overflow-hidden bg-bg-card p-0" noPadding>
-      <div className="grid grid-cols-2 lg:grid-cols-4 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
+      <div className="grid grid-cols-2 lg:grid-cols-5 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
         <MetricColumn
           icon={Target}
           label="Remaining"
@@ -64,6 +64,12 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           sub={m.streak === 1 ? 'Day' : 'Days'}
         />
         <MetricColumn
+          icon={Award}
+          label="Rank"
+          value={m.rank || 'Apprentice'}
+          sub={`${m.xp || 0} XP`}
+        />
+        <MetricColumn
           icon={Activity}
           label="Daily Quota"
           value={`${quotaPct}%`}
@@ -73,7 +79,14 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
       </div>
 
       <div className="px-4 md:px-5 pb-3">
-        <div className="h-1 w-full rounded-full bg-white/[0.06] overflow-hidden">
+        <div
+          className="h-1 w-full rounded-full bg-white/[0.06] overflow-hidden"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.min(100, quotaPct)}
+          aria-label="Daily quota"
+        >
           <div
             className={cn(
               'h-full rounded-full transition-all duration-700 ease-out',
