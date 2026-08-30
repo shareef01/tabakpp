@@ -15,7 +15,13 @@ const BURN_TRANSITION = { duration: 0.8, ease: [0.16, 1, 0.3, 1] };
  */
 // `_type` is accepted and ignored so callers can spread a tracker config in
 // uniformly across gauge variants.
-export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, isLarge }) => {
+const GAUGE_HEIGHT = {
+  sm: 'h-8',
+  md: 'h-9 md:h-10',
+  lg: 'h-11 md:h-12',
+};
+
+export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, isLarge, size }) => {
   const progress = Math.min(1, count / (limit || 1));
   // Slightly longer filter → shorter paper body for a stubbier silhouette
   const filterRatio = 0.3;
@@ -26,14 +32,15 @@ export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, i
   const ignited = (count >= limit) && (limit > 0);
   const paperColor = 'bg-[#FAFAFA]';
   const filterColors = 'bg-gradient-to-b from-[#F4A261] to-[#E76F3C]';
+  const heightClass = GAUGE_HEIGHT[size] || (isLarge ? GAUGE_HEIGHT.lg : GAUGE_HEIGHT.md);
 
   return (
     // Purely decorative: the count, limit and over/under state are already
     // announced by the live region in TrackerCard, so exposing this stack of
     // nested divs to a screen reader is noise between the two buttons.
     <div aria-hidden="true" className={cn(
-      "relative w-full max-w-[220px] mx-auto rounded-full bg-black/40 border border-white/[0.08] shadow-inner p-1.5 overflow-hidden transition-all duration-700",
-      isLarge ? "h-16 md:h-[4.5rem]" : "h-14 md:h-16",
+      "relative w-full mx-auto rounded-full bg-black/40 border border-white/[0.08] shadow-inner p-[3px] overflow-hidden transition-all duration-700",
+      heightClass,
       ignited && "border-red-500/20 bg-red-950/20"
     )}>
       {/* THE INNER TRACK */}

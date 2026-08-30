@@ -5,7 +5,6 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,10 +17,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
@@ -30,15 +27,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import com.tabakpp.app.composeapp.theme.*
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.WidgetSize
 
 /**
  * PWA-Fidelity Tracker Card.
- * Replicates the premium industrial look with circular controls and centered elements.
- * Optimized for 120fps performance on high-refresh hardware.
+ * Density scales the whole composition; controls never overflow the card.
  */
 @Composable
 fun TrackerCard(
@@ -58,16 +53,37 @@ fun TrackerCard(
     val isSmall = widgetSize == WidgetSize.SMALL
     val reducedMotion = LocalReducedMotion.current
 
-    // Scale parameters matched to PWA feel (count flanked by controls)
     val counterSize = when (widgetSize) {
-        WidgetSize.SMALL -> 40.sp
-        WidgetSize.MEDIUM -> 52.sp
-        WidgetSize.LARGE -> 72.sp
+        WidgetSize.SMALL -> 32.sp
+        WidgetSize.MEDIUM -> 40.sp
+        WidgetSize.LARGE -> 52.sp
     }
-    val gaugeHeight = if (isLarge) 48.dp else if (isSmall) 34.dp else 42.dp
-    val btnSize = if (isLarge) 60.dp else if (isSmall) 44.dp else 52.dp
+    val gaugeHeight = when (widgetSize) {
+        WidgetSize.SMALL -> 32.dp
+        WidgetSize.MEDIUM -> 36.dp
+        WidgetSize.LARGE -> 44.dp
+    }
+    val btnSize = when (widgetSize) {
+        WidgetSize.SMALL -> 44.dp
+        WidgetSize.MEDIUM -> 48.dp
+        WidgetSize.LARGE -> 56.dp
+    }
+    val iconSize = when (widgetSize) {
+        WidgetSize.SMALL -> 18.dp
+        WidgetSize.MEDIUM -> 20.dp
+        WidgetSize.LARGE -> 24.dp
+    }
+    val cardPad = when (widgetSize) {
+        WidgetSize.SMALL -> 12.dp
+        WidgetSize.MEDIUM -> 16.dp
+        WidgetSize.LARGE -> 20.dp
+    }
+    val stackGap = when (widgetSize) {
+        WidgetSize.SMALL -> 8.dp
+        WidgetSize.MEDIUM -> 10.dp
+        WidgetSize.LARGE -> 12.dp
+    }
 
-    // Smooth state transitions (Optimized spec)
     val cardBackground by animateColorAsState(
         targetValue = if (isOverLimit) Color(0xFF2D0808) else SurfaceBase,
         animationSpec = if (reducedMotion) snap() else tween(durationMillis = 300)
@@ -88,26 +104,25 @@ fun TrackerCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 18.dp, horizontal = 18.dp),
+                .padding(cardPad),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(if (isLarge) 16.dp else 12.dp)
+            verticalArrangement = Arrangement.spacedBy(stackGap)
         ) {
-            // 1. Header — uppercase name + limit badge (web parity)
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = config.name.uppercase(),
                     style = TabakTypography.labelSmall.copy(
                         fontWeight = FontWeight.Black,
-                        letterSpacing = 1.6.sp,
+                        letterSpacing = 1.2.sp,
                         color = Color.White.copy(alpha = 0.85f)
                     ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
+                    modifier = Modifier.weight(1f)
                 )
                 Box(
                     modifier = Modifier
@@ -120,32 +135,39 @@ fun TrackerCard(
                         text = "${config.limit}/DAY",
                         style = TabakTypography.labelSmall.copy(
                             fontWeight = FontWeight.Black,
-                            letterSpacing = 1.4.sp,
+                            letterSpacing = 1.sp,
                             color = Color.White.copy(alpha = 0.55f)
-                        )
+                        ),
+                        maxLines = 1
                     )
                 }
             }
 
-            // 2. Cigarette gauge (centered, max width like web)
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
                 TrackerGauge(
                     type = config.type,
                     count = count,
                     limit = config.limit,
                     accentColor = accentColor,
                     height = gaugeHeight,
-                    modifier = Modifier.widthIn(max = 220.dp).fillMaxWidth()
+                    modifier = Modifier.widthIn(
+                        max = when (widgetSize) {
+                            WidgetSize.SMALL -> 156.dp
+                            WidgetSize.MEDIUM -> 180.dp
+                            WidgetSize.LARGE -> 208.dp
+                        }
+                    ).fillMaxWidth()
                 )
             }
 
-            // 3. Count flanked by circular controls, with "X left" + mini progress
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Decrement
                 Surface(
                     onClick = { onDecrement(); haptics() },
                     enabled = count > 0,
@@ -163,79 +185,31 @@ fun TrackerCard(
                                 count > 0 -> TextMuted
                                 else -> TextDisabled
                             },
-                            modifier = Modifier.size(if (isLarge) 24.dp else 20.dp)
+                            modifier = Modifier.size(iconSize)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(if (isLarge) 20.dp else 16.dp))
-
-                // Count + remaining/over + mini progress bar
-                Column(
-                    modifier = Modifier.widthIn(min = if (isLarge) 96.dp else 78.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 8.dp)
+                        .clipToBounds()
+                        .semantics(mergeDescendants = true) {
+                            liveRegion = LiveRegionMode.Polite
+                            contentDescription = buildString {
+                                append("${config.name}: $count of ${config.limit}, ")
+                                append(
+                                    if (isOver) "${count - config.limit} over limit"
+                                    else "$remaining left"
+                                )
+                            }
+                        },
+                    contentAlignment = Alignment.Center
                 ) {
-                    // Counting is the app's main action, so the result has to be
-                    // spoken. Without this a TalkBack user taps "Increase" and
-                    // hears nothing — the new value is only rendered visually.
-                    // Merged (not on the card) so the +/- buttons stay separately
-                    // focusable rather than being swallowed into one node.
-                    Box(
-                        modifier = Modifier
-                            .height(if (isLarge) 84.dp else 66.dp)
-                            .clipToBounds()
-                            .semantics(mergeDescendants = true) {
-                                liveRegion = LiveRegionMode.Polite
-                                contentDescription = buildString {
-                                    append("${config.name}: $count of ${config.limit}, ")
-                                    append(
-                                        if (isOver) "${count - config.limit} over limit"
-                                        else "$remaining left"
-                                    )
-                                }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        SimpleCounter(count, isOverLimit, counterSize)
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = if (isOver) "${count - config.limit} OVER" else "$remaining LEFT",
-                            style = TabakTypography.labelSmall.copy(
-                                fontWeight = FontWeight.Black,
-                                letterSpacing = 1.2.sp,
-                                color = when {
-                                    isOver -> Color(0xFFFF4D4D)
-                                    isOverLimit -> Color(0xFFFBBF24).copy(alpha = 0.9f)
-                                    else -> Color.White.copy(alpha = 0.5f)
-                                }
-                            )
-                        )
-                        Box(
-                            modifier = Modifier
-                                .width(40.dp)
-                                .height(2.dp)
-                                .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.08f))
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth(progressFraction)
-                                    .clip(CircleShape)
-                                    .background(if (isOverLimit) Color(0xFFFF4D4D) else accentColor)
-                            )
-                        }
-                    }
+                    SimpleCounter(count, isOverLimit, counterSize)
                 }
 
-                Spacer(modifier = Modifier.width(if (isLarge) 20.dp else 16.dp))
-
-                // Increment (accent bg, black icon; danger + white when over)
                 Surface(
                     onClick = { onIncrement(); heavyHaptics() },
                     modifier = Modifier
@@ -255,9 +229,46 @@ fun TrackerCard(
                             Icons.Default.Add,
                             contentDescription = "Increase ${config.name}",
                             tint = if (isOverLimit) Color.White else Color.Black,
-                            modifier = Modifier.size(if (isLarge) 28.dp else 24.dp)
+                            modifier = Modifier.size(iconSize)
                         )
                     }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = if (isOver) "${count - config.limit} OVER" else "$remaining LEFT",
+                    style = TabakTypography.labelSmall.copy(
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 1.sp,
+                        color = when {
+                            isOver -> Color(0xFFFF4D4D)
+                            isOverLimit -> Color(0xFFFBBF24).copy(alpha = 0.9f)
+                            else -> Color.White.copy(alpha = 0.5f)
+                        }
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .width(if (isSmall) 28.dp else 40.dp)
+                        .height(2.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(progressFraction)
+                            .clip(CircleShape)
+                            .background(if (isOverLimit) Color(0xFFFF4D4D) else accentColor)
+                    )
                 }
             }
         }
@@ -272,17 +283,15 @@ fun SimpleCounter(value: Int, isOverLimit: Boolean, fontSize: androidx.compose.u
         targetValue = if (isOverLimit) Color(0xFFFF5252) else Color.White,
         animationSpec = if (reducedMotion) snap() else tween(durationMillis = 300)
     )
+    val style = TabakTypography.displayLarge.copy(
+        fontSize = fontSize,
+        lineHeight = fontSize,
+        fontWeight = FontWeight.Black,
+        fontFeatureSettings = "tnum"
+    )
 
     if (reducedMotion) {
-        Text(
-            text = value.toString(),
-            style = TabakTypography.displayLarge.copy(
-                fontSize = fontSize,
-                fontWeight = FontWeight.Black,
-                fontFeatureSettings = "tnum"
-            ),
-            color = textColor
-        )
+        Text(text = value.toString(), style = style, color = textColor, maxLines = 1)
         return
     }
 
@@ -293,26 +302,18 @@ fun SimpleCounter(value: Int, isOverLimit: Boolean, fontSize: androidx.compose.u
                 stiffness = Spring.StiffnessMedium,
                 dampingRatio = Spring.DampingRatioNoBouncy
             )
-            
+
             if (targetState > initialState) {
                 (slideInVertically(animationSpec = spec) { height -> height } + fadeIn()) togetherWith
-                        slideOutVertically(animationSpec = spec) { height -> -height } + fadeOut()
+                    slideOutVertically(animationSpec = spec) { height -> -height } + fadeOut()
             } else {
                 (slideInVertically(animationSpec = spec) { height -> -height } + fadeIn()) togetherWith
-                        slideOutVertically(animationSpec = spec) { height -> height } + fadeOut()
+                    slideOutVertically(animationSpec = spec) { height -> height } + fadeOut()
             }.using(
                 SizeTransform(clip = true)
             )
         }
     ) { targetValue ->
-        Text(
-            text = targetValue.toString(),
-            style = TabakTypography.displayLarge.copy(
-                fontSize = fontSize,
-                fontWeight = FontWeight.Black,
-                fontFeatureSettings = "tnum"
-            ),
-            color = textColor
-        )
+        Text(text = targetValue.toString(), style = style, color = textColor, maxLines = 1)
     }
 }

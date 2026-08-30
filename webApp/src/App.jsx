@@ -313,7 +313,7 @@ const AppContent = () => {
             />
           </div>
 
-          <main className="flex-1 w-full pt-4 md:pt-6 pb-[calc(9rem+env(safe-area-inset-bottom))] transition-all duration-500 ease-out relative z-10">
+          <main className="flex-1 w-full pt-3 md:pt-5 pb-[max(8.75rem,calc(6.25rem+env(safe-area-inset-bottom)))] transition-all duration-500 ease-out relative z-10">
             <div className="max-w-5xl mx-auto w-full px-4 md:px-6 lg:px-8">
               <Suspense fallback={
                 <div className="flex items-center justify-center py-24">
@@ -322,7 +322,7 @@ const AppContent = () => {
               }>
                 <AnimatePresence mode="wait">
                   {activeTab === 'track' && (
-                    <motion.div key="track" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-4 md:space-y-5">
+                    <motion.div key="track" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-3 md:space-y-4">
                       <h1 className="sr-only">Track</h1>
                       {!isHydrated || isRegistryLoading ? (
                         <DashboardSkeleton widgetSize={settings.widgetSize} />
