@@ -106,6 +106,12 @@ describe('RegistryService against the real SDK and rules', () => {
     expect((await profile()).activeCounts).toEqual({ cig: 0 });
   });
 
+  it('adjustCounter rejects writes for a missing tracker config', async () => {
+    await seed();
+    await expect(RegistryService.adjustCounter(UID, 'ghost', 1)).rejects.toThrow('CONFIG_NOT_FOUND');
+    expect((await profile()).activeCounts).toEqual({});
+  });
+
   it('endDay archives the session and credits lifetime aggregates', async () => {
     await seed({ activeCounts: { cig: 4 } });
     await RegistryService.endDay(UID, '2026-07-30');
@@ -175,6 +181,31 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(updated.counts).toEqual({ cig: 8 });
     expect(updated.aggregateCredit).toEqual({ saved: 2, wasted: 8, smokingUnits: 8 });
     expect((await profile()).lifetimeAggregates).toEqual({ saved: 2, wasted: 8, smokingUnits: 8 });
+  });
+
+  it('updateHistoricalLog preserves counts for deleted trackers', async () => {
+    await seed();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users', UID, 'logs', '2026-07-28_MANUAL'), {
+        id: '2026-07-28_MANUAL',
+        logDate: '2026-07-28',
+        counts: { cig: 3, retired: 5 },
+        origin: 'MANUAL_ENTRY',
+        aggregateCredit: { saved: 7, wasted: 3, smokingUnits: 3 },
+      });
+      await setDoc(
+        doc(context.firestore(), 'users', UID),
+        {
+          ...baseProfile,
+          lifetimeAggregates: { saved: 7, wasted: 3, smokingUnits: 3 },
+        },
+      );
+    });
+
+    await RegistryService.updateHistoricalLog(UID, '2026-07-28_MANUAL', { cig: 8 });
+
+    const [updated] = await logs();
+    expect(updated.counts).toEqual({ cig: 8, retired: 5 });
   });
 
   it('deleteLog debits the stamped credit, and restoreLog re-credits it', async () => {

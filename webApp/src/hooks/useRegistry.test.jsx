@@ -282,6 +282,26 @@ describe('useRegistry lifecycle', () => {
     expect(result.current.loading).toBe(false);
   });
 
+  it('drops the previous account when switching users', () => {
+    const USER_B = { uid: 'u2' };
+    const { result, rerender } = mountHydrated({
+      configs: [CIG],
+      profile: defaultProfile({ activeCounts: { cig: 3 }, accent: '#abc' }),
+    });
+    expect(result.current.profileSettings.accent).toBe('#abc');
+
+    rerender({ user: USER_B });
+    expect(result.current.configs).toEqual([]);
+    expect(result.current.profileSettings).toBeNull();
+    expect(result.current.loading).toBe(true);
+
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ accent: '#def', activeCounts: {} }))));
+    act(() => cap.configsCb.current([]));
+    act(() => cap.logsCb.current([]));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.profileSettings.accent).toBe('#def');
+  });
+
   it('unsubscribes every listener on unmount', () => {
     const { unmount } = mountHydrated();
     unmount();

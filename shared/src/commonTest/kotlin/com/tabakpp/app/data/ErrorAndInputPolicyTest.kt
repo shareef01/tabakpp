@@ -77,6 +77,10 @@ class ErrorAndInputPolicyTest {
                 .contains("no longer exists")
         )
         assertTrue(
+            RegistryErrorMapper.map(Exception("CONFIG_NOT_FOUND"))
+                .contains("no longer exists")
+        )
+        assertTrue(
             RegistryErrorMapper.map(Exception("NOTHING_TO_ARCHIVE"))
                 .contains("Nothing to archive")
         )

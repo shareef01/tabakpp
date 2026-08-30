@@ -99,6 +99,23 @@ object RegistryMutations {
         contribution(newCounts, configs, unitPrice)
     )
 
+    /**
+     * Merge an incoming historical edit with the prior log counts, preserving
+     * entries for trackers deleted since the log was written.
+     */
+    fun mergeHistoricalEditCounts(
+        incoming: Map<String, Double>,
+        previous: Map<String, Double>,
+        liveConfigIds: Collection<String>
+    ): Map<String, Double> {
+        val live = liveConfigIds.toSet()
+        val merged = incoming.toMutableMap()
+        previous.forEach { (id, value) ->
+            if (id !in live) merged[id] = value
+        }
+        return merged
+    }
+
     data class DayEnd(
         val mergedCounts: Map<String, Double>,
         /** New lifetime totals after applying the archive delta. */

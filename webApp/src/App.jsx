@@ -9,6 +9,30 @@ import { hexToRgbValues } from './utils/formatters';
 import { SmokingCalculator } from './utils/smokingCalculator';
 const cn = (...classes) => classes.filter(Boolean).join(' ');
 
+const FIRESTORE_ACCENT_DEFAULT = '#FF5F5F';
+
+const loadInitialAccent = () => {
+  try {
+    const fromQuery = new URLSearchParams(window.location.search).get('accent');
+    if (fromQuery && /^#[0-9A-Fa-f]{6}$/.test(fromQuery)) return fromQuery;
+    const cached = localStorage.getItem('tabak_accent_last');
+    if (cached && /^#[0-9A-Fa-f]{6}$/.test(cached)) return cached;
+  } catch { /* ignore */ }
+  return FIRESTORE_ACCENT_DEFAULT;
+};
+
+const defaultSettings = () => ({
+  accent: loadInitialAccent(),
+  widgetSize: 'MEDIUM',
+  avatar: null,
+  name: '',
+  unitPrice: 0.5,
+  dayStartHour: 6,
+  purchaseType: 'PACK',
+  pouchPrice: 0,
+  estimatedYield: 0
+});
+
 // --- CONTEXT & HOOKS ---
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useRegistry } from './hooks/useRegistry';
@@ -110,29 +134,23 @@ const AppContent = () => {
   }, []);
 
   // 2. STATE MANAGEMENT
-  const [settings, setSettings] = useState(() => {
-    let accent = '#10B981';
-    try {
-      const fromQuery = new URLSearchParams(window.location.search).get('accent');
-      if (fromQuery && /^#[0-9A-Fa-f]{6}$/.test(fromQuery)) accent = fromQuery;
-    } catch { /* ignore */ }
-    return {
-      accent,
-      widgetSize: 'MEDIUM',
-      avatar: null,
-      name: '',
-      unitPrice: 0.5,
-      dayStartHour: 6,
-      purchaseType: 'PACK',
-      pouchPrice: 0,
-      estimatedYield: 0
-    };
-  });
+  const [settings, setSettings] = useState(defaultSettings);
   const [isHydrated, setIsHydrated] = useState(false);
   const [activeTab, setActiveTab] = useState('track');
   const scrollPositions = useRef({ track: 0 });
   const activeTabRef = useRef(activeTab);
   const [incrementUndo, setIncrementUndo] = useState(null);
+
+  // Drop prior-user settings before the new profile listener hydrates.
+  useEffect(() => {
+    if (!user?.uid) {
+      setIsHydrated(false);
+      return;
+    }
+    setIsHydrated(false);
+    setSettings(defaultSettings());
+    setIncrementUndo(null);
+  }, [user?.uid]);
 
   // Modal States
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -195,6 +213,9 @@ const AppContent = () => {
       pouchPrice: profileSettings.pouchPrice ?? 0,
       estimatedYield: profileSettings.estimatedYield ?? 0
     }));
+    if (profileSettings.accent) {
+      try { localStorage.setItem('tabak_accent_last', profileSettings.accent); } catch { /* ignore */ }
+    }
     setIsHydrated(true);
   }, [profileSettings]);
 
@@ -228,6 +249,7 @@ const AppContent = () => {
   }, [increment, configs]);
 
   const handleDecrement = useCallback((id) => {
+    setIncrementUndo((prev) => (prev?.id === id ? null : prev));
     decrement(id).catch(() => {});
   }, [decrement]);
 
