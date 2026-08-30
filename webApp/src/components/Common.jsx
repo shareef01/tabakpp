@@ -10,7 +10,40 @@ export const UI = {
   INPUT: "h-14 px-6 rounded-2xl border bg-bg-base border-white/[0.08] text-white placeholder:text-neutral-700 font-medium text-base focus:ring-1 focus:ring-accent/40 outline-none transition-all duration-300",
   BUTTON_BASE: "min-h-[56px] px-8 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center transition-all duration-300 ease-out active:scale-[0.94] disabled:opacity-40 select-none touch-manipulation",
   LABEL: "block mb-2 ml-1 text-[11px] font-black text-neutral-400 uppercase tracking-[0.16em] antialiased",
-  GLASS_ACTION: "flex items-center justify-center min-h-[48px] min-w-[48px] p-3 rounded-xl bg-white/[0.03] border border-white/[0.05] text-neutral-400 hover:text-white hover:bg-white/[0.06] active:scale-90 transition-all duration-300"
+  GLASS_ACTION: "flex items-center justify-center min-h-[48px] min-w-[48px] p-3 rounded-xl bg-white/[0.03] border border-white/[0.05] text-neutral-400 hover:text-white hover:bg-white/[0.06] active:scale-90 transition-all duration-300",
+  /** Compact / comfortable / spacious — used by TrackerCard, skeleton, track grid. */
+  DENSITY: {
+    SMALL: {
+      pad: 'p-3.5',
+      stack: 'gap-2',
+      count: 'text-[2.25rem]',
+      btn: 'w-11 h-11 min-w-11 min-h-11',
+      icon: 18,
+      gauge: 'sm',
+      gaugeMax: 'max-w-[9.75rem]',
+      controlGap: 'gap-3',
+    },
+    MEDIUM: {
+      pad: 'p-4',
+      stack: 'gap-2.5',
+      count: 'text-[2.75rem] md:text-5xl',
+      btn: 'w-12 h-12 min-w-12 min-h-12',
+      icon: 20,
+      gauge: 'md',
+      gaugeMax: 'max-w-[11.25rem] md:max-w-[12.5rem]',
+      controlGap: 'gap-3.5 md:gap-4',
+    },
+    LARGE: {
+      pad: 'p-5 md:p-5',
+      stack: 'gap-3',
+      count: 'text-5xl md:text-6xl',
+      btn: 'w-12 h-12 min-w-12 min-h-12 md:w-14 md:h-14',
+      icon: 22,
+      gauge: 'lg',
+      gaugeMax: 'max-w-[13rem] md:max-w-[14rem]',
+      controlGap: 'gap-4 md:gap-5',
+    },
+  },
 };
 
 /**

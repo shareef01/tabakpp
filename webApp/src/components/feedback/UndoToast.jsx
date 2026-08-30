@@ -53,7 +53,7 @@ export const UndoToast = ({
           exit={{ opacity: 0, y: 16, scale: 0.98 }}
           transition={{ type: 'spring', stiffness: 420, damping: 32 }}
           className={cn(
-            'fixed bottom-[calc(6.5rem+env(safe-area-inset-bottom))] left-1/2 z-[4000] -translate-x-1/2',
+            'fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] left-1/2 z-[4000] -translate-x-1/2',
             'w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl',
             'bg-[#121214]/95 border border-white/[0.1] shadow-[0_24px_60px_rgba(0,0,0,0.75)]',
             'backdrop-blur-xl ring-1 ring-white/[0.04]',

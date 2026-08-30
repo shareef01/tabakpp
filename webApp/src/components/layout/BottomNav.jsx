@@ -17,8 +17,8 @@ export const BottomNav = React.memo(({ activeTab, onTabChange }) => {
   const activeIndex = tabs.findIndex(t => t.id === activeTab);
 
   return (
-    <nav className="fixed bottom-[max(1.5rem,env(safe-area-inset-bottom))] md:bottom-[max(2.5rem,env(safe-area-inset-bottom))] left-0 right-0 z-[100] px-6 pointer-events-none">
-      <div className="max-w-[320px] mx-auto h-16 md:h-18 bg-bg-panel border border-white/[0.08] rounded-full shadow-[0_40px_100px_rgba(0,0,0,1)] p-1.5 flex items-center relative pointer-events-auto ring-1 ring-white/[0.02]">
+    <nav className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] md:bottom-[max(2rem,env(safe-area-inset-bottom))] left-0 right-0 z-[100] px-5 pointer-events-none">
+      <div className="max-w-[300px] mx-auto h-14 md:h-16 bg-bg-panel border border-white/[0.08] rounded-full shadow-[0_40px_100px_rgba(0,0,0,1)] p-1.5 flex items-center relative pointer-events-auto ring-1 ring-white/[0.02]">
 
         {/* SLIDING ACTIVE INDICATOR */}
         <motion.div
@@ -43,12 +43,12 @@ export const BottomNav = React.memo(({ activeTab, onTabChange }) => {
               key={tab.id}
               type="button"
               onClick={() => onTabChange(tab.id)}
-              className="flex-1 h-full flex items-center justify-center relative z-10 transition-all duration-300 active:scale-90 touch-manipulation"
+              className="flex-1 h-full min-h-11 flex items-center justify-center relative z-10 transition-all duration-300 active:scale-90 touch-manipulation"
               aria-label={tab.label}
               aria-current={isActive ? 'page' : undefined}
             >
               <Icon
-                size={isActive ? 24 : 22}
+                size={isActive ? 22 : 20}
                 strokeWidth={isActive ? 2.5 : 2}
                 className={cn(
                   "transition-all duration-500",
