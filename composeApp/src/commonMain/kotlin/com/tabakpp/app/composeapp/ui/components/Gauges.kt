@@ -57,10 +57,8 @@ fun TrackerGauge(
     val isOverLimit = (count >= limit) && (limit > 0)
     val shape = CircleShape
 
-    // The Recessed Industrial Slot
     Box(
         modifier = modifier
-            .fillMaxWidth()
             .height(height)
             .semantics {
                 contentDescription = "$count of $limit daily units"
@@ -72,32 +70,32 @@ fun TrackerGauge(
             .clip(shape)
             .background(Color.Black.copy(alpha = 0.4f))
             .border(0.5.dp, Color.White.copy(alpha = 0.08f), shape)
-            .padding(vertical = 4.dp, horizontal = 4.dp) // The "recess" offset
+            .padding(3.dp)
     ) {
-        if (type == TrackerType.SIMPLE) {
-            BarProgress(animatedProgress.value, if (isOverLimit) ErrorColor else accentColor)
-        } else {
-            // Material definition pass — legacy JOINT uses the same cigarette look.
-            val paperColor = Color(0xFFFAFAFA)
-            
-            // Orange filter tip to match the web CigaretteGauge (#F4A261 -> #E76F3C).
-            val filterBrush = remember {
-                Brush.verticalGradient(
-                    0.0f to Color(0xFFF4A261),
-                    1.0f to Color(0xFFE76F3C)
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(shape)
+                .background(Color.Black.copy(alpha = 0.2f))
+        ) {
+            if (type == TrackerType.SIMPLE) {
+                BarProgress(animatedProgress.value, if (isOverLimit) ErrorColor else accentColor)
+            } else {
+                val paperColor = Color(0xFFFAFAFA)
+                val filterBrush = remember {
+                    Brush.verticalGradient(
+                        0.0f to Color(0xFFF4A261),
+                        1.0f to Color(0xFFE76F3C)
+                    )
+                }
+                PWAHighFidelityCanvas(
+                    progress = animatedProgress.value,
+                    filterBrush = filterBrush,
+                    paperColor = paperColor,
+                    isOverLimit = isOverLimit,
+                    filterRatio = 0.30f
                 )
             }
-
-            // Stubbier silhouette to match web (filterRatio 0.3).
-            val filterRatio = 0.30f
-
-            PWAHighFidelityCanvas(
-                progress = animatedProgress.value,
-                filterBrush = filterBrush,
-                paperColor = paperColor,
-                isOverLimit = isOverLimit,
-                filterRatio = filterRatio
-            )
         }
     }
 }
@@ -111,7 +109,8 @@ private fun PWAHighFidelityCanvas(
     filterRatio: Float
 ) {
     // Cache constant DP values
-    val emberWidthDp = 6.dp
+    val emberWidthDp = 2.dp
+    val emberGlowDp = 8.dp
     val strokeWidthDp = 1.dp
 
     Canvas(modifier = Modifier.fillMaxSize().clip(CircleShape)) {
@@ -184,7 +183,7 @@ private fun PWAHighFidelityCanvas(
 
         // 5. Laser ember at the burn line — bright core + radiant glow, drawn on top.
         if (progress > 0.0001f && progress < 0.9999f) {
-            val glowR = 13.dp.toPx()
+            val glowR = emberGlowDp.toPx()
             drawRect(
                 brush = Brush.horizontalGradient(
                     0.0f to Color(0xFFFF4500).copy(alpha = 0f),
@@ -198,7 +197,7 @@ private fun PWAHighFidelityCanvas(
             )
             val coreW = emberWidthDp.toPx()
             drawRect(
-                color = Color(0xFFFF5A1F),
+                color = Color(0xFFFF4500),
                 topLeft = Offset(ashWidth - coreW, 0f),
                 size = Size(coreW, height)
             )

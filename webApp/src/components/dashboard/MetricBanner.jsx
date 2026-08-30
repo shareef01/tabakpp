@@ -4,8 +4,8 @@ import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { Card } from '../Common';
 import { Target, Zap, Activity, Wallet, Award, Sun, Loader2 } from 'lucide-react';
 
-const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning }) => (
-  <div className="flex flex-col items-center justify-center gap-2 px-3 py-5 md:px-5 md:py-6 transition-colors duration-300 group/metric">
+const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, className }) => (
+  <div className={cn("flex flex-col items-center justify-center gap-1.5 px-3 py-4 md:px-5 md:py-5 transition-colors duration-300 group/metric", className)}>
     <div className="flex items-center gap-1.5">
       <Icon
         size={13}
@@ -75,12 +75,19 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           value={`${quotaPct}%`}
           sub={isOver ? 'Over Limit' : 'Load'}
           warning={isOver || progress >= 0.8}
+          className="hidden lg:flex lg:flex-col"
         />
       </div>
 
-      <div className="px-4 md:px-5 pb-3">
+      <div className="flex items-center gap-3 px-4 md:px-5 py-2.5">
+        <span className={cn(
+          'shrink-0 text-[10px] font-black uppercase tracking-[0.14em] tabular-nums lg:hidden',
+          isOver ? 'text-danger' : progress >= 0.8 ? 'text-amber-400' : 'text-neutral-400'
+        )}>
+          {quotaPct}%
+        </span>
         <div
-          className="h-1 w-full rounded-full bg-white/[0.06] overflow-hidden"
+          className="h-1 flex-1 rounded-full bg-white/[0.06] overflow-hidden"
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
@@ -103,7 +110,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           onClick={onEndDay}
           disabled={isEnding}
           aria-label="End tracking day"
-          className="group w-full h-12 flex items-center justify-center gap-2.5 border-t border-amber-500/15 bg-amber-500/[0.05] hover:bg-amber-500/[0.09] transition-colors duration-300 disabled:opacity-40"
+          className="group w-full h-11 flex items-center justify-center gap-2.5 border-t border-amber-500/15 bg-amber-500/[0.05] hover:bg-amber-500/[0.09] transition-colors duration-300 disabled:opacity-40"
         >
           {isEnding ? (
             <Loader2 className="animate-spin text-amber-400" size={16} />
