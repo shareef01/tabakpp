@@ -71,4 +71,16 @@ describe('TrackerCard screen-reader output', () => {
     setup();
     expect(document.querySelector('[aria-hidden="true"]')).toBeTruthy();
   });
+
+  it('scales the gauge down in compact density', () => {
+    setup({ globalSize: 'SMALL' });
+    const gauge = document.querySelector('[aria-hidden="true"]');
+    expect(gauge.className).toMatch(/h-8/);
+  });
+
+  it('uses a taller gauge in spacious density', () => {
+    setup({ globalSize: 'LARGE' });
+    const gauge = document.querySelector('[aria-hidden="true"]');
+    expect(gauge.className).toMatch(/h-11/);
+  });
 });
