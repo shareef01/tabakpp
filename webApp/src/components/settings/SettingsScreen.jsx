@@ -347,9 +347,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
       <h1 className="sr-only">Settings</h1>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start max-w-7xl mx-auto">
 
-        <div className="space-y-10">
+        <div className="space-y-6 md:space-y-8">
           <Card className="p-6 md:p-8 bg-bg-card">
-            <div className="flex items-end justify-between gap-4 mb-8">
+            <div className="flex items-end justify-between gap-4 mb-5">
               <div className="flex flex-col gap-1 min-w-0">
                 <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Profile</span>
                 <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
@@ -441,14 +441,14 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           </Card>
 
           <Card className="p-6 md:p-8 bg-bg-card">
-            <div className="flex flex-col gap-1 mb-8 min-w-0">
+            <div className="flex flex-col gap-1 mb-5 min-w-0">
               <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Appearance</span>
               <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
                 Look & density
               </h3>
             </div>
 
-            <div className="space-y-8">
+            <div className="space-y-6">
               <div className="space-y-3">
                 <div className="flex items-baseline justify-between gap-3">
                   <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Accent</span>
@@ -659,7 +659,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           </Card>
         </div>
 
-        <div className="space-y-10">
+        <div className="space-y-6 md:space-y-8">
           <Card className="flex flex-col p-6 md:p-8 bg-bg-card">
             <div className="flex items-end justify-between gap-4 mb-6">
               <div className="flex flex-col gap-1 min-w-0">
@@ -716,7 +716,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               <Input label={ecoMode === 'PACK' ? "Pack Price (€)" : "Beutel Price (€)"} type="number" step="0.01" value={ecoMode === 'PACK' ? packPrice : pouchPrice} onChange={ecoMode === 'PACK' ? setPackPrice : setPouchPrice} isDark />
               <Input label={ecoMode === 'PACK' ? "Units / Pack" : "Est. Yield"} type="number" value={ecoMode === 'PACK' ? packQty : estimatedYield} onChange={ecoMode === 'PACK' ? setPackQty : setEstimatedYield} isDark />
             </div>
-            <div className="mt-10 pt-10 border-t border-white/5 space-y-8">
+            <div className="mt-8 pt-8 border-t border-white/5 space-y-6">
               <div className="flex items-center justify-between px-2">
                 <span className={UI.LABEL}>Unit Cost:</span>
                 <span className="text-3xl font-black text-white tabular-nums">€{unitCostPreview.toFixed(2)}</span>
