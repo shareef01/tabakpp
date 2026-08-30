@@ -19,3 +19,7 @@ signin*.txt
 signin_log.txt
 appcheck.txt
 *.apk
+
+# Local agent/session metadata — never ship.
+.reasonix/
+.claude/
