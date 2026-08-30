@@ -109,4 +109,83 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
     expect(SmokingCalculator.isValidDate('2024-13-01')).toBe(false);
     expect(SmokingCalculator.isValidDate('abc')).toBe(false);
   });
+
+  describe('Audit domain fixtures (Android parity)', () => {
+    const fixtureConfig = (id, limit, price = 0.5) => ({
+      id,
+      limit,
+      pricePerUnit: price,
+      type: 'CIGARETTE',
+      isPrimaryTracked: true,
+      isFinanciallyTracked: true,
+    });
+
+    it('Fixture A — quota 20, count 5, unit €0.50', () => {
+      const configs = [fixtureConfig('c1', 20, 0.5)];
+      const fin = SmokingCalculator.calculateDayFinancials({ c1: 5 }, configs);
+      expect(fin.wasted).toBe(2.5);
+      expect(fin.saved).toBe(7.5);
+      const m = SmokingCalculator.getGlobalMetrics([], configs, { c1: 5 }, '2026-01-01', 0.5);
+      expect(m.count).toBe(5);
+      expect(m.limit).toBe(20);
+      expect(m.progress).toBeCloseTo(0.25);
+    });
+
+    it('Fixture B — exactly at quota', () => {
+      const configs = [fixtureConfig('c1', 10, 0.5)];
+      const fin = SmokingCalculator.calculateDayFinancials({ c1: 10 }, configs);
+      expect(fin.wasted).toBe(5);
+      expect(fin.saved).toBe(0);
+    });
+
+    it('Fixture C — above quota', () => {
+      const configs = [fixtureConfig('c1', 10, 0.5)];
+      const fin = SmokingCalculator.calculateDayFinancials({ c1: 12 }, configs);
+      expect(fin.wasted).toBe(6);
+      expect(fin.saved).toBe(0);
+    });
+
+    it('Fixture D — zero quota stays zero', () => {
+      const configs = [fixtureConfig('c1', 0, 0.5)];
+      expect(SmokingCalculator.getTotalLimit(configs)).toBe(0);
+      const fin = SmokingCalculator.calculateDayFinancials({ c1: 0 }, configs);
+      expect(fin.wasted).toBe(0);
+      expect(fin.saved).toBe(0);
+      const m = SmokingCalculator.getGlobalMetrics([], configs, { c1: 0 }, '2026-01-01', 0.5);
+      expect(m.limit).toBe(0);
+      expect(m.progress).toBe(0);
+    });
+
+    it('Fixture E — pack economics €8 / 20 units = €0.40', () => {
+      expect(8 / 20).toBeCloseTo(0.4);
+      const fin = SmokingCalculator.calculateDayFinancials(
+        { c1: 5 },
+        [fixtureConfig('c1', 20, 0.4)]
+      );
+      expect(fin.wasted).toBe(2);
+    });
+
+    it('Fixture F — pouch economics €6.50 / 65 units = €0.10', () => {
+      expect(6.5 / 65).toBeCloseTo(0.1);
+      const fin = SmokingCalculator.calculateDayFinancials(
+        { c1: 10 },
+        [fixtureConfig('c1', 20, 0.1)]
+      );
+      expect(fin.wasted).toBeCloseTo(1);
+    });
+  });
+
+  describe('getTrackingDate (local day-start boundaries)', () => {
+    it('rolls back before the configured day-start hour', () => {
+      const before = new Date(2024, 4, 20, 5, 59, 0);
+      expect(SmokingCalculator.getTrackingDate(before, 6)).toBe('2024-05-19');
+    });
+
+    it('belongs to the same calendar day at and after day start', () => {
+      const at = new Date(2024, 4, 20, 6, 0, 0);
+      const after = new Date(2024, 4, 20, 23, 59, 0);
+      expect(SmokingCalculator.getTrackingDate(at, 6)).toBe('2024-05-20');
+      expect(SmokingCalculator.getTrackingDate(after, 6)).toBe('2024-05-20');
+    });
+  });
 });
