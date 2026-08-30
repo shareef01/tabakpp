@@ -163,6 +163,8 @@ beforeEach(() => fake.store.clear());
 // --- tests ----------------------------------------------------------------
 
 describe('RegistryService.adjustCounter', () => {
+  beforeEach(() => { seedConfig(CIG); });
+
   it('increments the live counter', async () => {
     seedUser({ activeCounts: { cig: 3 } });
     await RegistryService.adjustCounter(UID, 'cig', 1);
@@ -177,6 +179,11 @@ describe('RegistryService.adjustCounter', () => {
 
   it('throws when the user document is missing', async () => {
     await expect(RegistryService.adjustCounter(UID, 'cig', 1)).rejects.toThrow('USER_NOT_FOUND');
+  });
+
+  it('throws when the tracker config is missing', async () => {
+    seedUser({ activeCounts: {} });
+    await expect(RegistryService.adjustCounter(UID, 'ghost', 1)).rejects.toThrow('CONFIG_NOT_FOUND');
   });
 });
 
@@ -326,6 +333,20 @@ describe('RegistryService.updateHistoricalLog', () => {
     });
 
     expect(logDoc('L1').counts).toEqual({});
+  });
+
+  it('preserves counts for deleted trackers when editing live config values', async () => {
+    seedLog({
+      id: '2026-07-10_DAY',
+      logDate: '2026-07-10',
+      counts: { cig: 4, retired: 7 },
+      origin: 'DAY_RESET',
+    });
+    seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });
+
+    await RegistryService.updateHistoricalLog(UID, '2026-07-10_DAY', { cig: 9 });
+
+    expect(logDoc('2026-07-10_DAY').counts).toEqual({ cig: 9, retired: 7 });
   });
 });
 
