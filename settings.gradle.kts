@@ -1,4 +1,4 @@
-rootProject.name = "TabakPP"
+rootProject.name = "tabakpp"
 include(":shared")
 include(":composeApp")
 include(":androidApp")
