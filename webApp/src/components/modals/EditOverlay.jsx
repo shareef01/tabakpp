@@ -19,7 +19,12 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
     setSaving(true);
     setError('');
     try {
-      await onSave(log.id, counts);
+      const configIds = new Set((configs || []).map((c) => c.id));
+      const merged = { ...(log.counts || {}) };
+      Object.entries(counts).forEach(([id, value]) => {
+        if (configIds.has(id)) merged[id] = Math.max(0, value || 0);
+      });
+      await onSave(log.id, merged);
       onClose();
     } catch (e) {
       console.error('[SYS] History override failed', e);
@@ -40,8 +45,6 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
     <div className="fixed inset-0 z-[5000] flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
       {/* Backdrop */}
       <motion.div
-        ref={dialogRef}
-        tabIndex={-1}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -50,6 +53,8 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
       />
 
       <motion.div
+        ref={dialogRef}
+        tabIndex={-1}
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
