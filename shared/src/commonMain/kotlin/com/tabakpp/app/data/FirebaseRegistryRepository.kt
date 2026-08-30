@@ -273,11 +273,17 @@ class FirebaseRegistryRepository(
                 configs,
                 profile.unitPrice
             )
-            val newCredit = RegistryMutations.contribution(normalized, configs, profile.unitPrice)
+            val configIdSet = configIds.toSet()
+            val mergedCounts = RegistryMutations.mergeHistoricalEditCounts(
+                normalized,
+                oldLogEntry.counts,
+                configIdSet
+            )
+            val newCredit = RegistryMutations.contribution(mergedCounts, configs, profile.unitPrice)
             val agg = RegistryMutations.applyReplace(profile.lifetimeAggregates, oldCredit, newCredit)
 
             updateFields(logRef) {
-                "counts" to normalized
+                "counts" to mergedCounts
                 "aggregateCredit.saved" to newCredit.saved
                 "aggregateCredit.wasted" to newCredit.wasted
                 "aggregateCredit.smokingUnits" to newCredit.smokingUnits

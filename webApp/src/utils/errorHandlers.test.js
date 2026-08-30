@@ -31,4 +31,9 @@ describe('mapFirestoreError', () => {
   it('maps missing profile', () => {
     expect(mapFirestoreError({ message: 'USER_NOT_FOUND' })).toMatch(/Profile not ready/);
   });
+
+  it('maps stale tracker references', () => {
+    expect(mapFirestoreError({ message: 'CONFIG_NOT_FOUND' }))
+      .toMatch(/tracker no longer exists/i);
+  });
 });

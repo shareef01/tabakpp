@@ -40,8 +40,8 @@ const useTapHandlers = (handler) => {
 export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index, globalSize = 'MEDIUM' }) => {
   const limit = config?.limit ?? 1;
   const remaining = Math.max(0, limit - count);
-  const isLimitReached = count >= limit;
-  const isOver = count > limit;
+  const isLimitReached = count >= limit && limit > 0;
+  const isOver = count > limit && limit > 0;
   const progress = limit > 0 ? Math.min(1, count / limit) : 0;
   const isLarge = globalSize === 'LARGE';
   const isSmall = globalSize === 'SMALL';
