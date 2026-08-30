@@ -40,7 +40,7 @@ fun HistoryChart(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 180.dp, max = 220.dp)
+            .heightIn(min = 156.dp, max = 196.dp)
             .semantics { contentDescription = chartDescription }
     ) {
         if (dailyTotals.isEmpty()) {

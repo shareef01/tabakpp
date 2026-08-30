@@ -14,13 +14,13 @@ export const DashboardSkeleton = React.memo(({ widgetSize }) => {
   };
 
   const heights = {
-    SMALL: "min-h-[260px]",
-    MEDIUM: "min-h-[300px]",
-    LARGE: "min-h-[340px]"
+    SMALL: "min-h-[11.5rem]",
+    MEDIUM: "min-h-[13.5rem]",
+    LARGE: "min-h-[16rem]"
   };
 
   return (
-    <div role="status" aria-label="Loading screen" className="space-y-4 md:space-y-5 animate-pulse">
+    <div role="status" aria-label="Loading screen" className="space-y-3 md:space-y-4 animate-pulse">
       <div className={cn("grid", gridClasses[widgetSize] || gridClasses.LARGE)}>
         {[...Array(4)].map((_, i) => (
           <div
