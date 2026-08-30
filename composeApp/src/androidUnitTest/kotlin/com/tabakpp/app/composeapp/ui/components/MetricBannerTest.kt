@@ -50,6 +50,7 @@ class MetricBannerTest {
         rule.onNodeWithText("13").assertIsDisplayed()          // limit - count
         rule.onNodeWithText("STREAK").assertIsDisplayed()
         rule.onNodeWithText("8").assertIsDisplayed()
+        rule.onNodeWithText("RANK").assertIsDisplayed()
         rule.onNodeWithText("DAILY QUOTA").assertIsDisplayed()
         rule.onNodeWithText("35%").assertIsDisplayed()          // progress * 100
         rule.onNodeWithText("SPENT TODAY").assertIsDisplayed()

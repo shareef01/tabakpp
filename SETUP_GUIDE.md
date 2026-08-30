@@ -119,8 +119,8 @@ firebase apps:sdkconfig ANDROID <ANDROID_APP_ID> --project tabakpp-ff036 -o andr
 (Delete the existing file first if `-o` refuses to overwrite.)
 
 ### Web App Check (recommended on Spark)
-1. In Firebase Console → App Check, register the web app with **reCAPTCHA Enterprise**
-   (or reCAPTCHA v3). Production uses `ReCaptchaEnterpriseProvider`.
+1. In Firebase Console → App Check, register the web app with **reCAPTCHA Enterprise**.
+   The web application uses `ReCaptchaEnterpriseProvider`.
 2. Add to `webApp/.env.local`:
    ```
    VITE_FIREBASE_APPCHECK_SITE_KEY=your_recaptcha_enterprise_site_key

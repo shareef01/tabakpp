@@ -200,4 +200,27 @@ class SmokingCalculatorTest {
         val fin = SmokingCalculator.calculateFinancials(mapOf("c1" to 5.0), configs)
         assertEquals(2.0, fin.wasted, 1e-9)
     }
+
+    @Test
+    fun testXPAndRankTiers() {
+        assertEquals("Apprentice", SmokingCalculator.getRank(0))
+        assertEquals("Apprentice", SmokingCalculator.getRank(100))
+        assertEquals("Apprentice", SmokingCalculator.getRank(499))
+        assertEquals("Scout", SmokingCalculator.getRank(500))
+        assertEquals("Scout", SmokingCalculator.getRank(3000))
+        assertEquals("Veteran", SmokingCalculator.getRank(5000))
+        assertEquals("Veteran", SmokingCalculator.getRank(8000))
+        assertEquals("Master", SmokingCalculator.getRank(10000))
+        assertEquals("Master", SmokingCalculator.getRank(19999))
+        assertEquals("Legend", SmokingCalculator.getRank(20000))
+        assertEquals("Legend", SmokingCalculator.getRank(50000))
+
+        val logs = listOf(
+            LogEntry("l1", "2026-01-01", mapOf("c1" to 5.0)),
+            LogEntry("l2", "2026-01-01", mapOf("c1" to 2.0)), // same date -> 1 unique day
+            LogEntry("l3", "2026-01-02", mapOf("c1" to 4.0))  // 2nd unique day
+        )
+        // 2 unique days * 10 + 3 streak * 15 = 20 + 45 = 65 XP
+        assertEquals(65, SmokingCalculator.calculateXP(logs, 3))
+    }
 }
