@@ -85,47 +85,57 @@ fun MetricBanner(
                     horizontalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
                     MetricItem(
+                        label = "RANK",
+                        value = metrics.rank.uppercase(),
+                        suffix = "${metrics.xp} XP",
+                        valueColor = accentColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricItem(
                         label = "STREAK",
                         value = "${metrics.streak}",
                         suffix = if (metrics.streak == 1) "DAY" else "DAYS",
                         valueColor = SuccessColor,
                         modifier = Modifier.weight(1f)
                     )
-                    Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "DAILY QUOTA",
-                                style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 1.sp, fontWeight = FontWeight.Black)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "DAILY QUOTA",
+                            style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 1.sp, fontWeight = FontWeight.Black)
+                        )
+                        Text(
+                            text = if (isOverLimit) "OVER LIMIT" else "${(progress * 100).toInt()}%",
+                            style = TabakTypography.labelSmall.copy(
+                                color = stateColor,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 1.sp
                             )
-                            Text(
-                                text = if (isOverLimit) "OVER LIMIT" else "${(progress * 100).toInt()}%",
-                                style = TabakTypography.labelSmall.copy(
-                                    color = stateColor,
-                                    fontWeight = FontWeight.Black,
-                                    letterSpacing = 1.sp
-                                )
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(10.dp))
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(100))
+                            .background(Color.White.copy(alpha = 0.05f))
+                    ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(8.dp)
+                                .fillMaxWidth(animatedProgress)
+                                .fillMaxHeight()
                                 .clip(RoundedCornerShape(100))
-                                .background(Color.White.copy(alpha = 0.05f))
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(animatedProgress)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(100))
-                                    .background(stateColor)
-                            )
-                        }
+                                .background(stateColor)
+                        )
                     }
                 }
             }
@@ -178,6 +188,8 @@ private fun MetricItem(
     valueColor: Color,
     modifier: Modifier = Modifier
 ) {
+    val isLong = value.length > 6
+    val fontSize = if (isLong) 16.sp else 24.sp
     Column(modifier = modifier, horizontalAlignment = Alignment.Start) {
         Text(
             text = label,
@@ -187,7 +199,7 @@ private fun MetricItem(
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = value,
-                style = TabakTypography.headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = 24.sp),
+                style = TabakTypography.headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = fontSize),
                 color = valueColor
             )
             if (suffix.isNotEmpty()) {

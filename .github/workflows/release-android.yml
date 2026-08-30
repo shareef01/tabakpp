@@ -12,15 +12,15 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@3a4f6e1af504cf6a31855fa8f9c6aa88f1be188e # v4.7.0
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@d156388eb19633375bd311914445ead649371ba8 # v4.2.0
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -46,6 +46,9 @@ jobs:
           echo "$TABAKPP_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/tabakpp-release.keystore"
           echo "TABAKPP_KEYSTORE_PATH=$RUNNER_TEMP/tabakpp-release.keystore" >> "$GITHUB_ENV"
 
+      - name: Run test and lint validation suite
+        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:lintDebug --no-daemon
+
       - name: Assemble signed release APK
         env:
           TABAKPP_KEYSTORE_PASSWORD: ${{ secrets.TABAKPP_KEYSTORE_PASSWORD }}
@@ -55,15 +58,24 @@ jobs:
           TABAKPP_VERSION_NAME: ${{ github.ref_name }}
         run: ./gradlew :androidApp:assembleRelease --no-daemon
 
-      - name: Prepare artifact
+      - name: Prepare artifact and checksum
         run: |
           mkdir -p dist
-          cp androidApp/build/outputs/apk/release/*.apk \
-            "dist/tabakpp-${GITHUB_REF_NAME}.apk"
+          APK_PATH=$(find androidApp/build/outputs/apk/release -name "*release*.apk" ! -name "*unsigned*" | head -n 1)
+          if [ -z "$APK_PATH" ] || [ ! -f "$APK_PATH" ]; then
+            echo "Error: No signed release APK found in androidApp/build/outputs/apk/release/"
+            exit 1
+          fi
+          cp "$APK_PATH" "dist/tabakpp-${GITHUB_REF_NAME}.apk"
+          cd dist
+          sha256sum "tabakpp-${GITHUB_REF_NAME}.apk" > "tabakpp-${GITHUB_REF_NAME}.apk.sha256"
+          cd ..
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@c95c1deef5dd43bb92569d66068e29d4b0f8b029 # v2.2.1
         with:
-          files: dist/tabakpp-*.apk
+          files: |
+            dist/tabakpp-*.apk
+            dist/tabakpp-*.apk.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
