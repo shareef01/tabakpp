@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ProtocolFormOverlay } from './ProtocolFormOverlay';
 
 vi.mock('../../hooks/useKeyboardInset', () => ({
@@ -62,5 +62,24 @@ describe('ProtocolFormOverlay', () => {
     expect(screen.getByText('RYO')).toBeInTheDocument();
     expect(screen.getByText('Custom')).toBeInTheDocument();
     expect(screen.queryByText('Joint')).not.toBeInTheDocument();
+  });
+
+  it('preserves a deliberate zero daily quota on save', async () => {
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ProtocolFormOverlay
+        isOpen
+        onClose={vi.fn()}
+        onApply={onApply}
+        title="Create Counter"
+        initialData={{ name: 'Abstain', limit: 0 }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText(/daily quota/i), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: /save counter/i }));
+
+    await waitFor(() => expect(onApply).toHaveBeenCalled());
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ limit: 0 }));
   });
 });

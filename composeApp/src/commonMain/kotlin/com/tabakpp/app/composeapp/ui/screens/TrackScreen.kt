@@ -56,8 +56,8 @@ fun TrackScreen(
     var showAddTrackerSheet by rememberSaveable { mutableStateOf(false) }
     var showEndDayConfirm by rememberSaveable { mutableStateOf(false) }
 
-    var lastLoggedTrackerId by rememberSaveable { mutableStateOf<String?>(null) }
-    var undoPillVisible by rememberSaveable { mutableStateOf(false) }
+    var lastLoggedTrackerId by remember { mutableStateOf<String?>(null) }
+    var undoPillVisible by remember { mutableStateOf(false) }
 
     LaunchedEffect(undoPillVisible, lastLoggedTrackerId) {
         if (undoPillVisible) {
@@ -89,7 +89,13 @@ fun TrackScreen(
                         undoPillVisible = true
                     }
                 },
-                onDecrement = { id -> viewModel.decrement(id) },
+                onDecrement = { id ->
+                    if (lastLoggedTrackerId == id) {
+                        undoPillVisible = false
+                        lastLoggedTrackerId = null
+                    }
+                    viewModel.decrement(id)
+                },
                 metrics = metrics,
                 endingDay = endingDay,
                 onEndDayClick = { showEndDayConfirm = true },

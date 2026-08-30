@@ -168,4 +168,36 @@ class SmokingCalculatorTest {
         // Active day (limit 10 - count 5) = 5. Recovery = 5 * 11 = 55
         assertEquals(55, SmokingCalculator.calculateRecoveryMinutes(logs, configs, active, "2024-05-20"))
     }
+
+    @Test
+    fun auditFixtureA_quota20_count5_unit50c() {
+        val configs = listOf(TrackerConfig("c1", "Cig", 20, 1, TrackerType.CIGARETTE, pricePerUnit = 0.5))
+        val fin = SmokingCalculator.calculateFinancials(mapOf("c1" to 5.0), configs)
+        assertEquals(2.5, fin.wasted, 1e-9)
+        assertEquals(7.5, fin.saved, 1e-9)
+        val m = SmokingCalculator.getGlobalMetrics(emptyList(), configs, mapOf("c1" to 5.0), "2026-01-01", 0.5)
+        assertEquals(5, m.count)
+        assertEquals(20, m.limit)
+        assertEquals(0.25, m.progress, 1e-9)
+    }
+
+    @Test
+    fun auditFixtureD_zeroQuotaStaysZero() {
+        val configs = listOf(TrackerConfig("c1", "Cig", 0, 1, TrackerType.CIGARETTE, pricePerUnit = 0.5))
+        val fin = SmokingCalculator.calculateFinancials(mapOf("c1" to 0.0), configs)
+        assertEquals(0.0, fin.wasted, 1e-9)
+        assertEquals(0.0, fin.saved, 1e-9)
+        val m = SmokingCalculator.getGlobalMetrics(emptyList(), configs, mapOf("c1" to 0.0), "2026-01-01", 0.5)
+        assertEquals(0, m.limit)
+        assertEquals(0.0, m.progress, 1e-9)
+    }
+
+    @Test
+    fun auditFixtureE_packUnitPrice() {
+        val unit = 8.0 / 20.0
+        assertEquals(0.4, unit, 1e-9)
+        val configs = listOf(TrackerConfig("c1", "Cig", 20, 1, TrackerType.CIGARETTE, pricePerUnit = unit))
+        val fin = SmokingCalculator.calculateFinancials(mapOf("c1" to 5.0), configs)
+        assertEquals(2.0, fin.wasted, 1e-9)
+    }
 }
