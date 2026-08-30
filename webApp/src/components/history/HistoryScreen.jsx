@@ -79,7 +79,7 @@ const STAT_TONES = {
 };
 
 const StatTile = ({ icon: Icon, value, label, hint, tone = 'neutral' }) => (
-  <div className="group relative flex flex-col justify-between gap-4 min-h-[7.25rem] p-4 md:p-5 rounded-2xl bg-white/[0.02] ring-1 ring-inset ring-white/[0.06] transition-colors duration-300 hover:bg-white/[0.035] hover:ring-white/[0.1]">
+  <div className="group relative flex flex-col justify-between gap-3 min-h-0 p-3.5 md:p-4 rounded-2xl bg-white/[0.02] ring-1 ring-inset ring-white/[0.06] transition-colors duration-300 hover:bg-white/[0.035] hover:ring-white/[0.1]">
     <div className="flex items-start justify-between gap-3">
       <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400 leading-none pt-0.5">
         {label}
@@ -207,11 +207,10 @@ export const HistoryScreen = React.memo(({
       : TrendingDown;
 
   return (
-    <div className="space-y-6 md:space-y-8 pb-28"
-    >
+    <div className="space-y-5 md:space-y-7">
       {/* Top: Daily Velocity Chart */}
       <Card className="p-5 md:p-8 overflow-hidden bg-bg-card">
-        <div className="flex items-end justify-between gap-4 md:gap-6 mb-4 md:mb-5">
+        <div className="flex items-end justify-between gap-4 md:gap-6 mb-3 md:mb-4">
           <div className="flex flex-col gap-1 min-w-0">
             <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Usage velocity</span>
             <h2 className="text-2xl md:text-3xl font-black tracking-tight text-white leading-none">
@@ -246,7 +245,7 @@ export const HistoryScreen = React.memo(({
         <div
           role="group"
           aria-label="Velocity period"
-          className="mb-5 md:mb-6 inline-flex p-1 rounded-full bg-white/[0.03] border border-white/[0.06] gap-0.5"
+          className="mb-4 md:mb-5 inline-flex p-1 rounded-full bg-white/[0.03] border border-white/[0.06] gap-0.5"
         >
           {VELOCITY_PERIODS.map((period) => {
             const selected = period.days === velocityDays;
@@ -269,7 +268,7 @@ export const HistoryScreen = React.memo(({
           })}
         </div>
 
-        <div className="h-48 md:h-56 w-full -mx-1">
+        <div className="h-40 md:h-52 w-full -mx-1">
           <p className="sr-only">
             {velocityPeriod.title}: today {velocityStats.nowVal} units, peak {velocityStats.peak} units.
             Data: {chartData.map((point) => `${point.dateLabel}: ${point.val}`).join('; ')}.
