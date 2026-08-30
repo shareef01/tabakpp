@@ -82,6 +82,42 @@ class TrackerCardTest {
         rule.onNodeWithText("2 OVER").assertIsDisplayed()
     }
 
+    private fun assertDensityShowsAllParts(size: WidgetSize) {
+        rule.setContent {
+            TabakTheme(reducedMotion = true) {
+                TrackerCard(
+                    config = cig,
+                    count = 7,
+                    accentColor = Color(0xFF10B981),
+                    widgetSize = size,
+                    onIncrement = {},
+                    onDecrement = {},
+                )
+            }
+        }
+        rule.onNodeWithText("CIGARETTES").assertIsDisplayed()
+        rule.onNodeWithText("20/DAY").assertIsDisplayed()
+        rule.onNodeWithText("7").assertIsDisplayed()
+        rule.onNodeWithText("13 LEFT").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Increase Cigarettes").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Decrease Cigarettes").assertIsDisplayed()
+    }
+
+    @Test
+    fun compactDensity_showsNameCountRemainingAndBothControls() {
+        assertDensityShowsAllParts(WidgetSize.SMALL)
+    }
+
+    @Test
+    fun comfortableDensity_showsNameCountRemainingAndBothControls() {
+        assertDensityShowsAllParts(WidgetSize.MEDIUM)
+    }
+
+    @Test
+    fun spaciousDensity_showsNameCountRemainingAndBothControls() {
+        assertDensityShowsAllParts(WidgetSize.LARGE)
+    }
+
     @Test
     fun zeroLimit_doesNotShowLimitReachedAtZeroCount() {
         rule.setContent {
