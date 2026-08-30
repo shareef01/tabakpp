@@ -127,21 +127,24 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
           </div>
 
           <div className="flex flex-col gap-5">
-            <span className={UI.LABEL}>Visualization Engine</span>
-            <div className="grid grid-cols-2 gap-3">
+            <span id="counter-type-label" className={UI.LABEL}>Visualization Engine</span>
+            <div className="grid grid-cols-2 gap-3" role="radiogroup" aria-labelledby="counter-type-label">
               {TYPES.map(t => {
                 const Icon = t.icon;
+                const selected = type === t.id;
                 return (
                   <button
                     key={t.id}
                     type="button"
+                    role="radio"
+                    aria-checked={selected}
                     onClick={() => setType(t.id)}
                     className={cn(
                       "flex items-center gap-3 p-4 rounded-2xl border text-xs font-bold uppercase tracking-widest transition-all",
-                      type === t.id ? "bg-accent border-accent text-black shadow-xl scale-[1.02]" : "bg-black/40 border-white/5 text-neutral-500 hover:border-white/10"
+                      selected ? "bg-accent border-accent text-black shadow-xl scale-[1.02]" : "bg-black/40 border-white/5 text-neutral-500 hover:border-white/10"
                     )}
                   >
-                    <Icon size={16} strokeWidth={type === t.id ? 3 : 2} />
+                    <Icon size={16} strokeWidth={selected ? 3 : 2} />
                     {t.label}
                   </button>
                 );

@@ -84,6 +84,16 @@ const resolveContribution = (storedCredit, counts, configs, price) => {
   return contributionFrom(counts, configs, price);
 };
 
+/** Preserve counts for trackers deleted since the log was written (Kotlin parity). */
+const mergeHistoricalEditCounts = (incoming, previous, liveConfigIds) => {
+  const live = new Set(liveConfigIds);
+  const merged = { ...incoming };
+  Object.entries(previous || {}).forEach(([id, value]) => {
+    if (!live.has(id)) merged[id] = value;
+  });
+  return merged;
+};
+
 /**
  * RegistryService (Model Layer)
  * Hardened for Cross-Platform Parity and Atomic Integrity.
@@ -231,10 +241,13 @@ export const RegistryService = {
   adjustCounter: async (uid, counterId, delta) => {
     if (!uid || !counterId) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
+    const configRef = doc(db, 'users', uid, 'configs', counterId);
 
     return runTransaction(db, async (transaction) => {
       const snap = await transaction.get(userRef);
       if (!snap.exists()) throw new Error("USER_NOT_FOUND");
+      const configSnap = await transaction.get(configRef);
+      if (!configSnap.exists()) throw new Error("CONFIG_NOT_FOUND");
 
       const profile = snap.data();
       const counts = { ...(profile.activeCounts || {}) };
@@ -321,10 +334,12 @@ export const RegistryService = {
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
       const oldLog = logSnap.data();
-      const oldCredit = resolveContribution(oldLog.aggregateCredit, oldLog.counts || {}, configs, price);
-      const newCredit = contributionFrom(normalized, configs, price);
+      const oldCounts = oldLog.counts || {};
+      const mergedCounts = mergeHistoricalEditCounts(normalized, oldCounts, configIds);
+      const oldCredit = resolveContribution(oldLog.aggregateCredit, oldCounts, configs, price);
+      const newCredit = contributionFrom(mergedCounts, configs, price);
 
-      transaction.update(logRef, { counts: normalized, aggregateCredit: newCredit });
+      transaction.update(logRef, { counts: mergedCounts, aggregateCredit: newCredit });
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - oldCredit.saved + newCredit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - oldCredit.wasted + newCredit.wasted,

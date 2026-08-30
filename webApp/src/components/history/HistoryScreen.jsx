@@ -416,6 +416,7 @@ export const HistoryScreen = React.memo(({
               <button
                 type="button"
                 onClick={onAddEntry}
+                aria-label="Add manual history entry"
                 className="inline-flex items-center gap-2 h-10 px-3.5 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all"
                 title="Add manual entry"
               >

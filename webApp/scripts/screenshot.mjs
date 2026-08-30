@@ -13,6 +13,7 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(dir, '../dist-demo');
 const outDir = path.resolve(dir, '../../assets/screenshots');
 const desktopDir = path.join(outDir, 'web', 'desktop', 'red');
+const mobileDir = path.join(outDir, 'web', 'mobile', 'red');
 const showcaseDir = path.join(outDir, 'showcase');
 
 const MIME = {
@@ -23,7 +24,8 @@ const MIME = {
 
 /** README product shots — red accent on a laptop-sized canvas. */
 const RED = '#F43F5E';
-const VIEW = { width: 1440, height: 900, deviceScaleFactor: 2 };
+const DESKTOP_VIEW = { width: 1440, height: 900, deviceScaleFactor: 2 };
+const MOBILE_VIEW = { width: 390, height: 844, deviceScaleFactor: 3 };
 
 const SHOTS = [
   { name: 'auth', hash: '#auth' },
@@ -61,11 +63,17 @@ function startServer() {
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const copySafe = (src, dest) => {
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.writeFileSync(dest, fs.readFileSync(src));
+};
+
 async function run() {
   if (!fs.existsSync(path.join(distDir, 'index.html'))) {
     throw new Error('Missing dist-demo/index.html — run "npm run build:demo" first.');
   }
   fs.mkdirSync(desktopDir, { recursive: true });
+  fs.mkdirSync(mobileDir, { recursive: true });
   fs.mkdirSync(showcaseDir, { recursive: true });
 
   const server = await startServer();
@@ -73,7 +81,7 @@ async function run() {
   const browser = await puppeteer.launch({
     executablePath: findChrome(),
     headless: 'new',
-    args: ['--no-sandbox', '--force-color-profile=srgb', '--hide-scrollbars', `--window-size=${VIEW.width},${VIEW.height}`],
+    args: ['--no-sandbox', '--force-color-profile=srgb', '--hide-scrollbars'],
   });
   try {
     const page = await browser.newPage();
@@ -81,29 +89,35 @@ async function run() {
     page.on('console', (m) => { if (m.type() === 'error') console.error('  [console]', m.text()); });
 
     const accentQ = `?accent=${encodeURIComponent(RED)}`;
-    console.log(`\ndesktop red (${RED}) @ ${VIEW.width}x${VIEW.height}`);
 
-    for (const shot of SHOTS) {
-      await page.setViewport(VIEW);
-      const url = shot.hash ? `${base}/${accentQ}${shot.hash}` : `${base}/${accentQ}`;
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      await wait(1400);
-      if (shot.nav) {
-        const selector = `[aria-label="${shot.nav}"]`;
-        await page.waitForSelector(selector, { timeout: 8000 });
-        await page.$eval(selector, (el) => el.click());
-        await wait(1600);
+    const captureSet = async (view, label, destDir, copyShowcase = false) => {
+      console.log(`\n${label} red (${RED}) @ ${view.width}x${view.height}`);
+      for (const shot of SHOTS) {
+        await page.setViewport(view);
+        const url = shot.hash ? `${base}/${accentQ}${shot.hash}` : `${base}/${accentQ}`;
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await wait(1400);
+        if (shot.nav) {
+          const selector = `[aria-label="${shot.nav}"]`;
+          await page.waitForSelector(selector, { timeout: 8000 });
+          await page.$eval(selector, (el) => el.click());
+          await wait(1600);
+        }
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await wait(500);
+        const file = `${shot.name}.png`;
+        const dest = path.join(destDir, file);
+        await page.screenshot({ path: dest, fullPage: false });
+        if (copyShowcase) {
+          copySafe(dest, path.join(showcaseDir, `web-${shot.name}.png`));
+          copySafe(dest, path.join(outDir, file));
+        }
+        console.log(`  captured ${file}`);
       }
-      await page.evaluate(() => window.scrollTo(0, 0));
-      await wait(500);
-      const file = `${shot.name}.png`;
-      const dest = path.join(desktopDir, file);
-      await page.screenshot({ path: dest, fullPage: false });
-      fs.copyFileSync(dest, path.join(showcaseDir, `web-${shot.name}.png`));
-      // Root aliases for simple embeds
-      fs.copyFileSync(dest, path.join(outDir, file));
-      console.log(`  captured ${file}`);
-    }
+    };
+
+    await captureSet(DESKTOP_VIEW, 'desktop', desktopDir, true);
+    await captureSet(MOBILE_VIEW, 'mobile', mobileDir, false);
   } finally {
     await browser.close();
     server.close();
