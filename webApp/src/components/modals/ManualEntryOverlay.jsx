@@ -47,8 +47,6 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
   return (
     <div className="fixed inset-0 z-[5000] flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
       <motion.div
-        ref={dialogRef}
-        tabIndex={-1}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
@@ -57,6 +55,8 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
       />
 
       <motion.div
+        ref={dialogRef}
+        tabIndex={-1}
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}

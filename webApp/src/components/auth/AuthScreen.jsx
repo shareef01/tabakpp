@@ -59,7 +59,7 @@ const BrandedAtmosphere = React.memo(({ accent }) => (
   </div>
 ));
 
-export const AuthScreen = React.memo(({ accent = '#10B981' }) => {
+export const AuthScreen = React.memo(({ accent = '#FF5F5F' }) => {
   const [mode, setMode] = useState('LOGIN');
   const [e, setE] = useState('');
   const [p, setP] = useState('');

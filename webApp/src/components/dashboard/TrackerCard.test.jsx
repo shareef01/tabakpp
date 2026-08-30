@@ -60,6 +60,13 @@ describe('TrackerCard screen-reader output', () => {
     expect(live.textContent).toContain('3 over limit');
   });
 
+  it('does not mark a zero daily quota as limit reached at count zero', () => {
+    setup({ config: { ...config, limit: 0 }, count: 0 });
+    const live = document.querySelector('[aria-live="polite"]');
+    expect(live.textContent).toContain('0 of 0');
+    expect(screen.getByRole('button', { name: /increase cigarettes/i }).className).toMatch(/bg-accent/);
+  });
+
   it('hides the decorative gauge from assistive tech', () => {
     setup();
     expect(document.querySelector('[aria-hidden="true"]')).toBeTruthy();

@@ -192,8 +192,15 @@ fun ManualEntryForm(
 
         Button(
             onClick = {
-                val finalCounts = counts.mapValues {
+                val edited = counts.mapValues {
                     (it.value.toDoubleOrNull() ?: 0.0).coerceIn(0.0, 10_000.0)
+                }
+                val configIds = configs.map { it.id }.toSet()
+                val finalCounts = buildMap {
+                    initialLog?.counts?.forEach { (id, value) ->
+                        if (id !in configIds) put(id, maxOf(0.0, value))
+                    }
+                    edited.forEach { (id, value) -> put(id, value) }
                 }
                 onSave(date, finalCounts)
             },

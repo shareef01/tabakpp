@@ -84,6 +84,16 @@ class RegistryMutationsTest {
     }
 
     @Test
+    fun mergeHistoricalEditCounts_preservesDeletedTrackerCounts() {
+        val merged = RegistryMutations.mergeHistoricalEditCounts(
+            incoming = mapOf("cig" to 9.0),
+            previous = mapOf("cig" to 4.0, "retired" to 7.0),
+            liveConfigIds = listOf("cig")
+        )
+        assertEquals(mapOf("cig" to 9.0, "retired" to 7.0), merged)
+    }
+
+    @Test
     fun creditThenDebit_isIdentity() {
         // Restoring then deleting the same log must leave aggregates untouched.
         val start = LifetimeAggregates(12.34, 56.78, 90.0)

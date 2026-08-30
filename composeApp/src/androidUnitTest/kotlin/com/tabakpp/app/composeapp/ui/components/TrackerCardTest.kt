@@ -81,4 +81,22 @@ class TrackerCardTest {
         setCard(count = 22)
         rule.onNodeWithText("2 OVER").assertIsDisplayed()
     }
+
+    @Test
+    fun zeroLimit_doesNotShowLimitReachedAtZeroCount() {
+        rule.setContent {
+            TabakTheme(reducedMotion = true) {
+                TrackerCard(
+                    config = cig.copy(limit = 0),
+                    count = 0,
+                    accentColor = Color(0xFF10B981),
+                    widgetSize = WidgetSize.MEDIUM,
+                    onIncrement = {},
+                    onDecrement = {},
+                )
+            }
+        }
+        rule.onNodeWithText("0 LEFT").assertIsDisplayed()
+        rule.onNodeWithText("0").assertIsDisplayed()
+    }
 }
