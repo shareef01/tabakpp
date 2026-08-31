@@ -2,6 +2,21 @@
   "firestore": {
     "rules": "firestore.rules"
   },
+  "hosting": {
+    "site": "tabakpp",
+    "public": "webApp/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
   "emulators": {
     "firestore": {
       "port": 8080
