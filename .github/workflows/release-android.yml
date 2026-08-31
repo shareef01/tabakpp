@@ -12,15 +12,15 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@3a4f6e1af504cf6a31855fa8f9c6aa88f1be188e # v4.7.0
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
           cache: gradle
 
-      - uses: gradle/actions/setup-gradle@d156388eb19633375bd311914445ead649371ba8 # v4.2.0
+      - uses: gradle/actions/setup-gradle@v4
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -72,7 +72,7 @@ jobs:
           cd ..
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@c95c1deef5dd43bb92569d66068e29d4b0f8b029 # v2.2.1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/tabakpp-*.apk
