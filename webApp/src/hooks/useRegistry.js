@@ -122,17 +122,44 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
         const d = s.data();
         latestServerCountsRef.current = d.activeCounts || {};
         publishCounterOverlay();
-        setLifetimeAggregates(d.lifetimeAggregates || { saved: 0, wasted: 0, smokingUnits: 0 });
-        setProfileSettings({
-          name: d.name || '',
-          accent: d.accent || null,
-          widgetSize: d.widgetSize || 'MEDIUM',
-          avatar: d.avatar || null,
-          unitPrice: d.unitPrice ?? 0.5,
-          dayStartHour: d.dayStartHour ?? 6,
-          purchaseType: d.purchaseType || 'PACK',
-          pouchPrice: d.pouchPrice ?? 0,
-          estimatedYield: d.estimatedYield ?? 0,
+        setLifetimeAggregates((prev) => {
+          const next = d.lifetimeAggregates || { saved: 0, wasted: 0, smokingUnits: 0 };
+          if (
+            prev &&
+            prev.saved === next.saved &&
+            prev.wasted === next.wasted &&
+            prev.smokingUnits === next.smokingUnits
+          ) {
+            return prev;
+          }
+          return next;
+        });
+        setProfileSettings((prev) => {
+          const next = {
+            name: d.name || '',
+            accent: d.accent || null,
+            widgetSize: d.widgetSize || 'MEDIUM',
+            avatar: d.avatar || null,
+            unitPrice: d.unitPrice ?? 0.5,
+            dayStartHour: d.dayStartHour ?? 6,
+            purchaseType: d.purchaseType || 'PACK',
+            pouchPrice: d.pouchPrice ?? 0,
+            estimatedYield: d.estimatedYield ?? 0,
+          };
+          if (prev) {
+            const isUnchanged =
+              prev.name === next.name &&
+              prev.accent === next.accent &&
+              prev.widgetSize === next.widgetSize &&
+              prev.avatar === next.avatar &&
+              prev.unitPrice === next.unitPrice &&
+              prev.dayStartHour === next.dayStartHour &&
+              prev.purchaseType === next.purchaseType &&
+              prev.pouchPrice === next.pouchPrice &&
+              prev.estimatedYield === next.estimatedYield;
+            if (isUnchanged) return prev;
+          }
+          return next;
         });
       },
       onListenerError
