@@ -298,10 +298,10 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   const createManualEntry = useCallback(async (date, counts) => {
     if (!user) return;
     return runMutation(
-      () => RegistryService.createManualEntry(user.uid, date, counts, effectiveUnitPrice),
+      () => RegistryService.createManualEntry(user.uid, date, counts, effectiveUnitPrice, today),
       'Could not create entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation]);
+  }, [user?.uid, effectiveUnitPrice, today, runMutation]);
 
   const reorder = useCallback(async (id, dir) => {
     if (!user) return;

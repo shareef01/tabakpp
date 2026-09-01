@@ -282,6 +282,7 @@ fun HistoryScreen(
             ManualEntryForm(
                 configs = configs,
                 initialDate = trackingDay,
+                maxDate = trackingDay,
                 accentColor = accentColor,
                 onSave = { date, counts ->
                     viewModel.createManualEntry(date, counts)

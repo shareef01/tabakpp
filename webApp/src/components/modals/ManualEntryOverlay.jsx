@@ -10,7 +10,7 @@ import { useDialogA11y } from '../../hooks/useDialogA11y';
 /**
  * Manual historical backfill — Android ManualEntryForm parity.
  */
-export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave }) => {
+export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', onClose, onSave }) => {
   const keyboardInset = useKeyboardInset();
   const [date, setDate] = useState(initialDate);
   const [counts, setCounts] = useState(() =>
@@ -20,7 +20,13 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
   const [error, setError] = useState('');
   const dialogRef = useDialogA11y(true, onClose, { disabled: saving });
 
-  const isDateValid = SmokingCalculator.isValidDate(date);
+  const isCalendarDate = SmokingCalculator.isValidDate(date);
+  // `max` on the input stops the picker, but typed input and non-conforming
+  // browsers still get through, so the same domain rule gates the button.
+  const isDateValid = SmokingCalculator.isBackfillDateAllowed(date, maxDate);
+  const dateHint = isCalendarDate
+    ? 'Backfill only — pick today or an earlier date.'
+    : 'Invalid date — use YYYY-MM-DD';
 
   const adjust = (id, delta) => {
     setCounts((prev) => ({
@@ -87,10 +93,17 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
             isDark
             autoComplete="off"
             enterKeyHint="done"
+            max={maxDate || undefined}
+            aria-invalid={date && !isDateValid ? true : undefined}
+            aria-describedby={date && !isDateValid ? 'manual-entry-date-error' : undefined}
           />
           {date && !isDateValid && (
-            <span className="mt-2 ml-1 block text-[11px] font-black uppercase tracking-widest text-rose-500">
-              Invalid date — use YYYY-MM-DD
+            <span
+              id="manual-entry-date-error"
+              role="alert"
+              className="mt-2 ml-1 block text-[11px] font-black uppercase tracking-widest text-rose-500"
+            >
+              {dateHint}
             </span>
           )}
         </div>
