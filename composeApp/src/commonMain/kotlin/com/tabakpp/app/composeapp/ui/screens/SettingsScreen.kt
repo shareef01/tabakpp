@@ -210,11 +210,12 @@ fun SettingsScreen(
                     EconomicsSettings(
                         profile = profile,
                         accentColor = accentColor,
-                        onSave = { purchaseType, unitPrice, pouchPrice, estimatedYield ->
+                        onSave = { purchaseType, unitPrice, unitsPerPack, pouchPrice, estimatedYield ->
                             viewModel.updateProfile { p ->
                                 p.copy(
                                     purchaseType = purchaseType,
                                     unitPrice = unitPrice,
+                                    unitsPerPack = unitsPerPack,
                                     pouchPrice = pouchPrice,
                                     estimatedYield = estimatedYield
                                 )
@@ -730,18 +731,29 @@ fun AccentPalette(
 fun EconomicsSettings(
     profile: UserProfile?,
     accentColor: Color,
-    onSave: (purchaseType: String, unitPrice: Double, pouchPrice: Double, estimatedYield: Int) -> Unit
+    onSave: (
+        purchaseType: String,
+        unitPrice: Double,
+        unitsPerPack: Int,
+        pouchPrice: Double,
+        estimatedYield: Int
+    ) -> Unit
 ) {
     val initialMode = if (profile?.purchaseType == "POUCH") "POUCH" else "PACK"
     var ecoMode by rememberSaveable(profile?.purchaseType) { mutableStateOf(initialMode) }
-    var packPrice by rememberSaveable(profile?.unitPrice, profile?.purchaseType) {
+    // Derive from the persisted quantity, not a hardcoded 20 — otherwise a user
+    // who buys 25s watched their pack price change back on the next load even
+    // though unitPrice was correct.
+    var packPrice by rememberSaveable(profile?.unitPrice, profile?.purchaseType, profile?.unitsPerPack) {
         mutableStateOf(
             if (profile?.purchaseType == "PACK" && (profile.unitPrice) > 0) {
-                twoDecimals(profile.unitPrice * 20.0)
+                twoDecimals(profile.unitPrice * profile.unitsPerPack.coerceAtLeast(1).toDouble())
             } else "8.00"
         )
     }
-    var packQty by rememberSaveable { mutableStateOf("20") }
+    var packQty by rememberSaveable(profile?.unitsPerPack) {
+        mutableStateOf((profile?.unitsPerPack ?: 20).coerceAtLeast(1).toString())
+    }
     var pouchPrice by rememberSaveable(profile?.pouchPrice) {
         mutableStateOf(
             profile?.pouchPrice?.takeIf { it > 0 }?.let { twoDecimals(it) } ?: "6.50"
@@ -871,12 +883,16 @@ fun EconomicsSettings(
                 onClick = {
                     if (ecoMode == "PACK") {
                         val rp = packPrice.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
-                        val rq = packQty.toIntOrNull()?.coerceAtLeast(1) ?: 1
-                        onSave("PACK", rp / rq, 0.0, 0)
+                        val rq = (packQty.toIntOrNull() ?: 1).coerceIn(1, 1000)
+                        onSave("PACK", rp / rq, rq, 0.0, 0)
                     } else {
                         val bp = pouchPrice.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
                         val by = estimatedYield.toIntOrNull()?.coerceAtLeast(1) ?: 1
-                        onSave("POUCH", bp / by, bp, by)
+                        // Carry the pack quantity through untouched — switching to
+                        // POUCH must not discard it, matching the web path which
+                        // simply omits unitsPerPack from a POUCH save.
+                        val keepQty = (packQty.toIntOrNull() ?: 20).coerceIn(1, 1000)
+                        onSave("POUCH", bp / by, keepQty, bp, by)
                     }
                 },
                 modifier = Modifier

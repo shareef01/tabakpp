@@ -358,6 +358,7 @@ class FirebaseRegistryRepository(
             "widgetSize" to profile.widgetSize.name
             "purchaseType" to profile.purchaseType
             "unitPrice" to profile.unitPrice
+            "unitsPerPack" to profile.unitsPerPack
             "pouchPrice" to profile.pouchPrice
             "estimatedYield" to profile.estimatedYield
             "dayStartHour" to profile.dayStartHour

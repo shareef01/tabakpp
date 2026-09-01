@@ -109,6 +109,14 @@ data class UserProfile(
     val widgetSize: WidgetSize = WidgetSize.MEDIUM,
     val purchaseType: String = "PACK",
     val unitPrice: Double = 0.5,
+    /**
+     * Units in a pack, for the PACK economics editor. Persisted because both
+     * clients used to hardcode 20 and re-derive the pack price as
+     * unitPrice * 20 — so a user who bought 25s saw their pack price change
+     * under them on the next load even though unitPrice was correct.
+     * Legacy documents without the field fall back to 20.
+     */
+    val unitsPerPack: Int = 20,
     val pouchPrice: Double = 0.0,
     val estimatedYield: Int = 0,
     val dayStartHour: Int = 6,
