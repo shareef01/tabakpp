@@ -298,6 +298,27 @@ note explaining why (debug provider on release APKs), so a future pass does not
 - **Regression test:** shared half-cent vectors (`0.125` → `0,13 €`, `0.135` →
   `0,14 €`, `2.505` → `2,51 €`) asserted in both suites.
 
+### P2 — Units-per-pack was not persisted on either client
+- **Problem:** both clients hardcoded 20 units per pack and re-derived the shown
+  pack price as `unitPrice * 20`, without ever storing the quantity. Entering
+  `11.00 / 25` saved a correct `unitPrice` of 0.44 and then displayed **8.80** on
+  the next load. The number moved under the user while every derived metric
+  stayed right — the hardest version of this to notice or report.
+- **Files:** `shared/.../data/Models.kt`, `shared/.../data/FirebaseRegistryRepository.kt`,
+  `composeApp/.../ui/screens/SettingsScreen.kt`, `firestore.rules`,
+  `services/registryService.js`, `hooks/useRegistry.js`, `App.jsx`,
+  `components/settings/SettingsScreen.jsx`
+- **Solution:** `UserProfile.unitsPerPack` (default 20, so legacy documents are
+  unaffected), wired through the settings write path on both clients. A POUCH
+  save deliberately leaves it alone on both sides, so switching purchase type
+  does not discard the pack quantity. Rules bound it to a whole number in
+  1..1000 — the lower bound matters because 0 divides by zero in the unit-cost
+  derivation — and keep it on the settings side of the settings/mutation split.
+- **Regression test:** 2 service cases (round-trip reloads as 11.00; a POUCH save
+  preserves an existing quantity) and 4 adversarial rules cases — in-bounds
+  accepted; zero, negative, fractional, oversized, string, null, cross-user, and
+  mutation-path smuggling all rejected. Rules suite 27 → 31.
+
 ## Remaining findings
 
 None are release blockers.
@@ -312,7 +333,6 @@ None are release blockers.
 | Sev | Finding | Why not fixed | Next step |
 |---|---|---|---|
 | P2 | `webApp/firebase.json` now duplicates the root hosting config | It is the maintainer's file and was the config used for prior deploys; deleting it is their call | Delete it and always deploy from the repo root, or keep it and add a comment that root is authoritative |
-| P2 | Units-per-pack is not persisted on **either** client | Both default to 20 and derive pack price as `unitPrice * 20`; a user who sets 25 units sees their pack price change on reload. Fixing needs a new profile field + rules + both clients | Add `unitsPerPack` to `UserProfile`, `validUserKeys`, `validSettingsUpdate`, and both settings screens |
 | P3 | Tracker names truncate early in the Settings list ("Cigarettes" → "Cig…" at 1440px) while the row below has space | Cosmetic; the type badge and limit block are `shrink-0` | Allow the badge to wrap or drop it below the name at narrow column widths |
 | P3 | `manifest.json` describes the app as a "High-Fidelity Health Optimization Tracker" | Marketing-ish and health-adjacent for a smoking counter; no functional impact | Consider "Smoking tracker with daily limits, history, and spend" |
 | P3 | `hiddenLogIds` in `HistoryScreen` grows unbounded within a session | Only ever holds deleted ids; memory impact negligible | Prune on `logs` change if ever relevant |
