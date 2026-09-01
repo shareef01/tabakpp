@@ -245,16 +245,42 @@ enforcement as deliberately off. Replaced with an explicit **do not enable**
 note explaining why (debug provider on release APKs), so a future pass does not
 "harden" it and break every APK from GitHub Releases.
 
+### P2 — Android accent palette highlighted the wrong default swatch
+- **Problem:** `SettingsScreen.kt` fell back to `"#10B981"` when the profile had
+  not loaded, while `UserProfile.accent` defaults to `"#FF5F5F"`, so the palette
+  briefly checked a swatch the account was not using.
+- **Files:** `composeApp/.../ui/screens/SettingsScreen.kt`
+- **Solution:** fall back to `"#FF5F5F"`, matching the model.
+
+### P2 — Android register error fell through on a server-side policy rejection
+- **Problem:** `AuthErrorMapper`'s REGISTER branch matched only `"weak"`. Firebase
+  reports a password-policy failure as `PASSWORD_DOES_NOT_MEET_REQUIREMENTS`,
+  which matched nothing and fell through to "Could not create account."
+- **Scope correction:** this is defensive, not user-facing today.
+  `AuthViewModel.signUp` already rejects passwords under 12 characters before any
+  network call and emits the right message, and the Console policy is a 12-char
+  minimum — so the fallthrough is currently unreachable. It opens only if that
+  policy is later tightened (for example with complexity rules).
+- **Files:** `shared/.../data/AuthErrorMapper.kt`
+- **Solution:** match the policy codes alongside `"weak"`.
+- **Regression test:** `ErrorAndInputPolicyTest` — policy rejection maps to the
+  requirement message and stays distinct from the generic failure; the legacy
+  `auth/weak-password` code still maps too.
+
 ## Remaining findings
 
-None are release blockers. Highest-value follow-up is the Android register-error
-mapping, since it lands on a first-run flow.
+None are release blockers.
+
+> **Correction (post-audit).** An earlier revision of this table claimed Android had
+> no client-side password-length check and called it the highest-value follow-up.
+> That was wrong: `AuthViewModel.signUp` enforces `MIN_PASSWORD_LENGTH = 12` and
+> emits the correct message. The check lives in the view model, not in
+> `AuthScreen`'s `canSubmit`, which is where the original pass stopped looking. The
+> two Android items are now fixed and have moved to Fixed, below.
 
 | Sev | Finding | Why not fixed | Next step |
 |---|---|---|---|
 | P2 | `webApp/firebase.json` now duplicates the root hosting config | It is the maintainer's file and was the config used for prior deploys; deleting it is their call | Delete it and always deploy from the repo root, or keep it and add a comment that root is authoritative |
-| P2 | Android register: short password shows "Could not create account." | `AuthErrorMapper` matches `"weak"`, but Firebase's server-side 12-char policy returns `PASSWORD_DOES_NOT_MEET_REQUIREMENTS`. Android also has no client-side length check (web has both). Kotlin unverifiable here | Add `lower.contains("does_not_meet") \|\| lower.contains("requirements")` to the REGISTER branch, and a client-side 12-char guard in `AuthScreen.kt` |
-| P2 | Android Settings falls back to `"#10B981"` when profile is null, but the model default is `"#FF5F5F"` | One-line Kotlin change I could not compile | `SettingsScreen.kt:127` → `?: "#FF5F5F"` |
 | P2 | Units-per-pack is not persisted on **either** client | Both default to 20 and derive pack price as `unitPrice * 20`; a user who sets 25 units sees their pack price change on reload. Fixing needs a new profile field + rules + both clients | Add `unitsPerPack` to `UserProfile`, `validUserKeys`, `validSettingsUpdate`, and both settings screens |
 | P2 | Future-dated manual entries accepted on both clients | `isValidDate` checks the calendar, not the upper bound; rules only enforce the `YYYY-MM-DD` pattern. A future-dated log makes `calculateStreak` report 1 instead of 0 for an otherwise-inactive user, because the `mostRecent < yesterday` early return is bypassed | Clamp to the tracking day in both clients (`max` on the web date input plus a guard, `LocalDate` check on Android); rules cannot easily compare dates |
 | P3 | `formatCurrency` rounds differently on the two clients | Kotlin `kotlin.math.round` is `Math.rint` (ties-to-even); JS `Math.round` is ties-up. Diverges by one cent only on exact half-cents (e.g. a €0.125 unit price) | If aligning, change Kotlin to explicit half-up — that is the conventional currency rounding and matches web |
@@ -426,8 +452,7 @@ headers, the History chart erasing a day the moment it was archived, and a stale
 user-facing privacy notice carrying an internal pre-launch TODO. The remaining
 findings are P2/P3 polish plus two schema gaps shared by both clients
 (units-per-pack not persisted, future-dated manual entries accepted); none block
-a release. Recommended first follow-up is the Android register-error mapping,
-because it lands on the signup flow.
+a release.
 
 Caveat on scope: the Android client was reviewed by reading and is verified only
 to the depth CI provides — unit tests, lint and a successful release assemble. No
