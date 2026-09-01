@@ -433,6 +433,7 @@ const AppContent = () => {
               <ManualEntryOverlay
                 configs={configs}
                 initialDate={today}
+                maxDate={today}
                 onClose={() => setIsManualEntryOpen(false)}
                 onSave={createManualEntry}
               />

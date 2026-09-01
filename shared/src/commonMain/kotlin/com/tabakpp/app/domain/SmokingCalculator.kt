@@ -3,9 +3,9 @@ package com.tabakpp.app.domain
 import com.tabakpp.app.data.*
 import kotlinx.datetime.*
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.round
 
 object SmokingCalculator {
     const val DEFAULT_DAY_START_HOUR = 6
@@ -350,7 +350,13 @@ object SmokingCalculator {
     fun formatCurrency(amount: Double): String {
         // Round in cent space: naive (amount - intPart) * 100 truncation
         // turns 8.03 into "8,02 €" and breaks entirely for negatives.
-        val totalCents = round(amount * 100).toLong()
+        //
+        // floor(x + 0.5), not round(x): kotlin.math.round is Math.rint, which
+        // breaks ties to even, while the web's Math.round breaks them upward. On
+        // an exact half-cent — reachable from a unit price like 0.125 — the two
+        // clients printed amounts a cent apart for the same stored data. This is
+        // both JS-identical and the conventional currency rounding.
+        val totalCents = floor(amount * 100 + 0.5).toLong()
         val sign = if (totalCents < 0) "-" else ""
         val cents = abs(totalCents)
         return "$sign${cents / 100},${(cents % 100).toString().padStart(2, '0')} €"
@@ -370,6 +376,22 @@ object SmokingCalculator {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * Backfill is for days that have happened. A future-dated log is not just
+     * meaningless — it also silently revives a dead streak: [calculateStreak] bails
+     * early only when the most recent logged date is older than yesterday, and a
+     * date in the future is not, so an otherwise-inactive user reads as streak 1.
+     *
+     * Both arguments are YYYY-MM-DD, so the comparison is plain lexicographic
+     * ordering. Kept here rather than in the form so the view model and both
+     * clients apply the identical rule.
+     */
+    fun isBackfillDateAllowed(dateStr: String, trackingDay: String?): Boolean {
+        if (!isValidDate(dateStr)) return false
+        if (trackingDay.isNullOrBlank()) return true
+        return dateStr <= trackingDay
     }
 
     fun formatDateDisplay(dateStr: String): String {
