@@ -57,6 +57,57 @@ describe('Firestore ownership and write paths', () => {
     await assertFails(updateDoc(doc(malloryDb, 'users/alice'), { name: 'Mallory' }));
   });
 
+  describe('unitsPerPack', () => {
+    const seedAlice = async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+      });
+      return testEnv.authenticatedContext('alice').firestore();
+    };
+
+    it('accepts whole numbers within bounds on the settings path', async () => {
+      const db = await seedAlice();
+      await assertSucceeds(updateDoc(doc(db, 'users/alice'), { unitsPerPack: 25 }));
+      await assertSucceeds(updateDoc(doc(db, 'users/alice'), { unitsPerPack: 1 }));
+      await assertSucceeds(updateDoc(doc(db, 'users/alice'), { unitsPerPack: 1000 }));
+      // Realistic pairing: the pack editor saves quantity and derived price together.
+      await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+        purchaseType: 'PACK',
+        unitsPerPack: 25,
+        unitPrice: 0.44,
+      }));
+    });
+
+    it('rejects zero, negative, fractional, oversized, and non-numeric values', async () => {
+      const db = await seedAlice();
+      // Zero would divide by zero in the unit-cost derivation.
+      await assertFails(updateDoc(doc(db, 'users/alice'), { unitsPerPack: 0 }));
+      await assertFails(updateDoc(doc(db, 'users/alice'), { unitsPerPack: -5 }));
+      await assertFails(updateDoc(doc(db, 'users/alice'), { unitsPerPack: 20.5 }));
+      await assertFails(updateDoc(doc(db, 'users/alice'), { unitsPerPack: 1001 }));
+      await assertFails(updateDoc(doc(db, 'users/alice'), { unitsPerPack: '20' }));
+      await assertFails(updateDoc(doc(db, 'users/alice'), { unitsPerPack: null }));
+    });
+
+    it('stays on the settings path — a mutation write cannot carry it', async () => {
+      const db = await seedAlice();
+      // The settings/mutation split must hold for the new field too: a counter
+      // write has no business touching pack economics.
+      await assertFails(updateDoc(doc(db, 'users/alice'), {
+        activeCounts: { cig: 1 },
+        unitsPerPack: 25,
+      }));
+    });
+
+    it('is rejected on another user profile', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+      });
+      const malloryDb = testEnv.authenticatedContext('mallory').firestore();
+      await assertFails(updateDoc(doc(malloryDb, 'users/alice'), { unitsPerPack: 25 }));
+    });
+  });
+
   it('prevents settings writes from changing aggregates', async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
