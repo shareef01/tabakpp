@@ -268,6 +268,13 @@ class RegistryViewModel(
 
     fun createManualEntry(date: String, counts: Map<String, Double>) {
         val uid = authUser.value?.uid ?: return
+        // Backfill cannot run forward. Firestore rules only check the YYYY-MM-DD
+        // pattern, so this is the last enforcement point before the write (the
+        // web guards in RegistryService.createManualEntry for the same reason).
+        if (!SmokingCalculator.isBackfillDateAllowed(date, trackingDay.value)) {
+            _error.value = "Pick today or an earlier date."
+            return
+        }
         viewModelScope.launch {
             try {
                 registryRepository.createManualEntry(uid, date, counts)

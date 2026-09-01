@@ -158,6 +158,22 @@ export const SmokingCalculator = {
     return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
   },
 
+  /**
+   * Backfill is for days that have happened. A future-dated log is not just
+   * meaningless — it also silently revives a dead streak: calculateStreak bails
+   * early only when the most recent logged date is older than yesterday, and a
+   * date in the future is not, so an otherwise-inactive user reads as streak 1.
+   *
+   * Both arguments are YYYY-MM-DD, so the comparison is plain lexicographic
+   * ordering. Kept here rather than in the form so the service layer and both
+   * clients apply the identical rule.
+   */
+  isBackfillDateAllowed: (dateStr, trackingDay) => {
+    if (!SmokingCalculator.isValidDate(dateStr)) return false;
+    if (!trackingDay) return true;
+    return dateStr <= trackingDay;
+  },
+
   /** Round in cent space — Kotlin formatCurrency parity (de-DE style). */
   formatCurrency: (amount) => {
     const totalCents = Math.round((amount || 0) * 100);

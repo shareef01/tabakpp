@@ -77,6 +77,17 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
     expect(SmokingCalculator.formatCurrency(-1.5)).toBe('-1,50 €');
   });
 
+  // Shared half-cent vectors. Kotlin used kotlin.math.round (Math.rint,
+  // ties-to-even) where JS uses ties-up, so these printed a cent apart across
+  // clients for identical stored data. Kotlin now uses floor(x + 0.5); the same
+  // vectors are asserted in SmokingCalculatorTest.kt.
+  it('breaks exact half-cent ties upward, matching Kotlin floor(x + 0.5)', () => {
+    expect(SmokingCalculator.formatCurrency(0.125)).toBe('0,13 €');
+    expect(SmokingCalculator.formatCurrency(0.135)).toBe('0,14 €');
+    expect(SmokingCalculator.formatCurrency(2.505)).toBe('2,51 €');
+    expect(SmokingCalculator.formatCurrency(0)).toBe('0,00 €');
+  });
+
   it('calculates life lost and recovery minutes (Android parity)', () => {
     const configs = [{ id: 'c1', limit: 10, type: 'CIGARETTE' }];
     const logs = [{ logDate: '2024-05-19', counts: { c1: 10 }, origin: 'DAY_RESET' }];
@@ -108,6 +119,43 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
     expect(SmokingCalculator.isValidDate('2024-05-20')).toBe(true);
     expect(SmokingCalculator.isValidDate('2024-13-01')).toBe(false);
     expect(SmokingCalculator.isValidDate('abc')).toBe(false);
+  });
+
+  describe('isBackfillDateAllowed (Android parity)', () => {
+    it('accepts the tracking day and earlier', () => {
+      expect(SmokingCalculator.isBackfillDateAllowed('2024-05-20', '2024-05-20')).toBe(true);
+      expect(SmokingCalculator.isBackfillDateAllowed('2024-05-19', '2024-05-20')).toBe(true);
+      expect(SmokingCalculator.isBackfillDateAllowed('2023-12-31', '2024-05-20')).toBe(true);
+    });
+
+    it('rejects anything after the tracking day, including across boundaries', () => {
+      expect(SmokingCalculator.isBackfillDateAllowed('2024-05-21', '2024-05-20')).toBe(false);
+      expect(SmokingCalculator.isBackfillDateAllowed('2024-06-01', '2024-05-31')).toBe(false);
+      expect(SmokingCalculator.isBackfillDateAllowed('2025-01-01', '2024-12-31')).toBe(false);
+    });
+
+    it('rejects impossible calendar dates regardless of the bound', () => {
+      expect(SmokingCalculator.isBackfillDateAllowed('2026-02-31', '2026-12-31')).toBe(false);
+      expect(SmokingCalculator.isBackfillDateAllowed('abc', '2024-05-20')).toBe(false);
+    });
+
+    it('applies no upper bound when the tracking day is unknown', () => {
+      expect(SmokingCalculator.isBackfillDateAllowed('2099-01-01', null)).toBe(true);
+      expect(SmokingCalculator.isBackfillDateAllowed('2099-01-01', '')).toBe(true);
+    });
+  });
+
+  // A future-dated log slips past calculateStreak's "most recent is older than
+  // yesterday" early return, so an inactive user reads as streak 1. That is the
+  // concrete damage isBackfillDateAllowed prevents.
+  it('shows why a future-dated log must never be written', () => {
+    const configs = [{ id: 'c1', limit: 5, type: 'CIGARETTE' }];
+    const stale = [{ logDate: '2024-01-01', counts: { c1: 1 }, origin: 'DAY_RESET' }];
+    expect(SmokingCalculator.calculateStreak(stale, configs, {}, '2024-05-20')).toBe(0);
+
+    const withFuture = [...stale, { logDate: '2099-01-01', counts: { c1: 1 }, origin: 'MANUAL_ENTRY' }];
+    expect(SmokingCalculator.calculateStreak(withFuture, configs, {}, '2024-05-20')).toBe(1);
+    expect(SmokingCalculator.isBackfillDateAllowed('2099-01-01', '2024-05-20')).toBe(false);
   });
 
   describe('Audit domain fixtures (Android parity)', () => {
