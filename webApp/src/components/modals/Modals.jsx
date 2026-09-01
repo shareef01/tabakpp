@@ -79,7 +79,7 @@ export const AlertOverlay = ({ isOpen, onClose, title, message, type = 'error' }
             <h4 className="text-sm font-black text-white uppercase tracking-tight">{title}</h4>
             <p className="text-xs font-bold text-neutral-400 uppercase tracking-widest line-clamp-3">{message}</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Dismiss notification" className="min-w-11 min-h-11 flex items-center justify-center text-neutral-600 hover:text-white transition-colors">
+          <button type="button" onClick={onClose} aria-label="Dismiss notification" className="min-w-11 min-h-11 flex items-center justify-center text-neutral-400 hover:text-white transition-colors">
             <X size={16} strokeWidth={3} />
           </button>
         </motion.div>

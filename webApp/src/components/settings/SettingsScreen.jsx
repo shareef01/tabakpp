@@ -8,6 +8,7 @@ import { RegistryService } from '../../services/registryService';
 import { Input, Button, UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
 import { sanitizeString, compressAvatarFile } from '../../utils/security';
+import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { mapAuthError } from '../../utils/errorHandlers';
 import { AUTH_INTENT_KEY, prefersAuthRedirect } from '../../utils/platform';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
@@ -51,7 +52,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           onClick={() => onReo(config.id, 'up')}
           disabled={idx === 0}
           aria-label="Move up"
-          className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-600 hover:text-white hover:bg-white/[0.06] disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
+          className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.06] disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
         >
           <ArrowUp size={14} strokeWidth={2.75} />
         </button>
@@ -60,7 +61,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           onClick={() => onReo(config.id, 'down')}
           disabled={idx === total - 1}
           aria-label="Move down"
-          className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-600 hover:text-white hover:bg-white/[0.06] disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
+          className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.06] disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
         >
           <ArrowDown size={14} strokeWidth={2.75} />
         </button>
@@ -90,7 +91,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           type="button"
           onClick={() => onEdit(config)}
           aria-label={`Edit ${config.name}`}
-          className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-500 hover:text-white hover:bg-white/[0.07] transition-all active:scale-90 touch-manipulation"
+          className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.07] transition-all active:scale-90 touch-manipulation"
         >
           <Edit2 size={15} strokeWidth={2.5} />
         </button>
@@ -98,7 +99,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           type="button"
           onClick={() => onDel(config.id)}
           aria-label={`Delete ${config.name}`}
-          className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-600 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
+          className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
         >
           <Trash2 size={15} strokeWidth={2.5} />
         </button>
@@ -164,9 +165,13 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
     [configs]
   );
 
+  // Divisors are clamped to >= 1 the same way handleSaveEco and Android's
+  // unitCost do. Without the clamp a literal "0" in the units field is a
+  // truthy string, so the preview divided by zero and rendered "€Infinity"
+  // while the value actually saved was still sane.
   const unitCostPreview = ecoMode === 'PACK'
-    ? (packPrice / (packQty || 1))
-    : (pouchPrice / (estimatedYield || 1));
+    ? (Math.max(0, parseFloat(packPrice) || 0) / Math.max(1, parseInt(packQty, 10) || 1))
+    : (Math.max(0, parseFloat(pouchPrice) || 0) / Math.max(1, parseInt(estimatedYield, 10) || 1));
 
   const safeUpd = useCallback(async (patch, { successTitle, successMessage } = {}) => {
     try {
@@ -204,7 +209,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           unitPrice: bp / by
         });
       }
-      setNotification({ title: "Economics", message: "Calibration synchronized.", type: 'success' });
+      setNotification({ title: "Economics", message: "Unit price saved.", type: 'success' });
     } catch (err) {
       console.error(err);
       setNotification({ title: "Economics", message: "Could not save economics.", type: 'error' });
@@ -357,7 +362,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 </h3>
               </div>
               {user?.email && (
-                <span className="text-[10px] font-medium text-neutral-500 truncate max-w-[50%] text-right">
+                <span className="text-[10px] font-medium text-neutral-400 truncate max-w-[50%] text-right">
                   {user.email}
                 </span>
               )}
@@ -407,7 +412,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               </div>
 
               <div className="flex-1 w-full space-y-5 min-w-0">
-                <p className="text-[11px] text-neutral-500 leading-relaxed sm:pt-1">
+                <p className="text-[11px] text-neutral-400 leading-relaxed sm:pt-1">
                   Photo stays in your profile. Tap the camera to replace it
                   {previewUrl ? ', or remove it below.' : '.'}
                   {' '}On iPhone, JPEG/PNG are safest; HEIC is converted when possible.
@@ -512,7 +517,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
 
                 <div className="flex items-center gap-2.5 px-0.5">
                   <span className="w-2 h-2 rounded-full bg-accent shadow-[0_0_12px_var(--accent)]" />
-                  <span className="text-[10px] font-semibold text-neutral-500">
+                  <span className="text-[10px] font-semibold text-neutral-400">
                     Applied to buttons, gauges, and highlights
                   </span>
                 </div>
@@ -521,7 +526,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               <div className="space-y-3">
                 <div className="flex items-baseline justify-between gap-3">
                   <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Card density</span>
-                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-neutral-500">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-neutral-400">
                     {DENSITY_OPTIONS.find((d) => d.id === settings.widgetSize)?.label || 'Comfortable'}
                   </span>
                 </div>
@@ -547,7 +552,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                           className={cn(
                             "relative flex-1 h-11 flex items-center justify-center gap-2 rounded-full outline-none transition-colors duration-200",
                             "focus-visible:ring-2 focus-visible:ring-accent/50",
-                            selected ? "text-black" : "text-neutral-500 hover:text-neutral-200"
+                            selected ? "text-black" : "text-neutral-400 hover:text-neutral-200"
                           )}
                         >
                           {selected && (
@@ -589,7 +594,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               </div>
             </div>
 
-            <p className="text-[11px] text-neutral-500 leading-relaxed mb-6">
+            <p className="text-[11px] text-neutral-400 leading-relaxed mb-6">
               Your tracking day rolls over at this hour — useful if nights run past midnight.
             </p>
 
@@ -604,13 +609,21 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 // Commit is handled by the settle effect above, so every input
                 // method — drag, any arrow key, or assistive tech — saves.
                 onChange={(e) => setPendingDayStart(Number(e.target.value))}
-                className="w-full h-2 rounded-full appearance-none cursor-pointer accent-[var(--accent)]
-                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4
+                // h-11 keeps the drag target at 44px even though the painted
+                // track stays 8px tall (background-size/position below). An
+                // 8px-tall range input is close to unusable on a touch screen.
+                className="w-full h-11 bg-transparent rounded-full appearance-none cursor-pointer touch-manipulation accent-[var(--accent)]
+                  [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full
+                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:-mt-1
                   [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:shadow-[0_0_0_3px_rgba(0,0,0,0.45)]
+                  [&::-moz-range-track]:h-2 [&::-moz-range-track]:rounded-full
                   [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full
                   [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-accent"
                 style={{
-                  background: `linear-gradient(to right, var(--accent) ${(pendingDayStart / 23) * 100}%, rgba(255,255,255,0.06) ${(pendingDayStart / 23) * 100}%)`
+                  backgroundImage: `linear-gradient(to right, var(--accent) ${(pendingDayStart / 23) * 100}%, rgba(255,255,255,0.06) ${(pendingDayStart / 23) * 100}%)`,
+                  backgroundSize: '100% 0.5rem',
+                  backgroundPosition: 'center',
+                  backgroundRepeat: 'no-repeat',
                 }}
               />
               <div className="flex justify-between px-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
@@ -644,7 +657,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                       commitDayStart(preset.hour);
                     }}
                     className={cn(
-                      "h-9 px-3.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all",
+                      "min-h-11 h-11 px-4 rounded-full text-[10px] font-black uppercase tracking-widest transition-all touch-manipulation",
                       "ring-1 ring-inset outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
                       selected
                         ? "bg-accent text-black ring-accent"
@@ -671,7 +684,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               <button
                 type="button"
                 onClick={onAdd}
-                className="inline-flex items-center gap-2 h-10 px-3.5 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all"
+                className="inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all touch-manipulation"
               >
                 <Plus size={15} strokeWidth={3} />
                 Add
@@ -692,11 +705,11 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               )) : (
                 <div className="py-12 px-4 text-center rounded-2xl ring-1 ring-inset ring-white/[0.06]">
                   <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">No counters yet</p>
-                  <p className="mt-2 text-xs text-neutral-500">Add a tracker to start counting.</p>
+                  <p className="mt-2 text-xs text-neutral-400">Add a tracker to start counting.</p>
                   <button
                     type="button"
                     onClick={onAdd}
-                    className="mt-5 inline-flex items-center gap-2 h-10 px-4 rounded-full bg-white/[0.06] text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors"
+                    className="mt-5 inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-white/[0.06] text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors touch-manipulation"
                   >
                     <Plus size={14} strokeWidth={3} />
                     Add counter
@@ -706,22 +719,32 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
             </div>
           </Card>
 
-          <Card className="p-8 md:p-12 bg-bg-card">
-            <h3 className={UI.LABEL}>Economic Constants</h3>
-            <div className="flex p-1 bg-black/60 rounded-full border border-white/5 my-8 shadow-inner">
-              <button type="button" onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Package size={14} /> Retail</button>
-              <button type="button" onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-500 hover:text-white")}><Wind size={14} /> Loose</button>
+          <Card className="p-6 md:p-8 bg-bg-card">
+            <div className="flex flex-col gap-1 mb-5 min-w-0">
+              <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Economics</span>
+              <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
+                Unit price
+              </h3>
             </div>
-            <div className="grid grid-cols-2 gap-6">
-              <Input label={ecoMode === 'PACK' ? "Pack Price (€)" : "Beutel Price (€)"} type="number" step="0.01" value={ecoMode === 'PACK' ? packPrice : pouchPrice} onChange={ecoMode === 'PACK' ? setPackPrice : setPouchPrice} isDark />
-              <Input label={ecoMode === 'PACK' ? "Units / Pack" : "Est. Yield"} type="number" value={ecoMode === 'PACK' ? packQty : estimatedYield} onChange={ecoMode === 'PACK' ? setPackQty : setEstimatedYield} isDark />
+            <div className="flex p-1 bg-black/60 rounded-full border border-white/5 mb-6 shadow-inner" role="radiogroup" aria-label="Purchase type">
+              <button type="button" role="radio" aria-checked={ecoMode === 'PACK'} onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Package size={14} /> Pack</button>
+              <button type="button" role="radio" aria-checked={ecoMode === 'POUCH'} onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Wind size={14} /> Pouch</button>
             </div>
-            <div className="mt-8 pt-8 border-t border-white/5 space-y-6">
-              <div className="flex items-center justify-between px-2">
-                <span className={UI.LABEL}>Unit Cost:</span>
-                <span className="text-3xl font-black text-white tabular-nums">€{unitCostPreview.toFixed(2)}</span>
+            <div className="grid grid-cols-2 gap-4 md:gap-6">
+              <Input label={ecoMode === 'PACK' ? "Pack price (€)" : "Pouch price (€)"} type="number" step="0.01" min="0" inputMode="decimal" value={ecoMode === 'PACK' ? packPrice : pouchPrice} onChange={ecoMode === 'PACK' ? setPackPrice : setPouchPrice} isDark />
+              <Input label={ecoMode === 'PACK' ? "Units per pack" : "Units per pouch"} type="number" min="1" inputMode="numeric" value={ecoMode === 'PACK' ? packQty : estimatedYield} onChange={ecoMode === 'PACK' ? setPackQty : setEstimatedYield} isDark />
+            </div>
+            <p className="mt-4 text-[11px] text-neutral-400 leading-relaxed">
+              Spend and savings are derived from this unit price.
+            </p>
+            <div className="mt-6 pt-6 border-t border-white/5 space-y-5">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Cost per unit</span>
+                <span className="text-2xl md:text-3xl font-black text-white tabular-nums leading-none">
+                  {SmokingCalculator.formatCurrency(unitCostPreview)}
+                </span>
               </div>
-              <Button className="w-full" onClick={handleSaveEco}>Synchronize Economics</Button>
+              <Button className="w-full" onClick={handleSaveEco}>Save economics</Button>
             </div>
           </Card>
 
@@ -745,11 +768,11 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               href="/privacy.html"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex mb-4 text-[11px] font-bold text-neutral-400 underline underline-offset-4 hover:text-white"
+              className="inline-flex items-center min-h-11 mb-2 text-[11px] font-bold text-neutral-400 underline underline-offset-4 hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded"
             >
               Privacy and data handling
             </a>
-            <ul className="mb-6 space-y-1.5 text-[11px] text-neutral-500">
+            <ul className="mb-6 space-y-1.5 text-[11px] text-neutral-400">
               {['Trackers and daily limits', 'History and session logs', 'Profile settings and login'].map((item) => (
                 <li key={item} className="flex items-center gap-2">
                   <span className="w-1 h-1 rounded-full bg-rose-400/70 shrink-0" />

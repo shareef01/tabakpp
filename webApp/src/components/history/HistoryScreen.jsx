@@ -50,6 +50,40 @@ const axisLabelForPeriod = (dateStr, days) => {
 const sumCounts = (counts = {}) =>
   Object.values(counts).reduce((a, b) => a + Math.max(0, b || 0), 0);
 
+/**
+ * Velocity series for the trend chart: one point per calendar day ending on the
+ * tracking day.
+ *
+ * The final point must count what is already archived or manually logged for
+ * today *plus* the still-open session. Reading only the live session dropped the
+ * day's archive the moment "End tracking day" ran, so the chart snapped to zero
+ * for a day whose counts were sitting right there in the session log. Archive
+ * and activeCounts are disjoint — end-day clears activeCounts as it writes the
+ * archive — so adding them is the same merge aggregateLoggedCounts/streaks use.
+ */
+export const buildVelocitySeries = (logs, today, days, activeCounts) => {
+  const logged = SmokingCalculator.aggregateLoggedCounts(logs);
+  const series = [];
+  for (let i = days - 1; i >= 1; i -= 1) {
+    const date = shiftDateStr(today, -i);
+    series.push({
+      name: axisLabelForPeriod(date, days),
+      date,
+      dateLabel: formatDateDisplay(date),
+      val: sumCounts(logged[date]),
+      isNow: false,
+    });
+  }
+  series.push({
+    name: 'NOW',
+    date: today,
+    dateLabel: 'Today',
+    val: sumCounts(logged[today]) + sumCounts(activeCounts),
+    isNow: true,
+  });
+  return series;
+};
+
 const VelocityTooltip = ({ active, payload }) => {
   if (!active || !payload?.[0]) return null;
   const point = payload[0].payload;
@@ -73,7 +107,7 @@ const originMeta = (origin) => {
 };
 
 const STAT_TONES = {
-  neutral: 'text-neutral-500 group-hover:text-neutral-300',
+  neutral: 'text-neutral-400 group-hover:text-neutral-300',
   accent: 'text-accent',
   rose: 'text-rose-400/90',
 };
@@ -95,7 +129,7 @@ const StatTile = ({ icon: Icon, value, label, hint, tone = 'neutral' }) => (
         {value}
       </span>
       {hint && (
-        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-500 leading-none truncate">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-400 leading-none truncate">
           {hint}
         </span>
       )}
@@ -162,33 +196,10 @@ export const HistoryScreen = React.memo(({
   }, [undo, userId, unitPrice, onRestoreLog]);
 
   // Aggregate by date (archives + manual entries) — Android chart parity.
-  const chartData = useMemo(() => {
-    const logged = SmokingCalculator.aggregateLoggedCounts(logs);
-    const days = velocityPeriod.days;
-    const historical = [];
-
-    for (let i = days - 1; i >= 1; i -= 1) {
-      const date = shiftDateStr(today, -i);
-      historical.push({
-        name: axisLabelForPeriod(date, days),
-        date,
-        dateLabel: formatDateDisplay(date),
-        val: sumCounts(logged[date]),
-        isNow: false,
-      });
-    }
-
-    return [
-      ...historical,
-      {
-        name: 'NOW',
-        date: today,
-        dateLabel: 'Today',
-        val: m.count || 0,
-        isNow: true,
-      },
-    ];
-  }, [logs, m.count, today, velocityPeriod.days]);
+  const chartData = useMemo(
+    () => buildVelocitySeries(logs, today, velocityPeriod.days, m.activeCounts),
+    [logs, m.activeCounts, today, velocityPeriod.days]
+  );
 
   const velocityStats = useMemo(() => {
     const prior = chartData.filter((p) => !p.isNow);
@@ -227,7 +238,7 @@ export const HistoryScreen = React.memo(({
                 className={cn(
                   "inline-flex items-center gap-1 text-[11px] font-black uppercase tracking-wider",
                   velocityStats.delta == null || velocityStats.delta === 0
-                    ? "text-neutral-500"
+                    ? "text-neutral-400"
                     : velocityStats.delta > 0
                       ? "text-rose-400"
                       : "text-accent"
@@ -259,7 +270,7 @@ export const HistoryScreen = React.memo(({
                   'h-11 min-w-[2.75rem] px-3 rounded-full text-[10px] font-black tracking-[0.14em] transition-all duration-200 touch-manipulation',
                   selected
                     ? 'bg-white text-black shadow-sm'
-                    : 'text-neutral-500 hover:text-white hover:bg-white/[0.04]'
+                    : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
                 )}
               >
                 {period.label}
@@ -416,7 +427,7 @@ export const HistoryScreen = React.memo(({
                 type="button"
                 onClick={onAddEntry}
                 aria-label="Add manual history entry"
-                className="inline-flex items-center gap-2 h-10 px-3.5 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all"
+                className="inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all touch-manipulation"
                 title="Add manual entry"
               >
                 <Plus size={15} strokeWidth={3} />
@@ -450,7 +461,7 @@ export const HistoryScreen = React.memo(({
                         {origin.label}
                       </span>
                     </div>
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-500">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-400">
                       {isToday ? 'Open day' : 'Logged session'}
                     </span>
                   </div>
@@ -465,7 +476,7 @@ export const HistoryScreen = React.memo(({
                       type="button"
                       onClick={() => onEdit(log)}
                       aria-label="Edit entry"
-                      className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-500 hover:text-white hover:bg-white/[0.07] transition-all active:scale-90 touch-manipulation"
+                      className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.07] transition-all active:scale-90 touch-manipulation"
                     >
                       <Edit2 size={15} strokeWidth={2.5} />
                     </button>
@@ -473,7 +484,7 @@ export const HistoryScreen = React.memo(({
                       type="button"
                       onClick={() => requestDelete(log)}
                       aria-label="Delete entry"
-                      className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-600 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
+                      className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
                     >
                       <Trash2 size={15} strokeWidth={2.5} />
                     </button>
@@ -483,14 +494,14 @@ export const HistoryScreen = React.memo(({
             }) : (
               <div className="py-14 px-6 text-center">
                 <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">No sessions yet</p>
-                <p className="mt-2 text-xs text-neutral-500">
+                <p className="mt-2 text-xs text-neutral-400">
                   End a tracking day or add a manual entry.
                 </p>
                 {onAddEntry && (
                   <button
                     type="button"
                     onClick={onAddEntry}
-                    className="mt-5 inline-flex items-center gap-2 h-10 px-4 rounded-full bg-white/[0.06] text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors"
+                    className="mt-5 inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-white/[0.06] text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors touch-manipulation"
                   >
                     <Plus size={14} strokeWidth={3} />
                     Add entry
