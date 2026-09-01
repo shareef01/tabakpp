@@ -9,7 +9,7 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, classNam
     <div className="flex items-center gap-1.5">
       <Icon
         size={13}
-        className={cn(accent ? 'text-accent' : warning ? 'text-amber-400' : 'text-neutral-500')}
+        className={cn(accent ? 'text-accent' : warning ? 'text-amber-400' : 'text-neutral-400')}
         strokeWidth={2.75}
       />
       <span className="text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400">
