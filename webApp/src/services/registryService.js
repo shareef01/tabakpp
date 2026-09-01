@@ -12,7 +12,7 @@ const withDocId = (d) => ({ ...d.data(), id: d.id });
 
 /** Settings keys mirrored from Android `updateProfileSettings` — never counters/aggregates. */
 const PROFILE_SETTINGS_KEYS = new Set([
-  'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice',
+  'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
   'pouchPrice', 'estimatedYield', 'dayStartHour', 'avatar'
 ]);
 
