@@ -4,7 +4,14 @@ Audit date: 1 September 2026 · Baseline commit: `3829789`
 
 ## Executive summary
 
-**Verdict: READY WITH KNOWN LIMITATIONS.**
+**Verdict: RELEASE READY.**
+
+> Verification status was upgraded after the fact. The Android/KMP and Firestore
+> checks below could not run on the audit machine; they were executed on CI in
+> [PR #4](https://github.com/shareef01/tabakpp/pull/4)
+> (run [33457292404](https://github.com/shareef01/tabakpp/actions/runs/33457292404))
+> and **all passed**. The environment constraint is documented below because it
+> will recur locally, but it no longer gates the verdict.
 
 The core product is in good shape. The Track screen — the app's primary surface —
 audited clean at every viewport tested, the domain math is a careful 1:1 port
@@ -30,13 +37,10 @@ Biggest risks found and fixed:
    the App Check and partial-deletion disclosures, and rendered an internal
    pre-launch TODO to end users.
 
-The main residual risk is **verification coverage, not code**: the Android/KMP
-toolchain and the Firestore emulator could not be executed in this environment
-(see below). Nothing about the Android client was changed, so the last green CI
-run remains the evidence for it — but this audit did not independently reproduce
-it.
+No release blockers remain. The open items are P2/P3 polish and two shared-schema
+gaps, all listed under Remaining findings.
 
-## Verification could not cover Android or Firestore rules
+## Local environment cannot run Android or the Firestore emulator
 
 Every JVM process on this machine fails identically:
 
@@ -49,15 +53,16 @@ Caused by: java.net.SocketException: Invalid argument: connect
 
 This reproduces with a three-line program calling `Selector.open()`, so it is an
 environment restriction on `AF_UNIX` socket pairs, not a project defect. It
-blocks both Gradle (which forks a daemon) and the Firestore emulator (Netty).
-Consequently **`:shared:testDebugUnitTest`, `:composeApp:testDebugUnitTest`,
-`:androidApp:lintDebug`, `:androidApp:assembleDebug`, `:androidApp:assembleRelease`,
-and `npm run test:rules` were NOT run.** They are unverified here — not passing,
-not failing. Re-run them in CI before release.
+blocks both Gradle (which forks a daemon) and the Firestore emulator (Netty), so
+`:shared:testDebugUnitTest`, `:composeApp:testDebugUnitTest`,
+`:androidApp:lintDebug`, `:androidApp:assembleDebug`, `:androidApp:assembleRelease`
+and `npm run test:rules` cannot be run locally. **All six were executed on CI and
+passed** — see the verification table.
 
 For that reason **all code changes in this pass are confined to the web client
-and to configuration/docs**, so that everything changed is covered by checks that
-actually ran. Android findings below are reported, not patched.
+and to configuration/docs**, so that everything changed was covered by checks
+that could be run locally before pushing. Android findings below are reported,
+not patched.
 
 ## Architecture reviewed
 
@@ -85,10 +90,16 @@ actually ran. Android findings below are reported, not patched.
 | `npm run build` | **PASS** — 30 precache entries, 1713 KiB |
 | `npm run build:demo` | **PASS** |
 | Responsive / a11y sweep, 4 screens × 16 viewports (Chromium) | **PASS** after fixes — 64/64 combos clean |
-| `:shared:testDebugUnitTest` | **NOT RUN** — JVM loopback blocked |
-| `:composeApp:testDebugUnitTest` | **NOT RUN** — JVM loopback blocked |
-| `:androidApp:lintDebug` / `assembleDebug` / `assembleRelease` | **NOT RUN** — JVM loopback blocked |
-| `npm run test:rules` (Firestore emulator) | **NOT RUN** — emulator cannot start |
+| `:shared:testDebugUnitTest` | **PASS** — CI only (`mobile` job, 7m3s) |
+| `:composeApp:testDebugUnitTest` | **PASS** — CI only |
+| `:androidApp:lintDebug` / `assembleDebug` / `assembleRelease` | **PASS** — CI only |
+| `npm run test:rules` (Firestore emulator) | **PASS** — CI only; 2 files, 27 tests (13 rules + 14 emulator-backed service) |
+
+CI evidence: run
+[33457292404](https://github.com/shareef01/tabakpp/actions/runs/33457292404) on
+`audit/production-hardening` — `web-and-rules` green in 59s, `mobile` green in
+7m3s. Task-level logs confirm each Gradle task actually executed rather than
+being skipped or up-to-date.
 
 Coverage note: reported statement coverage moved 72.79% → 66.13%. Absolute
 covered lines went **up** (709 → 754). The percentage fell because the new
@@ -236,9 +247,11 @@ note explaining why (debug provider on release APKs), so a future pass does not
 
 ## Remaining findings
 
+None are release blockers. Highest-value follow-up is the Android register-error
+mapping, since it lands on a first-run flow.
+
 | Sev | Finding | Why not fixed | Next step |
 |---|---|---|---|
-| P1 | Android/KMP builds, Compose tests, Android lint, and Firestore rules tests unverified | JVM loopback blocked in this environment | Run the CI workflow before tagging; it covers all of them |
 | P2 | `webApp/firebase.json` now duplicates the root hosting config | It is the maintainer's file and was the config used for prior deploys; deleting it is their call | Delete it and always deploy from the repo root, or keep it and add a comment that root is authoritative |
 | P2 | Android register: short password shows "Could not create account." | `AuthErrorMapper` matches `"weak"`, but Firebase's server-side 12-char policy returns `PASSWORD_DOES_NOT_MEET_REQUIREMENTS`. Android also has no client-side length check (web has both). Kotlin unverifiable here | Add `lower.contains("does_not_meet") \|\| lower.contains("requirements")` to the REGISTER branch, and a client-side 12-char guard in `AuthScreen.kt` |
 | P2 | Android Settings falls back to `"#10B981"` when profile is null, but the model default is `"#FF5F5F"` | One-line Kotlin change I could not compile | `SettingsScreen.kt:127` → `?: "#FF5F5F"` |
@@ -358,12 +371,12 @@ password-policy error mapping, the missing client-side password length check, th
 - [x] Web tests pass (117)
 - [x] Coverage run passes
 - [x] Web production build passes
-- [ ] **Firestore emulator rules tests** — blocked in this environment
-- [ ] **Shared Kotlin tests** — blocked in this environment
-- [ ] **Compose tests** — blocked in this environment
-- [ ] **Android lint** — blocked in this environment
-- [ ] **Android debug build** — blocked in this environment
-- [ ] **Android release build** — blocked in this environment
+- [x] Firestore emulator rules tests (CI — 27 tests)
+- [x] Shared Kotlin tests (CI)
+- [x] Compose tests (CI)
+- [x] Android lint (CI)
+- [x] Android debug build (CI)
+- [x] Android release build (CI)
 - [x] No committed secrets found
 - [x] No cross-user Firestore access path found
 - [x] Auth flow reviewed
@@ -400,10 +413,22 @@ password-policy error mapping, the missing client-side password length check, th
 
 ## Final verdict
 
-**READY WITH KNOWN LIMITATIONS.**
+**RELEASE READY.**
 
-The web client is in releasable shape and the changes in this pass are covered by
-checks that were actually executed. It is not **RELEASE READY** for one reason:
-six of the release-checklist items — every Android and Firestore-rules check —
-could not be executed here. Push to CI and confirm the `mobile` and
-`web-and-rules` jobs are green; if they are, this commit is releasable.
+Every item on the release checklist is now backed by a check that actually ran:
+lint, dependency audit, 117 unit tests, coverage, production build and a 64-combo
+responsive/accessibility sweep locally; shared Kotlin tests, Compose tests,
+Android lint, both Android builds and the 27 Firestore rules/emulator tests on CI
+(run 33457292404, both jobs green).
+
+Three P1 defects were found and fixed — hosting deployed without security
+headers, the History chart erasing a day the moment it was archived, and a stale
+user-facing privacy notice carrying an internal pre-launch TODO. The remaining
+findings are P2/P3 polish plus two schema gaps shared by both clients
+(units-per-pack not persisted, future-dated manual entries accepted); none block
+a release. Recommended first follow-up is the Android register-error mapping,
+because it lands on the signup flow.
+
+Caveat on scope: the Android client was reviewed by reading and is verified only
+to the depth CI provides — unit tests, lint and a successful release assemble. No
+instrumented or on-device testing was performed in this audit.
