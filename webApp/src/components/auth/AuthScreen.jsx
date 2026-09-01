@@ -194,7 +194,7 @@ export const AuthScreen = React.memo(({ accent = '#FF5F5F' }) => {
              </div> : (
                <div className="mb-12 text-left">
                  <p className="text-2xl font-black tracking-tight text-white">Reset password</p>
-                 <p className="mt-2 text-[11px] text-neutral-500">Enter your email and we’ll send a reset link.</p>
+                 <p className="mt-2 text-[11px] text-neutral-400">Enter your email and we’ll send a reset link.</p>
                </div>
              )}
 
@@ -258,7 +258,7 @@ export const AuthScreen = React.memo(({ accent = '#FF5F5F' }) => {
                          className="[&_input]:pr-14"
                          aria-describedby={mode === 'REGISTER' ? 'password-hint' : undefined}
                        />
-                       <button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} className="absolute right-2 bottom-1.5 min-w-11 min-h-11 flex items-center justify-center text-neutral-500 hover:text-white">
+                       <button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'} className="absolute right-2 bottom-1.5 min-w-11 min-h-11 flex items-center justify-center text-neutral-400 hover:text-white">
                          {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                        </button>
                      </div>

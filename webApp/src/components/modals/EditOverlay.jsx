@@ -48,7 +48,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        onClick={onClose}
+        onClick={() => { if (!saving) onClose(); }}
         className="absolute inset-0 bg-black/90 backdrop-blur-2xl"
       />
 
@@ -71,7 +71,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
               {formatDateDisplay(log.logDate)}
             </span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close history editor" className="min-w-11 min-h-11 w-11 h-11 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-500 hover:text-white transition-all touch-manipulation">
+          <button type="button" onClick={onClose} aria-label="Close history editor" className="min-w-11 min-h-11 w-11 h-11 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-400 hover:text-white transition-all touch-manipulation">
             <X size={20} strokeWidth={3} />
           </button>
         </div>
@@ -88,7 +88,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
                   type="button"
                   onClick={() => adjust(c.id, -1)}
                   aria-label={`Decrease ${c.name}`}
-                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-neutral-900/50 flex items-center justify-center text-neutral-500 hover:text-white transition-all active:scale-90 touch-manipulation"
+                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-neutral-900/50 flex items-center justify-center text-neutral-400 hover:text-white transition-all active:scale-90 touch-manipulation"
                 >
                   <Minus size={16} strokeWidth={3} />
                 </button>

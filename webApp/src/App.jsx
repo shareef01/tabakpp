@@ -344,7 +344,7 @@ const AppContent = () => {
                             <div className="min-h-[22rem] rounded-[2rem] border border-dashed border-white/10 bg-bg-card/70 flex flex-col items-center justify-center text-center px-8">
                               <div className="w-16 h-16 rounded-2xl bg-accent/10 text-accent flex items-center justify-center ring-1 ring-accent/20"><Plus size={28} /></div>
                               <h2 className="mt-6 text-2xl font-black tracking-tight">Start tracking</h2>
-                              <p className="mt-2 max-w-sm text-sm text-neutral-500">Add a counter for cigarettes, rolls, or any habit you want to measure.</p>
+                              <p className="mt-2 max-w-sm text-sm text-neutral-400">Add a counter for cigarettes, rolls, or any habit you want to measure.</p>
                               <button type="button" onClick={() => setIsAddOpen(true)} className="mt-6 min-h-12 px-6 rounded-xl bg-accent text-black text-[11px] font-black uppercase tracking-widest">Add counter</button>
                             </div>
                           )}

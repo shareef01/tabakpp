@@ -50,7 +50,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        onClick={onClose}
+        onClick={() => { if (!saving) onClose(); }}
         className="absolute inset-0 bg-black/90 backdrop-blur-2xl"
       />
 
@@ -73,14 +73,14 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
               Backfill Log
             </span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close historical entry form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-500 hover:text-white transition-all">
+          <button type="button" onClick={onClose} aria-label="Close historical entry form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-400 hover:text-white transition-all">
             <X size={20} strokeWidth={3} />
           </button>
         </div>
 
         <div className="mb-8">
           <Input
-            label="Deployment Timestamp"
+            label="Date"
             type="date"
             value={date}
             onChange={setDate}
@@ -104,7 +104,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', onClose, onSave 
                   type="button"
                   onClick={() => adjust(c.id, -1)}
                   aria-label={`Decrease ${c.name}`}
-                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-neutral-900/50 flex items-center justify-center text-neutral-500 hover:text-white transition-all active:scale-90 touch-manipulation"
+                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-neutral-900/50 flex items-center justify-center text-neutral-400 hover:text-white transition-all active:scale-90 touch-manipulation"
                 >
                   <Minus size={16} strokeWidth={3} />
                 </button>
