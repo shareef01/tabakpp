@@ -241,6 +241,37 @@ describe('RegistryService.updateProfileSettings', () => {
     expect(doc.ryoPrice).toBeUndefined();
     expect(doc.ryoYield).toBeUndefined();
   });
+
+  // Regression: unitsPerPack was not persisted, so both clients re-derived the
+  // pack price as unitPrice * 20. A user who bought 25s saved 11.00/25 and saw
+  // 8.80 (0.44 * 20) on the next load. The quantity has to survive the write.
+  it('persists unitsPerPack so the pack price survives a reload', async () => {
+    seedUser({ unitPrice: 0.5, unitsPerPack: 20, activeCounts: {}, lifetimeAggregates: baseAgg() });
+
+    await RegistryService.updateProfileSettings(UID, {
+      purchaseType: 'PACK',
+      unitPrice: 11 / 25,
+      unitsPerPack: 25
+    });
+
+    const doc = userDoc();
+    expect(doc.unitsPerPack).toBe(25);
+    // The editor rebuilds the displayed pack price from unitPrice * unitsPerPack.
+    expect(Number((doc.unitPrice * doc.unitsPerPack).toFixed(2))).toBe(11);
+  });
+
+  it('leaves unitsPerPack untouched when a POUCH save omits it', async () => {
+    seedUser({ unitPrice: 0.5, unitsPerPack: 25, activeCounts: {}, lifetimeAggregates: baseAgg() });
+
+    await RegistryService.updateProfileSettings(UID, {
+      purchaseType: 'POUCH',
+      pouchPrice: 6.5,
+      estimatedYield: 60,
+      unitPrice: 6.5 / 60
+    });
+
+    expect(userDoc().unitsPerPack).toBe(25);
+  });
 });
 
 describe('RegistryService.endDay', () => {
