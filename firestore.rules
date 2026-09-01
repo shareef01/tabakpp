@@ -1,7 +1,12 @@
 rules_version = '2';
 // Deploy: firebase deploy --only firestore:rules
-// Spark abuse control: enforce App Check on Firestore + Auth in Console
-// (SETUP_GUIDE.md → App Check enforce checklist) after release clients send tokens.
+//
+// App Check is integrated on both clients but enforcement is DELIBERATELY OFF —
+// do not turn it on in the Console as a "hardening" pass. Android release APKs
+// use the debug provider (Play Integrity needs a Play Console link), so
+// enforcing would break every APK downloaded from GitHub Releases. These rules
+// plus API-key restrictions are the security boundary. See README → Security
+// and SETUP_GUIDE.md for the upgrade path.
 service cloud.firestore {
   match /databases/{database}/documents {
 
