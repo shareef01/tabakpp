@@ -267,6 +267,37 @@ note explaining why (debug provider on release APKs), so a future pass does not
   requirement message and stays distinct from the generic failure; the legacy
   `auth/weak-password` code still maps too.
 
+### P2 — Future-dated manual entries accepted on both clients
+- **Problem:** neither client bounded the backfill date. `isValidDate` only checks
+  that the calendar date exists, and `firestore.rules` can only match the
+  `YYYY-MM-DD` pattern, so an entry dated 2099 was written.
+- **Impact:** not just a nonsense row — `calculateStreak` bails early only when
+  the most recent logged date is older than yesterday, and a future date is not,
+  so a user with no recent activity read as **streak 1 instead of 0**.
+- **Files:** `utils/smokingCalculator.js`, `services/registryService.js`,
+  `hooks/useRegistry.js`, `utils/errorHandlers.js`,
+  `components/modals/ManualEntryOverlay.jsx`, `App.jsx`,
+  `shared/.../domain/SmokingCalculator.kt`, `shared/.../viewmodels/RegistryViewModel.kt`,
+  `composeApp/.../ui/components/ManualEntryForm.kt`, `composeApp/.../ui/screens/HistoryScreen.kt`
+- **Solution:** shared `isBackfillDateAllowed(dateStr, trackingDay)` on both
+  sides, enforced at three layers — the date field (`max` on web, error text on
+  Android), the submit gate, and the service/view-model write path. Editing an
+  existing log is unaffected: `updateLog` keeps the original date and `logDate`
+  is immutable in the rules.
+- **Regression test:** date-bound vectors including month/year boundaries in both
+  suites, plus a test that asserts the old streak-inflation behaviour to document
+  why the bound exists.
+
+### P3 — formatCurrency rounded differently on the two clients
+- **Problem:** `kotlin.math.round` is `Math.rint` (ties-to-even) where the web's
+  `Math.round` ties upward. On an exact half-cent — reachable from a unit price
+  like 0.125 — the clients printed amounts a cent apart for identical stored data.
+- **Files:** `shared/.../domain/SmokingCalculator.kt`
+- **Solution:** `floor(x + 0.5)`, which is both JS-identical and the conventional
+  currency rounding; the now-unused `kotlin.math.round` import was dropped.
+- **Regression test:** shared half-cent vectors (`0.125` → `0,13 €`, `0.135` →
+  `0,14 €`, `2.505` → `2,51 €`) asserted in both suites.
+
 ## Remaining findings
 
 None are release blockers.
@@ -282,8 +313,6 @@ None are release blockers.
 |---|---|---|---|
 | P2 | `webApp/firebase.json` now duplicates the root hosting config | It is the maintainer's file and was the config used for prior deploys; deleting it is their call | Delete it and always deploy from the repo root, or keep it and add a comment that root is authoritative |
 | P2 | Units-per-pack is not persisted on **either** client | Both default to 20 and derive pack price as `unitPrice * 20`; a user who sets 25 units sees their pack price change on reload. Fixing needs a new profile field + rules + both clients | Add `unitsPerPack` to `UserProfile`, `validUserKeys`, `validSettingsUpdate`, and both settings screens |
-| P2 | Future-dated manual entries accepted on both clients | `isValidDate` checks the calendar, not the upper bound; rules only enforce the `YYYY-MM-DD` pattern. A future-dated log makes `calculateStreak` report 1 instead of 0 for an otherwise-inactive user, because the `mostRecent < yesterday` early return is bypassed | Clamp to the tracking day in both clients (`max` on the web date input plus a guard, `LocalDate` check on Android); rules cannot easily compare dates |
-| P3 | `formatCurrency` rounds differently on the two clients | Kotlin `kotlin.math.round` is `Math.rint` (ties-to-even); JS `Math.round` is ties-up. Diverges by one cent only on exact half-cents (e.g. a €0.125 unit price) | If aligning, change Kotlin to explicit half-up — that is the conventional currency rounding and matches web |
 | P3 | Tracker names truncate early in the Settings list ("Cigarettes" → "Cig…" at 1440px) while the row below has space | Cosmetic; the type badge and limit block are `shrink-0` | Allow the badge to wrap or drop it below the name at narrow column widths |
 | P3 | `manifest.json` describes the app as a "High-Fidelity Health Optimization Tracker" | Marketing-ish and health-adjacent for a smoking counter; no functional impact | Consider "Smoking tracker with daily limits, history, and spend" |
 | P3 | `hiddenLogIds` in `HistoryScreen` grows unbounded within a session | Only ever holds deleted ids; memory impact negligible | Prune on `logs` change if ever relevant |
