@@ -36,6 +36,8 @@ fun ManualEntryForm(
     configs: List<TrackerConfig>,
     initialLog: LogEntry? = null,
     initialDate: String = "",
+    /** Latest date backfill may target — the tracking day. Blank disables the bound. */
+    maxDate: String = "",
     accentColor: Color,
     onSave: (String, Map<String, Double>) -> Unit,
     onDismiss: () -> Unit
@@ -46,7 +48,13 @@ fun ManualEntryForm(
     var date by rememberSaveable(initialLog?.id, initialDate) {
         mutableStateOf(initialLog?.logDate ?: initialDate)
     }
-    val isDateValid = SmokingCalculator.isValidDate(date)
+    // Editing keeps the original (already past) date, so the forward bound only
+    // applies when adding a new backfill entry.
+    val isDateValid = if (isEditing) {
+        SmokingCalculator.isValidDate(date)
+    } else {
+        SmokingCalculator.isBackfillDateAllowed(date, maxDate)
+    }
     val countsSaver = remember {
         mapSaver<SnapshotStateMap<String, String>>(
             save = { it.toMap() },
@@ -135,7 +143,11 @@ fun ManualEntryForm(
                 )
                 if (date.isNotBlank() && !isDateValid) {
                     Text(
-                        "INVALID DATE — USE YYYY-MM-DD",
+                        if (SmokingCalculator.isValidDate(date)) {
+                            "BACKFILL ONLY — PICK TODAY OR EARLIER"
+                        } else {
+                            "INVALID DATE — USE YYYY-MM-DD"
+                        },
                         style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp),
                         color = ErrorColor,
                         modifier = Modifier.padding(top = 8.dp, start = 4.dp)

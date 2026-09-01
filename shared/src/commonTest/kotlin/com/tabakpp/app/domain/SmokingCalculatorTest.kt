@@ -112,6 +112,14 @@ class SmokingCalculatorTest {
         assertEquals("10,00 €", SmokingCalculator.formatCurrency(9.999))
         assertEquals("-1,50 €", SmokingCalculator.formatCurrency(-1.5))
         assertEquals("-0,25 €", SmokingCalculator.formatCurrency(-0.25))
+
+        // Shared half-cent vectors, mirrored in smokingCalculator.test.js.
+        // kotlin.math.round is Math.rint (ties-to-even) where JS Math.round ties
+        // upward, so 0.125 printed "0,12 €" here and "0,13 €" on the web for the
+        // same stored data. formatCurrency now uses floor(x + 0.5).
+        assertEquals("0,13 €", SmokingCalculator.formatCurrency(0.125))
+        assertEquals("0,14 €", SmokingCalculator.formatCurrency(0.135))
+        assertEquals("2,51 €", SmokingCalculator.formatCurrency(2.505))
     }
 
     @Test
@@ -222,5 +230,38 @@ class SmokingCalculatorTest {
         )
         // 2 unique days * 10 + 3 streak * 15 = 20 + 45 = 65 XP
         assertEquals(65, SmokingCalculator.calculateXP(logs, 3))
+    }
+
+    @Test
+    fun backfillDateBoundMatchesWebClient() {
+        // Mirrored in smokingCalculator.test.js — both clients must agree on
+        // which dates a manual entry may target.
+        assertEquals(true, SmokingCalculator.isBackfillDateAllowed("2024-05-20", "2024-05-20"))
+        assertEquals(true, SmokingCalculator.isBackfillDateAllowed("2024-05-19", "2024-05-20"))
+        assertEquals(true, SmokingCalculator.isBackfillDateAllowed("2023-12-31", "2024-05-20"))
+
+        assertEquals(false, SmokingCalculator.isBackfillDateAllowed("2024-05-21", "2024-05-20"))
+        assertEquals(false, SmokingCalculator.isBackfillDateAllowed("2024-06-01", "2024-05-31"))
+        assertEquals(false, SmokingCalculator.isBackfillDateAllowed("2025-01-01", "2024-12-31"))
+
+        assertEquals(false, SmokingCalculator.isBackfillDateAllowed("2026-02-31", "2026-12-31"))
+        assertEquals(false, SmokingCalculator.isBackfillDateAllowed("abc", "2024-05-20"))
+
+        assertEquals(true, SmokingCalculator.isBackfillDateAllowed("2099-01-01", null))
+        assertEquals(true, SmokingCalculator.isBackfillDateAllowed("2099-01-01", ""))
+    }
+
+    @Test
+    fun futureDatedLogWouldReviveADeadStreak() {
+        // Why the bound exists: calculateStreak only bails early when the most
+        // recent logged date is older than yesterday, and a future date is not,
+        // so an inactive user would read as streak 1.
+        val configs = listOf(TrackerConfig("c1", "Cig", 5, 1, TrackerType.CIGARETTE))
+        val stale = listOf(LogEntry("l1", "2024-01-01", mapOf("c1" to 1.0), origin = "DAY_RESET"))
+        assertEquals(0, SmokingCalculator.calculateStreak(stale, configs, emptyMap(), "2024-05-20"))
+
+        val withFuture = stale + LogEntry("l2", "2099-01-01", mapOf("c1" to 1.0), origin = "MANUAL_ENTRY")
+        assertEquals(1, SmokingCalculator.calculateStreak(withFuture, configs, emptyMap(), "2024-05-20"))
+        assertEquals(false, SmokingCalculator.isBackfillDateAllowed("2099-01-01", "2024-05-20"))
     }
 }

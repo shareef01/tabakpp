@@ -416,12 +416,18 @@ export const RegistryService = {
    * Manual backfill entry (Android parity with createManualEntry).
    * Credits lifetime aggregates inside the same transaction as the log write.
    */
-  createManualEntry: async (uid, date, counts, unitPrice = 0.5) => {
+  createManualEntry: async (uid, date, counts, unitPrice = 0.5, trackingDay = null) => {
     if (!uid || !date) throw new Error("INVALID_PAYLOAD");
     // Full calendar validation, not just the shape — firestore.rules only checks
     // the YYYY-MM-DD pattern, so a regex-only guard here would let 2026-02-31
     // reach Firestore. Android uses LocalDate.parse for the same reason.
     if (!SmokingCalculator.isValidDate(date)) throw new Error("INVALID_DATE");
+    // Backfill cannot run forward. Rules cannot express "not after today", so
+    // this is the last enforcement point before the write (Android guards in
+    // RegistryViewModel.createManualEntry for the same reason).
+    if (!SmokingCalculator.isBackfillDateAllowed(date, trackingDay)) {
+      throw new Error("FUTURE_DATE");
+    }
 
     const userRef = doc(db, 'users', uid);
     const normalized = normalizeCounts(counts);
