@@ -112,6 +112,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
             widgetSize: 'MEDIUM',
             avatar: null,
             unitPrice: 0.5,
+            unitsPerPack: 20,
             dayStartHour: 6,
             purchaseType: 'PACK',
             pouchPrice: 0,
@@ -141,6 +142,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
             widgetSize: d.widgetSize || 'MEDIUM',
             avatar: d.avatar || null,
             unitPrice: d.unitPrice ?? 0.5,
+            unitsPerPack: d.unitsPerPack ?? 20,
             dayStartHour: d.dayStartHour ?? 6,
             purchaseType: d.purchaseType || 'PACK',
             pouchPrice: d.pouchPrice ?? 0,
@@ -153,6 +155,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
               prev.widgetSize === next.widgetSize &&
               prev.avatar === next.avatar &&
               prev.unitPrice === next.unitPrice &&
+              prev.unitsPerPack === next.unitsPerPack &&
               prev.dayStartHour === next.dayStartHour &&
               prev.purchaseType === next.purchaseType &&
               prev.pouchPrice === next.pouchPrice &&
