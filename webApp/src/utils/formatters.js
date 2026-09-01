@@ -34,10 +34,20 @@ export const formatDateDisplay = (dateString) => {
  */
 export const hexToRgbValues = (hex) => {
   try {
-    const h = hex || '#00d2ff';
-    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h);
-    return result
-      ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`
+    const h = String(hex || '#00d2ff').trim();
+    // firestore.rules accepts #abc as well as #aabbcc, so a 3-digit accent is a
+    // legitimate stored value. Matching only the 6-digit form left --accent on
+    // the user's color while --accent-rgb silently fell back to cyan, so
+    // accent-tinted fills and glows disagreed with accent text.
+    const short = /^#?([a-f\d])([a-f\d])([a-f\d])$/i.exec(h);
+    const full = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(h);
+    const parts = full
+      ? [full[1], full[2], full[3]]
+      : short
+        ? [short[1] + short[1], short[2] + short[2], short[3] + short[3]]
+        : null;
+    return parts
+      ? parts.map((p) => parseInt(p, 16)).join(', ')
       : '0, 210, 255';
   } catch {
     return '0, 210, 255';

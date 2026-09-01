@@ -98,7 +98,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
             <h3 className={UI.LABEL}>Registry</h3>
             <span className="text-2xl font-black tracking-tighter uppercase text-white block leading-none">{title}</span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close counter form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-500 hover:text-white transition-all">
+          <button type="button" onClick={onClose} aria-label="Close counter form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-400 hover:text-white transition-all">
             <X size={20} strokeWidth={3} />
           </button>
         </div>
@@ -141,7 +141,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
                     onClick={() => setType(t.id)}
                     className={cn(
                       "flex items-center gap-3 p-4 rounded-2xl border text-xs font-bold uppercase tracking-widest transition-all",
-                      selected ? "bg-accent border-accent text-black shadow-xl scale-[1.02]" : "bg-black/40 border-white/5 text-neutral-500 hover:border-white/10"
+                      selected ? "bg-accent border-accent text-black shadow-xl scale-[1.02]" : "bg-black/40 border-white/5 text-neutral-400 hover:border-white/10"
                     )}
                   >
                     <Icon size={16} strokeWidth={selected ? 3 : 2} />

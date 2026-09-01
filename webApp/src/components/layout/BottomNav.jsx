@@ -52,7 +52,10 @@ export const BottomNav = React.memo(({ activeTab, onTabChange }) => {
                 strokeWidth={isActive ? 2.5 : 2}
                 className={cn(
                   "transition-all duration-500",
-                  isActive ? "text-accent drop-shadow-[0_0_15px_var(--accent-rgb)]" : "text-neutral-400 hover:text-neutral-200"
+                  // --accent-rgb is a bare "r, g, b" triple, so
+                  // drop-shadow(... var(--accent-rgb)) was an invalid filter and
+                  // the browser dropped the glow entirely. Wrap it in rgb().
+                  isActive ? "text-accent drop-shadow-[0_0_15px_rgba(var(--accent-rgb),0.55)]" : "text-neutral-400 hover:text-neutral-200"
                 )}
               />
               <span className="sr-only">{tab.label}</span>

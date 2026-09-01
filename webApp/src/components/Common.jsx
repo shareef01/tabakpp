@@ -95,7 +95,7 @@ export const Button = React.memo(({ children, onClick, className, variant = 'pri
     primary: "bg-accent/10 text-accent border border-accent/30 shadow-lg shadow-accent/5 hover:bg-accent/15",
     secondary: "bg-white/[0.04] text-white border border-white/[0.08] hover:bg-white/[0.06]",
     danger: "bg-red-600 text-white shadow-lg shadow-red-600/20",
-    ghost: "bg-transparent text-neutral-500 hover:text-white hover:bg-white/5",
+    ghost: "bg-transparent text-neutral-400 hover:text-white hover:bg-white/5",
     outline: "bg-transparent border-2 border-accent/20 text-inherit hover:border-accent/40 hover:bg-accent/5"
   };
 

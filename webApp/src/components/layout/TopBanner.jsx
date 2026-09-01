@@ -106,7 +106,7 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
                     className={cn(
                       "relative min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-full outline-none transition-colors duration-200 touch-manipulation",
                       "focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-panel",
-                      selected ? "text-black" : "text-neutral-500 hover:text-neutral-200"
+                      selected ? "text-black" : "text-neutral-400 hover:text-neutral-200"
                     )}
                   >
                     {selected && (
@@ -150,7 +150,7 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
                 size={13}
                 strokeWidth={2.5}
                 className={cn(
-                  "text-neutral-500 transition-transform duration-200 shrink-0",
+                  "text-neutral-400 transition-transform duration-200 shrink-0",
                   isOpen && "rotate-180 text-white"
                 )}
               />
@@ -174,7 +174,7 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
                         {user?.displayName || shortName || 'Account'}
                       </span>
                       {user?.email && (
-                        <span className="mt-1.5 text-[10px] font-medium text-neutral-500 truncate">
+                        <span className="mt-1.5 text-[10px] font-medium text-neutral-400 truncate">
                           {user.email}
                         </span>
                       )}
