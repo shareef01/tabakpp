@@ -125,12 +125,12 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
   // UI-only economics editors; persisted fields match Android UserProfile.
   const initialMode = (settings.purchaseType === 'POUCH') ? 'POUCH' : 'PACK';
   const [ecoMode, setEcoMode] = useState(initialMode);
+  const [packQty, setPackQty] = useState(settings.unitsPerPack || 20);
   const [packPrice, setPackPrice] = useState(
     settings.purchaseType === 'PACK' && settings.unitPrice
-      ? Number((settings.unitPrice * 20).toFixed(2))
+      ? Number((settings.unitPrice * (settings.unitsPerPack || 20)).toFixed(2))
       : 8.00
   );
-  const [packQty, setPackQty] = useState(20);
   const packQtyRef = useRef(packQty);
   packQtyRef.current = packQty;
   const [pouchPrice, setPouchPrice] = useState(settings.pouchPrice || 6.50);
@@ -156,9 +156,13 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
       setPouchPrice(settings.pouchPrice || 6.50);
       setEstimatedYield(settings.estimatedYield || 60);
     } else if (settings.unitPrice != null) {
-      setPackPrice(Number((settings.unitPrice * (packQtyRef.current || 20)).toFixed(2)));
+      // Derive from the persisted quantity, not a hardcoded 20 — otherwise a
+      // user who buys 25s watched their pack price change back on reload.
+      const qty = settings.unitsPerPack || packQtyRef.current || 20;
+      setPackQty(qty);
+      setPackPrice(Number((settings.unitPrice * qty).toFixed(2)));
     }
-  }, [settings.purchaseType, settings.pouchPrice, settings.estimatedYield, settings.unitPrice]);
+  }, [settings.purchaseType, settings.pouchPrice, settings.estimatedYield, settings.unitPrice, settings.unitsPerPack]);
 
   const sortedConfigs = useMemo(
     () => [...configs].sort((a, b) => a.order - b.order),
@@ -191,11 +195,12 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
     try {
       if (ecoMode === 'PACK') {
         const rp = Math.max(0, parseFloat(packPrice) || 0);
-        const rq = Math.max(1, parseInt(packQty, 10) || 1);
+        const rq = Math.min(1000, Math.max(1, parseInt(packQty, 10) || 1));
         const unitPrice = rp / rq;
         await onUpd({
           purchaseType: 'PACK',
           unitPrice,
+          unitsPerPack: rq,
           pouchPrice: 0,
           estimatedYield: 0
         });

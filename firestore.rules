@@ -124,9 +124,9 @@ service cloud.firestore {
     // updates are not blocked until clients deleteField them.
     function validUserKeys(data) {
       return data.keys().hasOnly([
-        'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'pouchPrice',
-        'estimatedYield', 'dayStartHour', 'activeCounts', 'lifetimeAggregates',
-        'smokingUnitsMigrated', 'avatar', 'createdAt', 'updatedAt',
+        'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
+        'pouchPrice', 'estimatedYield', 'dayStartHour', 'activeCounts',
+        'lifetimeAggregates', 'smokingUnitsMigrated', 'avatar', 'createdAt', 'updatedAt',
         'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'
       ]);
     }
@@ -137,6 +137,7 @@ service cloud.firestore {
         && (!('purchaseType' in d) || d.purchaseType in ['PACK', 'POUCH'])
         && (!('dayStartHour' in d) || (isWholeNumber(d.dayStartHour) && d.dayStartHour >= 0 && d.dayStartHour <= 23))
         && (!('unitPrice' in d) || (isNumber(d.unitPrice) && d.unitPrice >= 0 && d.unitPrice <= 1000))
+        && (!('unitsPerPack' in d) || (isWholeNumber(d.unitsPerPack) && d.unitsPerPack >= 1 && d.unitsPerPack <= 1000))
         && (!('pouchPrice' in d) || (isNumber(d.pouchPrice) && d.pouchPrice >= 0 && d.pouchPrice <= 10000))
         && (!('estimatedYield' in d) || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
         && (!('widgetSize' in d) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
@@ -184,6 +185,8 @@ service cloud.firestore {
           || (isWholeNumber(d.dayStartHour) && d.dayStartHour >= 0 && d.dayStartHour <= 23))
         && (!changed.hasAny(['unitPrice'])
           || (isNumber(d.unitPrice) && d.unitPrice >= 0 && d.unitPrice <= 1000))
+        && (!changed.hasAny(['unitsPerPack'])
+          || (isWholeNumber(d.unitsPerPack) && d.unitsPerPack >= 1 && d.unitsPerPack <= 1000))
         && (!changed.hasAny(['pouchPrice'])
           || (isNumber(d.pouchPrice) && d.pouchPrice >= 0 && d.pouchPrice <= 10000))
         && (!changed.hasAny(['estimatedYield'])
@@ -203,8 +206,8 @@ service cloud.firestore {
     function isSettingsOnlyUpdate() {
       return request.resource.data.diff(resource.data).affectedKeys()
         .hasOnly([
-          'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'pouchPrice',
-          'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt',
+          'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
+          'pouchPrice', 'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt',
           'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'
         ]);
     }
