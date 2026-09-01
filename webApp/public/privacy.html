@@ -14,20 +14,26 @@
   </head>
   <body>
     <main>
+      <!--
+        Keep this page in step with PRIVACY.md at the repository root — it is the
+        same notice, and this is the copy users actually reach from Settings.
+      -->
       <h1>tabak++ privacy notice</h1>
-      <p>Last updated: 24 July 2026</p>
-      <p>tabak++ stores account identifiers, profile settings, smoking-tracker counts, history entries, financial estimates, and an optional avatar in Firebase Authentication and Cloud Firestore to provide synchronization and calculated insights.</p>
+      <p>Last updated: 15 August 2026</p>
+      <p>tabak++ stores account identifiers, profile settings, smoking-tracker counts, history entries, financial estimates, and an optional avatar in Firebase Authentication and Cloud Firestore. This information is used only to provide sign-in, synchronization, history, and calculated insights across your devices.</p>
       <h2>Data handling</h2>
       <ul>
         <li>Firebase processes and stores cloud data on behalf of the app.</li>
-        <li>Avatars are stored as compressed image data in the user's Firestore profile.</li>
+        <li>Sign-in uses Firebase Authentication with email and password or Google sign-in.</li>
+        <li>Avatars are stored as compressed image data in your Firestore profile.</li>
         <li>The app does not intentionally sell personal data or use tracker data for ads.</li>
       </ul>
       <h2>Retention and deletion</h2>
-      <p>Data remains until history is removed or Delete Account is used in Settings. Deletion attempts to erase tracker configuration, history, profile data, and the Firebase Authentication account.</p>
-      <h2>Security limitations</h2>
-      <p>Rules isolate each user's Firestore subtree. The client-only Spark architecture cannot prevent a modified client from changing that same user's calculated totals; it does not grant access to another user's data.</p>
-      <p class="notice">Before public distribution, the app operator must add a current privacy contact and publish store-specific disclosures.</p>
+      <p>Data remains until you delete individual history entries or use Delete Account in Settings. Account deletion attempts to erase tracker configuration, history, profile data, and the Firebase Authentication account. If final Authentication deletion fails after data erasure, the app reports the partial failure so you can retry.</p>
+      <h2>Security and limitations</h2>
+      <p>Access rules restrict each signed-in user to their own Firestore subtree. Firebase App Check is not currently enforced: the Android client ships with a debug App Check provider (it cannot use Play Integrity without a Play Console link), so per-user Firestore rules and API-key restrictions are the active controls. Because the Spark-plan architecture performs calculations on clients, a user can modify their own calculated totals with a modified client; this does not grant access to another user's data.</p>
+      <h2>Contact</h2>
+      <p class="notice">This notice is published in the repository from which tabak++ is distributed: <a href="https://github.com/shareef01/tabakpp" rel="noreferrer">github.com/shareef01/tabakpp</a> (releases include each APK). Privacy questions can be raised via that repository's issue tracker.</p>
       <p><a href="/">Return to tabak++</a></p>
     </main>
   </body>
