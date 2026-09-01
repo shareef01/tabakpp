@@ -20,7 +20,16 @@ object AuthErrorMapper {
                 else -> "Could not delete account. Try again."
             }
             Context.REGISTER -> when {
-                lower.contains("weak") -> "Use a password with at least 12 characters."
+                // AuthViewModel.signUp rejects short passwords before this point, so
+                // a server-side policy rejection only reaches here if the Console
+                // policy is stricter than the client's length check. Firebase reports
+                // that as PASSWORD_DOES_NOT_MEET_REQUIREMENTS, which matches none of
+                // the branches below and used to fall through to the generic message.
+                lower.contains("weak") ||
+                    lower.contains("does_not_meet") ||
+                    lower.contains("does not meet") ||
+                    lower.contains("password_does_not") ->
+                    "Use a password with at least 12 characters."
                 lower.contains("network") -> "Network error. Check your connection."
                 else -> "Could not create account."
             }

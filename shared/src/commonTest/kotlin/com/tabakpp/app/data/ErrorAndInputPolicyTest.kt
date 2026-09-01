@@ -23,6 +23,35 @@ class ErrorAndInputPolicyTest {
     }
 
     @Test
+    fun registerMapsServerSidePasswordPolicyRejection() {
+        // The client guard in AuthViewModel.signUp catches short passwords first,
+        // so this path only opens if the Console policy outgrows that check. When
+        // it does, the user must still be told the requirement rather than getting
+        // the generic "Could not create account."
+        val policy = AuthErrorMapper.map(
+            Exception("PASSWORD_DOES_NOT_MEET_REQUIREMENTS: Missing password requirements"),
+            AuthErrorMapper.Context.REGISTER
+        )
+        val generic = AuthErrorMapper.map(
+            Exception("SOME_OTHER_FAILURE"),
+            AuthErrorMapper.Context.REGISTER
+        )
+
+        assertTrue(policy.contains("12 characters"))
+        assertFalse(policy == generic)
+    }
+
+    @Test
+    fun registerStillMapsLegacyWeakPasswordCode() {
+        assertTrue(
+            AuthErrorMapper.map(
+                Exception("auth/weak-password"),
+                AuthErrorMapper.Context.REGISTER
+            ).contains("12 characters")
+        )
+    }
+
+    @Test
     fun resetAcknowledgmentIsAlwaysTheSame() {
         val missing = AuthErrorMapper.map(
             Exception("USER_NOT_FOUND"),
