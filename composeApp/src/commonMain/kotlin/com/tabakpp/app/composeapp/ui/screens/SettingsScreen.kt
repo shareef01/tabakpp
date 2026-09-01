@@ -124,7 +124,10 @@ fun SettingsScreen(
                             Text("ACCENT", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, fontWeight = FontWeight.Black), color = TextPrimary)
                             Spacer(modifier = Modifier.height(16.dp))
                             AccentPalette(
-                                selectedColor = profile?.accent ?: "#10B981",
+                                // Must match UserProfile.accent's default, or the
+                                // palette highlights the wrong swatch for the moment
+                                // before the profile snapshot lands.
+                                selectedColor = profile?.accent ?: "#FF5F5F",
                                 onColorSelected = { viewModel.updateProfile { p -> p.copy(accent = it) } }
                             )
                         }
