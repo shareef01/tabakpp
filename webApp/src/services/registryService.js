@@ -23,7 +23,7 @@ const PROFILE_SETTINGS_KEYS = new Set([
 /** Legacy web-only economics keys — strip on every settings write. */
 const LEGACY_ECO_KEYS = ['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'];
 
-/** Schema version marking the dated-daily-document migration (see AUDIT.md). */
+/** Schema version marking the dated-daily-document migration. */
 const CURRENT_SCHEMA_VERSION = 2;
 
 const normalizeCounts = (counts) => Object.fromEntries(
@@ -113,7 +113,7 @@ const emptyAggregates = () => ({ saved: 0, wasted: 0, smokingUnits: 0, baselineS
  * RegistryService (Model Layer)
  * Hardened for Cross-Platform Parity and Atomic Integrity.
  *
- * ## Data model (see AUDIT.md "Schema changes" for the full write-up)
+ * ## Data model
  *
  * `users/{uid}/days/{YYYY-MM-DD}` is the dated daily-document model (item 1):
  * every count always belongs to an explicit tracking date decided AT WRITE
@@ -272,8 +272,15 @@ export const RegistryService = {
     await runTransaction(db, async (transaction) => {
       const live = await transaction.get(userRef);
       if (!live.exists() || live.data().smokingUnitsMigrated) return;
+      const liveData = live.data();
+      const liveAggs = liveData.lifetimeAggregates || emptyAggregates();
       transaction.update(userRef, {
-        'lifetimeAggregates.smokingUnits': units,
+        lifetimeAggregates: {
+          saved: Number(liveAggs.saved || 0),
+          wasted: Number(liveAggs.wasted || 0),
+          smokingUnits: units,
+          baselineSaved: Number(liveAggs.baselineSaved || 0),
+        },
         smokingUnitsMigrated: true
       });
     });
@@ -281,7 +288,7 @@ export const RegistryService = {
 
   /**
    * One-shot, idempotent migration of legacy `activeCounts` into the dated
-   * daily-document model (item 1 / P0 fix — see AUDIT.md "Migration").
+   * daily-document model.
    *
    * Whatever is sitting in `activeCounts` at the moment this runs is folded
    * into `days/{date}`, where `date` is computed with the EXACT SAME
@@ -417,11 +424,15 @@ export const RegistryService = {
     const avatar = snap.data().avatar;
     if (avatar == null) return;
     const metaRef = doc(db, 'users', uid, 'meta', 'profile');
-    const metaSnap = await getDoc(metaRef);
-    if (!metaSnap.exists() || metaSnap.data().avatar == null) {
-      await setDoc(metaRef, { avatar, updatedAt: serverTimestamp() }, { merge: true });
+    try {
+      const metaSnap = await getDoc(metaRef);
+      if (!metaSnap.exists() || metaSnap.data().avatar == null) {
+        await setDoc(metaRef, { avatar, updatedAt: serverTimestamp() }, { merge: true });
+      }
+      await updateDoc(userRef, { avatar: deleteField() }).catch(() => { /* already gone */ });
+    } catch (err) {
+      console.warn('[SYS] Avatar migration to meta/profile skipped:', err);
     }
-    await updateDoc(userRef, { avatar: deleteField() }).catch(() => { /* already gone */ });
   },
 
   // --- PROFILE EXTRA (avatar; item 12 hot/profile split) ---
@@ -597,7 +608,7 @@ export const RegistryService = {
    * changes a `trackerSnapshots` entry — a historical day's stamped
    * config is immutable (item 2); a tracker with no snapshot for that day
    * contributes 0 to its financials rather than borrowing today's price, a
-   * documented, non-fabricating fallback (see AUDIT.md).
+   * documented, non-fabricating fallback.
    */
   updateHistoricalDay: async (uid, date, counts) => {
     if (!uid || !date) throw new Error('INVALID_REF');

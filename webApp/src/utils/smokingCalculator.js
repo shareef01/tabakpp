@@ -17,8 +17,8 @@ const SMOKING_TYPES = ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING'];
  * Population-level minutes-of-life-expectancy estimate per smoking unit.
  * Sourced loosely from UK ASH / "11 minutes per cigarette" life-expectancy
  * literature — a COHORT AVERAGE, not a measurement of any individual. Never
- * present figures derived from this constant as a personal medical fact (see
- * item 6 of AUDIT.md and MetricBanner's "population estimate" labeling).
+ * present figures derived from this constant as a personal medical fact (and
+ * MetricBanner's "population estimate" labeling).
  */
 const LIFE_MINUTES_PER_UNIT = 11;
 
@@ -96,7 +96,7 @@ const snapshotsByDate = (dayDocs) => {
  * to the tracker's current live limit ONLY when no snapshot exists for that
  * day/tracker — i.e. legacy data written before this schema, or a tracker
  * that was never touched that day. This fallback is a documented, explicit
- * choice (see AUDIT.md "Historical metrics") and is never silently different
+ * choice and is never silently different
  * from what the UI shows: legacy days are the only ones affected, and they
  * carry no other historical-config record either.
  */
