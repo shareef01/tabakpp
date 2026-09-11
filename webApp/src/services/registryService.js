@@ -272,8 +272,15 @@ export const RegistryService = {
     await runTransaction(db, async (transaction) => {
       const live = await transaction.get(userRef);
       if (!live.exists() || live.data().smokingUnitsMigrated) return;
+      const liveData = live.data();
+      const liveAggs = liveData.lifetimeAggregates || emptyAggregates();
       transaction.update(userRef, {
-        'lifetimeAggregates.smokingUnits': units,
+        lifetimeAggregates: {
+          saved: Number(liveAggs.saved || 0),
+          wasted: Number(liveAggs.wasted || 0),
+          smokingUnits: units,
+          baselineSaved: Number(liveAggs.baselineSaved || 0),
+        },
         smokingUnitsMigrated: true
       });
     });
@@ -417,11 +424,15 @@ export const RegistryService = {
     const avatar = snap.data().avatar;
     if (avatar == null) return;
     const metaRef = doc(db, 'users', uid, 'meta', 'profile');
-    const metaSnap = await getDoc(metaRef);
-    if (!metaSnap.exists() || metaSnap.data().avatar == null) {
-      await setDoc(metaRef, { avatar, updatedAt: serverTimestamp() }, { merge: true });
+    try {
+      const metaSnap = await getDoc(metaRef);
+      if (!metaSnap.exists() || metaSnap.data().avatar == null) {
+        await setDoc(metaRef, { avatar, updatedAt: serverTimestamp() }, { merge: true });
+      }
+      await updateDoc(userRef, { avatar: deleteField() }).catch(() => { /* already gone */ });
+    } catch (err) {
+      console.warn('[SYS] Avatar migration to meta/profile skipped:', err);
     }
-    await updateDoc(userRef, { avatar: deleteField() }).catch(() => { /* already gone */ });
   },
 
   // --- PROFILE EXTRA (avatar; item 12 hot/profile split) ---
