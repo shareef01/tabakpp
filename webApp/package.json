@@ -22,7 +22,7 @@
     "firebase": "^12.16.0",
     "framer-motion": "^11.11.9",
     "heic2any": "^0.0.4",
-    "lucide-react": "^0.453.0",
+    "lucide-react": "^1.42.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.13.0",
