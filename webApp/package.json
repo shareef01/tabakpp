@@ -20,7 +20,7 @@
   "dependencies": {
     "clsx": "^2.1.1",
     "firebase": "^12.16.0",
-    "framer-motion": "^11.11.9",
+    "framer-motion": "^13.2.0",
     "heic2any": "^0.0.4",
     "lucide-react": "^0.453.0",
     "react": "^18.3.1",
