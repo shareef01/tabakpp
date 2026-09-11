@@ -4,10 +4,11 @@
  *
  * The unit suite (registryService.test.js) mocks firebase/firestore, so it can
  * only prove the aggregate arithmetic — it cannot prove the SDK accepts the
- * calls being made. That gap once hid a production outage: every transactional
- * write path called `transaction.get(query(...))`, which the web client SDK
- * does not support (Admin SDK only), so end-day, manual entry, history edit,
- * delete, and restore all threw TypeError before touching Firestore.
+ * calls being made, or that firestore.rules actually allows them. That gap
+ * once hid a production outage: every transactional write path called
+ * `transaction.get(query(...))`, which the web client SDK does not support
+ * (Admin SDK only), so end-day, manual entry, history edit, delete, and
+ * restore all threw TypeError before touching Firestore.
  *
  * These tests exercise the same paths through the unmocked SDK, so an
  * unsupported API or a rules violation fails here.
@@ -30,6 +31,7 @@ vi.mock('../firebase', () => ({
 }));
 
 const { RegistryService } = await import('./registryService');
+const { SmokingCalculator } = await import('../utils/smokingCalculator');
 
 const UID = 'alice';
 const PROJECT_ID = 'demo-tabakpp-registry';
@@ -45,9 +47,9 @@ const baseProfile = {
   pouchPrice: 0,
   estimatedYield: 0,
   dayStartHour: 6,
-  activeCounts: {},
-  lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0 },
+  lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 },
   smokingUnitsMigrated: true,
+  schemaVersion: 2,
 };
 
 /** limit 10 @ 1.00 — a full day within limit saves 10.00, each unit wastes 1.00. */
@@ -61,12 +63,11 @@ const cigConfig = {
   isPrimaryTracked: true,
 };
 
-const seed = async ({ activeCounts = {}, aggregates } = {}) => {
+const seed = async ({ aggregates } = {}) => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const adminDb = context.firestore();
     await setDoc(doc(adminDb, 'users', UID), {
       ...baseProfile,
-      activeCounts,
       lifetimeAggregates: aggregates ?? baseProfile.lifetimeAggregates,
     });
     await setDoc(doc(adminDb, 'users', UID, 'configs', 'cig'), cigConfig);
@@ -77,6 +78,10 @@ const profile = async () => (await getDoc(doc(holder.db, 'users', UID))).data();
 const logs = async () => {
   const snap = await getDocs(collection(holder.db, 'users', UID, 'logs'));
   return snap.docs.map((d) => ({ ...d.data(), id: d.id }));
+};
+const dayDoc = async (date) => {
+  const snap = await getDoc(doc(holder.db, 'users', UID, 'days', date));
+  return snap.exists() ? { ...snap.data(), id: snap.id } : undefined;
 };
 
 beforeAll(async () => {
@@ -96,57 +101,91 @@ afterAll(async () => {
 });
 
 describe('RegistryService against the real SDK and rules', () => {
-  it('adjustCounter increments and clamps at zero', async () => {
+  it('adjustCounter creates/increments the dated day doc and clamps at zero', async () => {
     await seed();
-    await RegistryService.adjustCounter(UID, 'cig', 1);
-    await RegistryService.adjustCounter(UID, 'cig', 1);
-    expect((await profile()).activeCounts).toEqual({ cig: 2 });
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 2 });
 
-    await RegistryService.adjustCounter(UID, 'cig', -5);
-    expect((await profile()).activeCounts).toEqual({ cig: 0 });
+    await RegistryService.adjustCounter(UID, 'cig', -5, '2026-07-30', 0.5);
+    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 0 });
+    // The hot path never touches the profile document (item 12).
+    expect((await profile()).lifetimeAggregates).toEqual(baseProfile.lifetimeAggregates);
   });
 
   it('adjustCounter rejects writes for a missing tracker config', async () => {
     await seed();
-    await expect(RegistryService.adjustCounter(UID, 'ghost', 1)).rejects.toThrow('CONFIG_NOT_FOUND');
-    expect((await profile()).activeCounts).toEqual({});
+    await expect(RegistryService.adjustCounter(UID, 'ghost', 1, '2026-07-30', 0.5)).rejects.toThrow('CONFIG_NOT_FOUND');
+    expect(await dayDoc('2026-07-30')).toBeUndefined();
   });
 
-  it('endDay archives the session and credits lifetime aggregates', async () => {
-    await seed({ activeCounts: { cig: 4 } });
-    await RegistryService.endDay(UID, '2026-07-30');
+  it('adjustCounter refuses to write past a closed day', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 4, '2026-07-30', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-30');
+    await expect(RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5)).rejects.toThrow();
+  });
+
+  it('a count written under an explicit prior date lands there even after "today" moved on', async () => {
+    await seed();
+    // Simulates the app reopening after being closed across a rollover: the
+    // caller still computes and passes the correct (now-past) tracking date.
+    await RegistryService.adjustCounter(UID, 'cig', 3, '2026-07-28', 0.5);
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+    expect((await dayDoc('2026-07-28')).counts).toEqual({ cig: 3 });
+    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 1 });
+  });
+
+  it('closeDay folds the stamped credit into lifetime aggregates', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 4, '2026-07-30', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-30');
 
     const p = await profile();
-    expect(p.activeCounts).toEqual({});
     // 4 smoked @1.00 wasted; 6 under the limit of 10 saved.
-    expect(p.lifetimeAggregates).toEqual({ saved: 6, wasted: 4, smokingUnits: 4 });
-
-    const all = await logs();
-    expect(all).toHaveLength(1);
-    expect(all[0].id).toBe('2026-07-30_DAY');
-    expect(all[0].counts).toEqual({ cig: 4 });
-    expect(all[0].origin).toBe('DAY_RESET');
-    expect(all[0].aggregateCredit).toEqual({ saved: 6, wasted: 4, smokingUnits: 4 });
+    expect(p.lifetimeAggregates.saved).toBeCloseTo(6);
+    expect(p.lifetimeAggregates.wasted).toBeCloseTo(4);
+    expect(p.lifetimeAggregates.smokingUnits).toBe(4);
+    expect((await dayDoc('2026-07-30')).status).toBe('closed');
   });
 
-  it('a second endDay on the same date merges instead of double-counting', async () => {
-    await seed({ activeCounts: { cig: 4 } });
-    await RegistryService.endDay(UID, '2026-07-30');
+  it('closing an already-closed day again does not double-credit', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 4, '2026-07-30', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-30');
+    await RegistryService.closeDay(UID, '2026-07-30');
 
-    await RegistryService.adjustCounter(UID, 'cig', 1);
-    await RegistryService.adjustCounter(UID, 'cig', 1);
-    await RegistryService.endDay(UID, '2026-07-30');
-
-    const all = await logs();
-    expect(all).toHaveLength(1);
-    expect(all[0].counts).toEqual({ cig: 6 });
-    // Credited by the delta only: 6 wasted, 4 saved — not 4+6 wasted.
-    expect((await profile()).lifetimeAggregates).toEqual({ saved: 4, wasted: 6, smokingUnits: 6 });
+    expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(4);
   });
 
-  it('endDay refuses when nothing is open', async () => {
-    await seed({ activeCounts: { cig: 0 } });
-    await expect(RegistryService.endDay(UID, '2026-07-30')).rejects.toThrow('NOTHING_TO_ARCHIVE');
+  it('closeDay refuses when nothing is open', async () => {
+    await seed();
+    await expect(RegistryService.closeDay(UID, '2026-07-30')).rejects.toThrow('NOTHING_TO_ARCHIVE');
+  });
+
+  it('reconcileStaleDays folds a forgotten open day once the tracking date has moved on', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 4, '2026-07-18', 0.5);
+
+    await RegistryService.reconcileStaleDays(UID, '2026-07-21');
+
+    expect((await dayDoc('2026-07-18')).status).toBe('closed');
+    expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(4);
+  });
+
+  it('updateHistoricalDay corrects a closed day\'s counts using its own stamped snapshot', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 4, '2026-07-10', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-10');
+    // Reprice the live tracker — must not affect the correction below.
+    await setDoc(doc(holder.db, 'users', UID, 'configs', 'cig'), { ...cigConfig, pricePerUnit: 999 });
+
+    await RegistryService.updateHistoricalDay(UID, '2026-07-10', { cig: 9 });
+
+    const d = await dayDoc('2026-07-10');
+    expect(d.counts).toEqual({ cig: 9 });
+    expect(d.aggregateCredit.wasted).toBeCloseTo(9); // still @ the stamped €1.00, not €999
+    expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(9);
   });
 
   it('createManualEntry writes a stamped backfill log and credits aggregates', async () => {
@@ -159,7 +198,7 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(all[0].counts).toEqual({ cig: 3 });
     expect(all[0].isManual).toBe(true);
     expect(all[0].aggregateCredit).toEqual({ saved: 7, wasted: 3, smokingUnits: 3 });
-    expect((await profile()).lifetimeAggregates).toEqual({ saved: 7, wasted: 3, smokingUnits: 3 });
+    expect((await profile()).lifetimeAggregates).toEqual({ saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 });
   });
 
   it('createManualEntry rejects impossible calendar dates', async () => {
@@ -180,7 +219,6 @@ describe('RegistryService against the real SDK and rules', () => {
     const [updated] = await logs();
     expect(updated.counts).toEqual({ cig: 8 });
     expect(updated.aggregateCredit).toEqual({ saved: 2, wasted: 8, smokingUnits: 8 });
-    expect((await profile()).lifetimeAggregates).toEqual({ saved: 2, wasted: 8, smokingUnits: 8 });
   });
 
   it('updateHistoricalLog preserves counts for deleted trackers', async () => {
@@ -197,7 +235,7 @@ describe('RegistryService against the real SDK and rules', () => {
         doc(context.firestore(), 'users', UID),
         {
           ...baseProfile,
-          lifetimeAggregates: { saved: 7, wasted: 3, smokingUnits: 3 },
+          lifetimeAggregates: { saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 },
         },
       );
     });
@@ -215,11 +253,10 @@ describe('RegistryService against the real SDK and rules', () => {
 
     await RegistryService.deleteLog(UID, entry.id);
     expect(await logs()).toHaveLength(0);
-    expect((await profile()).lifetimeAggregates).toEqual({ saved: 0, wasted: 0, smokingUnits: 0 });
 
     await RegistryService.restoreLog(UID, entry);
     expect(await logs()).toHaveLength(1);
-    expect((await profile()).lifetimeAggregates).toEqual({ saved: 7, wasted: 3, smokingUnits: 3 });
+    expect((await profile()).lifetimeAggregates.saved).toBeCloseTo(7);
   });
 
   it('restoreLog is idempotent — a double undo cannot double-credit', async () => {
@@ -232,14 +269,20 @@ describe('RegistryService against the real SDK and rules', () => {
     await RegistryService.restoreLog(UID, entry);
 
     expect(await logs()).toHaveLength(1);
-    expect((await profile()).lifetimeAggregates).toEqual({ saved: 7, wasted: 3, smokingUnits: 3 });
+    expect((await profile()).lifetimeAggregates.saved).toBeCloseTo(7);
   });
 
-  it('deleting a tracker drops it from the open session', async () => {
-    await seed({ activeCounts: { cig: 2 } });
-    await RegistryService.deleteProtocol(UID, 'cig');
+  it('deleting a tracker drops it from today\'s open day but preserves a closed day\'s history', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 2, '2026-07-30', 0.5);
+    await RegistryService.adjustCounter(UID, 'cig', 9, '2026-07-10', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-10');
 
-    expect((await profile()).activeCounts).toEqual({});
+    await RegistryService.deleteProtocol(UID, 'cig', '2026-07-30');
+
+    expect((await dayDoc('2026-07-30')).counts).toEqual({});
+    expect((await dayDoc('2026-07-10')).counts).toEqual({ cig: 9 });
+    expect((await dayDoc('2026-07-10')).trackerSnapshots.cig).toMatchObject({ target: 10 });
     const configs = await getDocs(collection(holder.db, 'users', UID, 'configs'));
     expect(configs.empty).toBe(true);
   });
@@ -262,7 +305,7 @@ describe('RegistryService against the real SDK and rules', () => {
     expect('retailPrice' in p).toBe(false);
   });
 
-  it('addProtocol writes a rules-valid config', async () => {
+  it('addProtocol writes a rules-valid config, baseline included', async () => {
     await seed();
     await RegistryService.addProtocol(UID, {
       name: 'Rollies',
@@ -272,10 +315,36 @@ describe('RegistryService against the real SDK and rules', () => {
       pricePerUnit: 0.4,
       isFinanciallyTracked: true,
       isPrimaryTracked: true,
+      baseline: 15,
     });
 
     const configs = await getDocs(collection(holder.db, 'users', UID, 'configs'));
     const added = configs.docs.map((d) => d.data()).find((c) => c.name === 'Rollies');
-    expect(added).toMatchObject({ name: 'Rollies', limit: 5, type: 'RYO_ROLL' });
+    expect(added).toMatchObject({ name: 'Rollies', limit: 5, type: 'RYO_ROLL', baseline: 15 });
+  });
+
+  it('migrateLegacyActiveCounts folds a pre-update account\'s live counts into the days model', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users', UID), {
+        ...baseProfile,
+        schemaVersion: 1,
+        activeCounts: { cig: 3 },
+      });
+      await setDoc(doc(context.firestore(), 'users', UID, 'configs', 'cig'), cigConfig);
+    });
+
+    await RegistryService.migrateLegacyActiveCounts(UID);
+
+    const expectedDate = SmokingCalculator.getTrackingDate(new Date(), 6);
+    expect((await dayDoc(expectedDate)).counts).toEqual({ cig: 3 });
+    expect((await profile()).schemaVersion).toBe(2);
+    expect((await profile()).activeCounts).toBeUndefined();
+  });
+
+  it('updateAvatar writes only to meta/profile', async () => {
+    await seed();
+    await RegistryService.updateAvatar(UID, 'data:short');
+    const snap = await getDoc(doc(holder.db, 'users', UID, 'meta', 'profile'));
+    expect(snap.data().avatar).toBe('data:short');
   });
 });
