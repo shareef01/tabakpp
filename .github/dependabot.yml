@@ -4,24 +4,34 @@ updates:
   - package-ecosystem: "npm"
     directory: "/webApp"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     groups:
       dev-dependencies:
         dependency-type: "development"
-    open-pull-requests-limit: 10
+      production-dependencies:
+        dependency-type: "production"
+    open-pull-requests-limit: 3
 
   # Kotlin/Android/Gradle dependencies (gradle/libs.versions.toml).
   - package-ecosystem: "gradle"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    groups:
+      gradle-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 3
 
   # GitHub Actions — keeps the SHA-pinned `uses:` refs in ci.yml and
-  # release-android.yml current (item 20). Dependabot updates the pin AND
+  # release-android.yml current. Dependabot updates the pin AND
   # the trailing `# vX` comment together.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 10
+      interval: "monthly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 3

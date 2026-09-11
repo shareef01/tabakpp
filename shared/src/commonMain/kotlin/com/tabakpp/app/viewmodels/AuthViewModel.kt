@@ -9,7 +9,6 @@ import com.tabakpp.app.data.User
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 class AuthViewModel(
     private val authRepository: AuthRepository,
