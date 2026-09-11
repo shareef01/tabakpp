@@ -68,9 +68,11 @@ export const useRegistry = () => {
   };
 
   return {
-    configs, logs, metrics, loading: false, isEndingDay: false, isOnline: true, profileSettings,
+    configs, logs, dayDocs: [], metrics, loading: false, isEndingDay: false, isOnline: true,
+    profileSettings, avatar: null,
     increment: noop, decrement: noop, endDay: asyncNoop, updateHistoricalLog: asyncNoop,
-    deleteLog: asyncNoop, restoreLog: asyncNoop, createManualEntry: asyncNoop,
+    updateHistoricalDay: asyncNoop, deleteLog: asyncNoop, restoreLog: asyncNoop, createManualEntry: asyncNoop,
     reorder: noop, addProtocol: asyncNoop, updateProtocol: asyncNoop, deleteProtocol: asyncNoop,
+    updateAvatar: asyncNoop,
   };
 };
