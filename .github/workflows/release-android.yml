@@ -8,11 +8,23 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-android
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate release tag format
+        run: |
+          if [[ ! "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Tag '${{ github.ref_name }}' does not match required format 'vMAJOR.MINOR.PATCH'"
+            exit 1
+          fi
 
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
@@ -58,7 +70,7 @@ jobs:
           TABAKPP_VERSION_NAME: ${{ github.ref_name }}
         run: ./gradlew :androidApp:assembleRelease --no-daemon
 
-      - name: Prepare artifact and checksum
+      - name: Stage release artifact
         run: |
           mkdir -p dist
           APK_PATH=$(find androidApp/build/outputs/apk/release -name "*release*.apk" ! -name "*unsigned*" | head -n 1)
@@ -67,18 +79,9 @@ jobs:
             exit 1
           fi
           cp "$APK_PATH" "dist/tabakpp-${GITHUB_REF_NAME}.apk"
-          cd dist
-          sha256sum "tabakpp-${GITHUB_REF_NAME}.apk" > "tabakpp-${GITHUB_REF_NAME}.apk.sha256"
-          cd ..
 
-      # CI-REL-02 follow-up: assembleRelease can silently emit an unsigned
-      # APK if signing secrets are missing/malformed (see
-      # androidApp/build.gradle.kts's hasReleaseSigning check) without
-      # failing the build. `find` above already excludes filenames containing
-      # "unsigned", but a build tool could rename that string; independently
-      # verifying the actual APK signature is the only check that can't be
-      # fooled by a filename.
-      - name: Verify the APK is actually signed
+      # Verify the APK signature using SDK apksigner BEFORE generating checksum or publishing.
+      - name: Verify the APK signature
         run: |
           BUILD_TOOLS_DIR=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -type d | sort -V | tail -n 1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
@@ -86,7 +89,19 @@ jobs:
             echo "Error: apksigner not found under $ANDROID_HOME/build-tools"
             exit 1
           fi
-          "$APKSIGNER" verify --print-certs "dist/tabakpp-${GITHUB_REF_NAME}.apk"
+          "$APKSIGNER" verify --verbose --print-certs "dist/tabakpp-${GITHUB_REF_NAME}.apk"
+
+      - name: Generate artifact checksum
+        run: |
+          cd dist
+          sha256sum "tabakpp-${GITHUB_REF_NAME}.apk" > "tabakpp-${GITHUB_REF_NAME}.apk.sha256"
+          cd ..
+
+      - name: Cleanup decoded credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/tabakpp-release.keystore"
+          rm -f androidApp/google-services.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

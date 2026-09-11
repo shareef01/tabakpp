@@ -158,11 +158,11 @@ flowchart LR
   AC["App Check<br/>integrated · not enforced"] -. advisory .-> Auth
 ```
 
-Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing; once a `days/{date}` document is closed, its stamped tracker snapshot can never be rewritten. Every write path is covered by rules tests run against the Firestore emulator in CI.
+Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing; once a `days/{date}` document is closed, its stamped tracker snapshot can never be rewritten. Every write path is covered by rules tests run against the real Firestore emulator in CI. As a client-side self-tracking app on Firebase Spark tier (without Cloud Functions re-verifying every increment), Firestore Security Rules are the primary authorization and validation boundary protecting cross-user isolation.
 
 **On App Check:** integrated on both clients (reCAPTCHA Enterprise on web, debug provider on Android) with enforcement **deliberately off**, so it is advisory rather than part of the security boundary.
 
-That is a considered trade, not an oversight. Enforcement is per Firebase product and hits every client at once. Android release APKs use the debug provider, which mints a random secret per install that has to be registered by hand — so enforcing makes the APK unusable for anyone whose device you have not personally allow-listed, including anyone who downloads it from Releases. Since a working download matters more here than attestation, enforcement stays off and the load is carried by the **Firestore rules** above plus **API key restrictions** (package + signing certificate on Android, HTTP referrer on web).
+That is a considered trade, not an oversight. Enforcement is per Firebase product and hits every client at once. Android release APKs use the debug provider, which mints a random secret per install that has to be registered by hand — so enforcing makes the APK unusable for anyone whose device you have not personally allow-listed, including anyone who downloads it from Releases. Since a working download matters more here than attestation, enforcement stays off and the authorization boundary is carried by **Firestore Security Rules** plus defense-in-depth **API key restrictions** (package + signing certificate on Android, HTTP referrer on web).
 
 Enforcing becomes the right call once Android can attest for real — that means Play Integrity, which needs a Play Console project link. Upgrade path in [SETUP_GUIDE.md](SETUP_GUIDE.md).
 

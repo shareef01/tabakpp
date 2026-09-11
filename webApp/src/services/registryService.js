@@ -23,7 +23,7 @@ const PROFILE_SETTINGS_KEYS = new Set([
 /** Legacy web-only economics keys — strip on every settings write. */
 const LEGACY_ECO_KEYS = ['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'];
 
-/** Schema version marking the dated-daily-document migration (see AUDIT.md). */
+/** Schema version marking the dated-daily-document migration. */
 const CURRENT_SCHEMA_VERSION = 2;
 
 const normalizeCounts = (counts) => Object.fromEntries(
@@ -113,7 +113,7 @@ const emptyAggregates = () => ({ saved: 0, wasted: 0, smokingUnits: 0, baselineS
  * RegistryService (Model Layer)
  * Hardened for Cross-Platform Parity and Atomic Integrity.
  *
- * ## Data model (see AUDIT.md "Schema changes" for the full write-up)
+ * ## Data model
  *
  * `users/{uid}/days/{YYYY-MM-DD}` is the dated daily-document model (item 1):
  * every count always belongs to an explicit tracking date decided AT WRITE
@@ -281,7 +281,7 @@ export const RegistryService = {
 
   /**
    * One-shot, idempotent migration of legacy `activeCounts` into the dated
-   * daily-document model (item 1 / P0 fix — see AUDIT.md "Migration").
+   * daily-document model.
    *
    * Whatever is sitting in `activeCounts` at the moment this runs is folded
    * into `days/{date}`, where `date` is computed with the EXACT SAME
@@ -597,7 +597,7 @@ export const RegistryService = {
    * changes a `trackerSnapshots` entry — a historical day's stamped
    * config is immutable (item 2); a tracker with no snapshot for that day
    * contributes 0 to its financials rather than borrowing today's price, a
-   * documented, non-fabricating fallback (see AUDIT.md).
+   * documented, non-fabricating fallback.
    */
   updateHistoricalDay: async (uid, date, counts) => {
     if (!uid || !date) throw new Error('INVALID_REF');
