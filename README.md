@@ -44,9 +44,13 @@
 Most quit apps bury you in tips. **tabak++** stays on the numbers that matter today: how many, how much left, how much spent, and whether you’re still on streak.
 
 - One-tap logging with undo  
-- Daily limits and an end-of-day archive  
-- Spend / save / life-minutes at a glance  
+- Daily limits that always land on the right day — see [Data model](#data-model)  
+- Optional baseline tracking, so reduction and money saved are measured against
+  your own history, not today's target  
+- Spend / save / streaks at a glance, with population-level life-expectancy
+  estimates clearly labeled as estimates, not personal facts  
 - History you can edit and backfill  
+- Bookmarkable `/track`, `/history`, `/settings` routes  
 - Accent colors and layout density you can tune  
 
 ## Stack
@@ -91,10 +95,51 @@ flowchart TB
   Repos --> FS
   Android --> AC
 
-  FS --> Profile["profile · activeCounts"]
-  FS --> Configs["configs/*"]
-  FS --> Logs["logs/*"]
+  FS --> Profile["profile · settings"]
+  FS --> Configs["configs/* (target, baseline, price)"]
+  FS --> Days["days/{date} — dated daily documents"]
+  FS --> Logs["logs/* (manual entries, legacy archives)"]
+  FS --> Meta["meta/profile (avatar)"]
 ```
+
+### Data model
+
+Every count belongs to an explicit tracking date, decided at the moment it's
+written — never to a mutable "current session" bucket that could survive
+across a rollover if the app was closed, a timer didn't fire, or "close day"
+was never pressed.
+
+```
+users/{uid}                        profile + settings + lifetime rollup (rare writes)
+users/{uid}/configs/{id}           trackers — target, optional baseline, price
+users/{uid}/days/{YYYY-MM-DD}      counts + a stamped historical snapshot per
+                                    tracker (name/target/baseline/price as of
+                                    that day) + that day's financial credit.
+                                    Closing a day only marks it complete and
+                                    folds its credit into the profile rollup —
+                                    it never decides which date a count
+                                    belongs to.
+users/{uid}/logs/{id}              legacy ledger: manual backfill entries,
+                                    and pre-migration day archives
+users/{uid}/meta/profile           avatar — kept off the profile document so
+                                    a large, rarely-changing blob never rides
+                                    along on every counter tap
+```
+
+Historical days are immutable at the rules level once closed: `firestore.rules`
+rejects any write that would change a closed day's stamped tracker snapshot,
+so raising or lowering a tracker's target today can never retroactively
+change whether an old day was a success, and repricing a tracker can never
+rewrite what an old day cost. Money saved and reduction are always computed
+against a tracker's **baseline** (an optional, separate "previous average"
+field), never against its target — hitting a goal and reducing from a
+personal baseline are different claims and are never conflated.
+
+Accounts created before this schema keep working: a one-time, idempotent
+migration folds any leftover live counter state into the correct dated
+document (using the same day-start-hour rule "End day" always used), and
+moves the avatar out of the profile document, the first time an updated
+client opens the account.
 
 ### Security
 
@@ -106,13 +151,14 @@ flowchart LR
 
   Rules --> Owner["request.auth.uid == userId"]
   Rules --> Split["Settings vs mutation<br/>write-path split"]
-  Rules --> Shape["Schema + bounds<br/>on profile · configs · logs"]
+  Rules --> Shape["Schema + bounds<br/>on profile · configs · days · logs · meta"]
+  Rules --> Frozen["Closed days: historical<br/>snapshot is immutable"]
   Rules --> Deny["Default deny<br/>/{document=**}"]
 
   AC["App Check<br/>integrated · not enforced"] -. advisory .-> Auth
 ```
 
-Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing. Every write path is covered by rules tests run against the Firestore emulator in CI.
+Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing; once a `days/{date}` document is closed, its stamped tracker snapshot can never be rewritten. Every write path is covered by rules tests run against the Firestore emulator in CI.
 
 **On App Check:** integrated on both clients (reCAPTCHA Enterprise on web, debug provider on Android) with enforcement **deliberately off**, so it is advisory rather than part of the security boundary.
 
