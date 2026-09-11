@@ -208,7 +208,14 @@ class RegistryViewModel(
                     pendingDelta.clear()
                     latestServerCounts = emptyMap()
                     publishCounterOverlay()
-                    if (uid == null) flowOf(null) else registryRepository.subscribeToDay(uid, day)
+                    if (uid == null) flowOf(null)
+                    else registryRepository.subscribeToDay(uid, day).catch { e ->
+                        setError(e, "Could not sync today's counts. Check your connection and try again.")
+                        emit(null)
+                    }
+                }
+                .catch { e ->
+                    setError(e, "Could not sync today's counts. Check your connection and try again.")
                 }
                 .collect { day ->
                     latestServerCounts = day?.counts ?: emptyMap()

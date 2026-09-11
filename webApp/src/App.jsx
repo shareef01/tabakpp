@@ -231,7 +231,8 @@ const AppContent = () => {
       } catch (e) {
         console.error('[SYS] Profile bootstrap failed', e);
         if (!cancelled) {
-          setBootstrapError('Could not prepare your profile. Check your connection and try again.');
+          const detail = e?.message || e?.code;
+          setBootstrapError(detail ? `Could not prepare your profile: ${detail}` : 'Could not prepare your profile. Check your connection and try again.');
         }
       }
     })();
