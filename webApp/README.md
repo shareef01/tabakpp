@@ -16,7 +16,7 @@ React PWA companion to the Kotlin Multiplatform mobile app. Shares the same Fire
 - History velocity chart, streaks, and financial metrics
 - Settings: identity, accent, density, day start, economics, account delete
 - PWA service worker caches the app shell only (Auth/Firestore stay NetworkOnly)
-- Optional App Check (reCAPTCHA v3) — enforce in Console after tokens work
+- Optional App Check (reCAPTCHA Enterprise) — integrated; follow SETUP_GUIDE.md before considering enforcement
 - iPhone-friendly PWA: safe-area insets, redirect Google auth, 16px inputs, Home Screen icons
 
 ## Stack

@@ -62,17 +62,15 @@ firebase deploy --only firestore:rules
 ```
 After deploying, verify in the Firebase Console (Firestore > Rules) that the published rules match `firestore.rules`.
 
-**Spark residual:** forging self-stats via a dedicated mutation write remains possible without Cloud Functions. The write-path split and restricted API keys narrow it; App Check would too, but enforcement is deliberately off (see "Why App Check is integrated but not enforced"). The blast radius is limited to the signed-in user's own numbers — no cross-user access.
+**Self-owned statistics:** As a client-side self-tracking application on the Spark tier (without a trusted backend recalculating every stat), a sufficiently determined authenticated owner can manipulate their own client-supplied values. The principal boundary enforced is strict user isolation: an owner cannot read, modify, or delete another user's records. Lifetime stats are for self-tracking insight, not cryptographically authoritative audit trails.
 
 ### API Key Hygiene
 `google-services.json` is git-ignored and must never be committed.
 
-**API key restrictions are the layer that holds when App Check does not** — a
-lifted key is useless from another origin or an unsigned build. In Google Cloud
-Console → APIs & Services → Credentials:
+Firebase client API keys are client-visible project identifiers, not secrets or backend authorization boundaries. Primary authorization and data schema enforcement are handled by **Firestore Security Rules**. Google Cloud API key restrictions provide an additional layer of defense by limiting which APIs accept the key and constraining caller identity (HTTP referrers on web, package + signing cert on Android). In Google Cloud Console → APIs & Services → Credentials:
 
 - **Android key** → Application restrictions → Android apps → package
-  `com.tabakpp.app` + the release and debug SHA-1 fingerprints below.
+  `com.tabakpp.app` + the release and your machine's debug SHA-1 fingerprints (see below).
 - **Browser key** → Application restrictions → HTTP referrers →
   `tabakpp.web.app/*` and `tabakpp.firebaseapp.com/*`.
 - Both keys → API restrictions → limit to the APIs actually used (Identity
@@ -84,25 +82,20 @@ active users), then **Password policy** → minimum length 12. Without it the
 server floor is 6 and the 12-character rule in `AuthViewModel` is client-side
 only, so a direct REST call can register a weaker password.
 
-If Android email/password sign-in fails with **Requests from this Android client application com.tabakpp.app are blocked**, the API key’s Android app restriction is missing the signing cert for that APK. Add both fingerprints (package `com.tabakpp.app`):
+If Android email/password sign-in fails with **Requests from this Android client application com.tabakpp.app are blocked**, the API key’s Android app restriction is missing the signing cert for that APK. Add the appropriate fingerprints for package `com.tabakpp.app`:
 
 ```text
-# debug (~/.android/debug.keystore — machine-specific, regenerate invalidates it)
-A2:14:6D:57:A5:5B:06:7D:3F:56:E8:CF:34:A4:3C:1A:16:09:6B:06
+# Debug fingerprint: machine-specific (derive your own via Gradle or keytool)
+# Run: ./gradlew :androidApp:signingReport
+# Or:  keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey
 
-# release (also keep it on the Firebase Android app)
+# Canonical release fingerprints (public metadata for verifying release APKs):
 SHA-1   E9:1D:C8:B7:A6:1E:82:6E:3C:D7:6B:64:3B:5F:BE:27:4B:84:23:95
 SHA-256 31:C7:DA:2E:0B:FF:5E:ED:60:CB:CD:FC:DE:06:A4:67:03:AD:A9:A1:90:AA:F4:65:38:EB:F4:F8:F4:EC:05:EE
 ```
 
-The debug fingerprint is per-machine and changes if `debug.keystore` is
-regenerated. Derive the current one rather than trusting this file:
-
+Verify published release APKs against the canonical fingerprints using `apksigner`:
 ```bash
-keytool -list -v -keystore ~/.android/debug.keystore \
-  -storepass android -alias androiddebugkey | grep SHA1
-
-# release fingerprints, read back off any published APK
 apksigner verify --print-certs tabakpp-<version>.apk
 ```
 
@@ -161,7 +154,7 @@ What carries the load instead:
 
 - **Firestore rules** — owner-scoped, schema- and bounds-validated, default deny.
 - **API key restrictions** — package + signing certificate on Android, HTTP
-  referrer on web, so a lifted key is useless elsewhere.
+  referrer on web, constraining which applications and domains Google APIs will accept requests from.
 
 App Check still initializes on both clients, so tokens flow and the metrics in
 Console stay meaningful. Turning enforcement back on is a one-line API call —

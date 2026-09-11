@@ -80,14 +80,11 @@ export default defineConfig({
     cssCodeSplit: true,
     rollupOptions: {
       output: {
-        // Content hashes (`[hash]`) do the actual cache-busting — identical
-        // code always produces the same hash, so an unrelated deploy of
-        // unchanged files doesn't invalidate them. BUILD_ID is appended only
-        // as a stable, human-readable marker of which commit produced these
-        // files; unlike before, it no longer changes on its own.
-        entryFileNames: `assets/[name].[hash].${BUILD_ID}.js`,
-        chunkFileNames: `assets/[name].[hash].${BUILD_ID}.js`,
-        assetFileNames: `assets/[name].[hash].${BUILD_ID}.[ext]`,
+        // Content hashes (`[hash]`) do cache-busting — identical code
+        // always produces the same hash, ensuring stable long-term caching.
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
         // Split heavy third-party libs out of the main entry chunk so they
         // download in parallel and cache independently of app code. Recharts
         // stays isolated so it only loads with the lazy History screen.
