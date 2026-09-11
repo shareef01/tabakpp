@@ -57,6 +57,15 @@ fun TrackerForm(
     var pricePerUnit by rememberSaveable(initialConfig?.id) {
         mutableStateOf(initialConfig?.pricePerUnit?.toString() ?: "0.5")
     }
+    // Baseline (item 3): optional reference consumption, kept strictly
+    // separate from the target above. Blank by default ("just track for
+    // now") — onboarding is never blocked on it.
+    var hasBaseline by rememberSaveable(initialConfig?.id) {
+        mutableStateOf(initialConfig?.baseline != null)
+    }
+    var baseline by rememberSaveable(initialConfig?.id) {
+        mutableStateOf(initialConfig?.baseline?.toString() ?: "")
+    }
     val type = TrackerType.valueOf(typeName)
 
     val scrollState = rememberScrollState()
@@ -135,12 +144,50 @@ fun TrackerForm(
                         checked = isPrimary,
                         onCheckedChange = { isPrimary = it },
                         colors = CheckboxDefaults.colors(
-                            checkedColor = accentColor, 
+                            checkedColor = accentColor,
                             uncheckedColor = Color.White.copy(alpha = 0.1f)
                         )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Primary streak tracker", style = TabakTypography.bodyMedium, color = TextPrimary)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // SECTION 2b: REDUCTION BASELINE (item 3) — separate from the target above.
+        FormLabel("Track reduction")
+        FormBox(premiumGradient, glassBorder) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = hasBaseline,
+                        onCheckedChange = { hasBaseline = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = accentColor,
+                            uncheckedTrackColor = Color.White.copy(alpha = 0.05f)
+                        )
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text("Set a baseline", style = TabakTypography.bodyMedium, color = TextPrimary)
+                        Text(
+                            "Optional — your previous daily average, used only to show reduction",
+                            style = TabakTypography.labelSmall.copy(fontSize = 11.sp),
+                            color = TextMuted
+                        )
+                    }
+                }
+                if (hasBaseline) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    FormTextField(
+                        value = baseline,
+                        onValueChange = { baseline = it },
+                        label = "BASELINE (BEFORE CUTTING BACK)",
+                        keyboardType = KeyboardType.Number,
+                        placeholder = "e.g. 20"
+                    )
                 }
             }
         }
@@ -190,7 +237,8 @@ fun TrackerForm(
                     isPrimaryTracked = isPrimary,
                     isFinanciallyTracked = isFinancial,
                     pricePerUnit = (pricePerUnit.replace(',', '.').toDoubleOrNull() ?: 0.5)
-                        .coerceIn(0.0, 1_000.0)
+                        .coerceIn(0.0, 1_000.0),
+                    baseline = if (hasBaseline) baseline.toIntOrNull()?.coerceIn(0, 10_000) else null
                 ))
             },
             modifier = Modifier.fillMaxWidth().height(60.dp).tabakPressScale().border(1.dp, accentColor.copy(alpha = 0.4f), MaterialTheme.shapes.small),

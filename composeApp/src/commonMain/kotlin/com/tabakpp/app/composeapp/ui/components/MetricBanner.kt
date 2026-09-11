@@ -22,6 +22,11 @@ import androidx.compose.ui.unit.sp
 import com.tabakpp.app.composeapp.theme.*
 import com.tabakpp.app.domain.SmokingCalculator
 
+/**
+ * Quota status uses the same zero-target-safe three-state logic as
+ * TrackerCard (items 4/5): a target of 0 never renders as a meaningless 0%,
+ * and "at" is visually distinct (amber) from "over" (red).
+ */
 @Composable
 fun MetricBanner(
     metrics: SmokingCalculator.GlobalMetrics,
@@ -30,17 +35,20 @@ fun MetricBanner(
     isEndDayEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val progress = metrics.progress.toFloat().coerceIn(0f, 1f)
+    val limitStatus = SmokingCalculator.getLimitStatus(metrics.count.toDouble(), metrics.limit.toDouble())
+    val isOverLimit = limitStatus.status == "over"
+    val isAtLimit = limitStatus.status == "at"
+    val progress = (if (metrics.limit > 0) metrics.progress.toFloat() else if (limitStatus.status == "under") 0f else 1f).coerceIn(0f, 1f)
     val reducedMotion = LocalReducedMotion.current
     val animatedProgress by animateFloatAsState(
         targetValue = progress,
         animationSpec = if (reducedMotion) snap() else spring()
     )
-    val isOverLimit = metrics.count > metrics.limit && metrics.limit > 0
-    val isWarning = progress >= 0.8f && !isOverLimit
+    val isWarning = progress >= 0.8f && !isOverLimit && !isAtLimit
 
     val stateColor = when {
         isOverLimit -> ErrorColor
+        isAtLimit -> WarningColor
         isWarning -> WarningColor
         else -> accentColor
     }
@@ -85,14 +93,14 @@ fun MetricBanner(
                     horizontalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
                     MetricItem(
-                        label = "RANK",
+                        label = "ENGAGEMENT",
                         value = metrics.rank.uppercase(),
                         suffix = "${metrics.xp} XP",
                         valueColor = accentColor,
                         modifier = Modifier.weight(1f)
                     )
                     MetricItem(
-                        label = "STREAK",
+                        label = "GOAL STREAK",
                         value = "${metrics.streak}",
                         suffix = if (metrics.streak == 1) "DAY" else "DAYS",
                         valueColor = SuccessColor,
@@ -109,11 +117,15 @@ fun MetricBanner(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "DAILY QUOTA",
+                            text = "DAILY USE",
                             style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 1.sp, fontWeight = FontWeight.Black)
                         )
                         Text(
-                            text = if (isOverLimit) "OVER LIMIT" else "${(progress * 100).toInt()}%",
+                            text = when {
+                                isOverLimit -> "${limitStatus.aboveTarget.toInt()} OVER TARGET"
+                                isAtLimit -> "AT TARGET"
+                                else -> "${(progress * 100).toInt()}%"
+                            },
                             style = TabakTypography.labelSmall.copy(
                                 color = stateColor,
                                 fontWeight = FontWeight.Black,
@@ -167,7 +179,7 @@ fun MetricBanner(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        "END TRACKING DAY",
+                        "CLOSE TRACKING DAY",
                         style = TabakTypography.labelSmall.copy(
                             color = Color(0xFFFEF3C7).copy(alpha = 0.9f),
                             fontWeight = FontWeight.Black,

@@ -77,9 +77,15 @@ class TrackerCardTest {
     }
 
     @Test
-    fun showsOverLabel_whenOverLimit() {
+    fun showsAboveTargetLabel_whenOverLimit() {
         setCard(count = 22)
-        rule.onNodeWithText("2 OVER").assertIsDisplayed()
+        rule.onNodeWithText("2 ABOVE TARGET").assertIsDisplayed()
+    }
+
+    @Test
+    fun showsLimitReached_exactlyAtLimit_distinctFromOver() {
+        setCard(count = 20)
+        rule.onNodeWithText("LIMIT REACHED").assertIsDisplayed()
     }
 
     private fun assertDensityShowsAllParts(size: WidgetSize) {
@@ -118,8 +124,12 @@ class TrackerCardTest {
         assertDensityShowsAllParts(WidgetSize.LARGE)
     }
 
+    // Zero-target semantics (item 4): a target of 0 is a legitimate goal, not
+    // a meaningless denominator. actual==target==0 is "on target" (limit
+    // reached is the correct, honest state — see item 5), never a misleading
+    // 0% rendered as if nothing were being measured.
     @Test
-    fun zeroLimit_doesNotShowLimitReachedAtZeroCount() {
+    fun zeroTarget_actualZero_showsLimitReached() {
         rule.setContent {
             TabakTheme(reducedMotion = true) {
                 TrackerCard(
@@ -132,7 +142,64 @@ class TrackerCardTest {
                 )
             }
         }
-        rule.onNodeWithText("0 LEFT").assertIsDisplayed()
+        rule.onNodeWithText("LIMIT REACHED").assertIsDisplayed()
         rule.onNodeWithText("0").assertIsDisplayed()
+    }
+
+    @Test
+    fun zeroTarget_actualOne_showsOneAboveTarget() {
+        rule.setContent {
+            TabakTheme(reducedMotion = true) {
+                TrackerCard(
+                    config = cig.copy(limit = 0),
+                    count = 1,
+                    accentColor = Color(0xFF10B981),
+                    widgetSize = WidgetSize.MEDIUM,
+                    onIncrement = {},
+                    onDecrement = {},
+                )
+            }
+        }
+        rule.onNodeWithText("1 ABOVE TARGET").assertIsDisplayed()
+    }
+
+    @Test
+    fun zeroTarget_actualFive_showsFiveAboveTarget() {
+        rule.setContent {
+            TabakTheme(reducedMotion = true) {
+                TrackerCard(
+                    config = cig.copy(limit = 0),
+                    count = 5,
+                    accentColor = Color(0xFF10B981),
+                    widgetSize = WidgetSize.MEDIUM,
+                    onIncrement = {},
+                    onDecrement = {},
+                )
+            }
+        }
+        rule.onNodeWithText("5 ABOVE TARGET").assertIsDisplayed()
+    }
+
+    @Test
+    fun baseline_showsReductionHint_whenSet() {
+        rule.setContent {
+            TabakTheme(reducedMotion = true) {
+                TrackerCard(
+                    config = cig.copy(baseline = 20),
+                    count = 7,
+                    accentColor = Color(0xFF10B981),
+                    widgetSize = WidgetSize.MEDIUM,
+                    onIncrement = {},
+                    onDecrement = {},
+                )
+            }
+        }
+        rule.onNodeWithText("13 UNDER BASELINE").assertIsDisplayed()
+    }
+
+    @Test
+    fun baseline_hidesReductionHint_whenNotSet() {
+        setCard(count = 7)
+        rule.onNodeWithText("UNDER BASELINE", substring = true).assertDoesNotExist()
     }
 }
