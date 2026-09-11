@@ -1,5 +1,48 @@
 # tabak++ Production Audit
 
+## Addendum — 11 September 2026: data-integrity and historical-metric hardening pass
+
+> **This addendum supersedes the "RELEASE READY" verdict below for the items
+> listed here.** The 1 September audit correctly verified everything it
+> tested, but did not examine whether `activeCounts` (a single, dateless
+> live-counter bucket on the profile document) could be attributed to the
+> wrong tracking day — it can, whenever "End day" is not pressed exactly at
+> the dayStartHour rollover on the device that happens to be open at that
+> moment. That is a P0 data-integrity bug: a day's counts, once mis-dated,
+> silently corrupt streaks, spend, and history for that day. This pass fixes
+> it, makes historical financial/streak interpretation immutable against
+> later tracker edits, and separates target/baseline/reduction/savings into
+> distinct concepts. See the full implementation report delivered alongside
+> this pass for exact file paths, migration behavior, and verification
+> commands/results; the summary below is the audit-format record of what
+> changed.
+
+### Fixed (P0/P1)
+
+| Finding | Fix | Files (representative) |
+|---|---|---|
+| **Tracking-day rollover / undated active counts (P0).** `activeCounts` on `users/{uid}` had no date; a stale live count could be archived under the wrong day if the app wasn't open exactly at rollover, or "End day" was never pressed. | Replaced with `users/{uid}/days/{YYYY-MM-DD}` — every count is written to the date computed **at write time**, never a shared mutable bucket. "Close day" is now cosmetic only (folds credit into the lifetime rollup); it never assigns a date. A stale still-open day is folded in automatically the next time any client observes the tracking date has moved past it. | `webApp/src/services/registryService.js` (`adjustCounter`, `closeDay`, `reconcileStaleDays`), `shared/.../data/FirebaseRegistryRepository.kt`, `firestore.rules` (`days/{date}`) |
+| **Historical metrics not immutable (P1).** Streak/spend for an old day were recomputed from the tracker's *current* target/price. | Each `days/{date}` document stamps a `trackerSnapshots` map (name/target/baseline/price as of that day) the first time it's touched; `calculateStreak` and the day's financial credit read from that stamp, never live config. Rules freeze `trackerSnapshots` once a day is closed. Legacy pre-migration days have no snapshot and fall back to the live tracker (documented, not fabricated). | `SmokingCalculator.{buildTrackerSnapshot,computeDayCredit,calculateStreak}` (both platforms), `firestore.rules` (`validDayUpdate`) |
+| **Baseline conflated with target (P1).** Money saved was `(target - actual) * price` — a goal-adherence number presented as savings. | Added `TrackerConfig.baseline` (optional, separate from target). Reduction/savings are now `max(0, baseline - actual)`, never derived from target. No baseline set → UI shows "Set a baseline…", never a fabricated number. | `getReduction`, `calculateBaselineSavings` (both platforms); `ProtocolFormOverlay.jsx` / `TrackerForm.kt` |
+| **Zero-target treated as invalid (P1).** `target=0` produced a meaningless 0% and never visually registered "over limit". | `getLimitStatus(actual, target)` returns an explicit `under`/`at`/`over` state with an exact above/below-target count, independent of any percentage. | `TrackerCard.jsx`/`.kt`, `MetricBanner.jsx`/`.kt` |
+| **"At target" and "over target" shown identically.** | Three distinct visual tones (neutral/amber/red) on both clients; "at" no longer inherits the "over" treatment. | Same as above |
+| **Avatar coupled to the high-frequency profile document (P1/perf).** Every counter tap retransmitted the full avatar to every listener. | Avatar moved to `users/{uid}/meta/profile`; the counter write path never touches `users/{uid}` at all. | `updateAvatar`, `migrateAvatarToProfileMeta` (both platforms) |
+
+### Partially fixed / deferred this pass
+
+- **History pagination** — real cursor-based `fetchOlderLogs` added for the "load older entries" affordance; the live-subscribed window is still a bounded cap (400 days / 1200 legacy logs) rather than fully incremental everywhere.
+- **Offline outbox** — not implemented as a durable local queue; existing optimistic-overlay/rollback behavior is preserved and documented as the current limitation, not silently presented as more reliable than it is.
+- **Event-level model** (per-cigarette timestamped events for future analytics) — designed conceptually, not implemented; the dated day-document model was prioritized as the correctness fix.
+- **Full component decomposition of `SettingsScreen.jsx`** — not done in this pass (no existing test coverage to protect against regressions there); flagged as a follow-up.
+- **i18n currency formatting** — `formatCurrency`'s de-DE-style output is unchanged (cross-platform parity-critical, heavily tested); a locale/currency-config pass is deferred rather than risking that parity.
+- Cross-platform contract fixtures (`shared-tests/domain-fixtures.json`) cover the pure numeric functions (tracking date, zero-target status, baseline savings, day credit, currency, backfill bound); streak/day-doc scenarios remain covered by hand-mirrored (not fixture-driven) tests on both platforms.
+
+### Verification for this pass
+
+`npm run lint` / `test:run` (182 tests) / `test:contract` (29 shared fixtures) / `build` (web); `npm run test:rules` (50 Firestore emulator + rules tests, real emulator); `./gradlew :shared:testDebugUnitTest` (66 tests incl. `DomainContractFixturesTest`), `:composeApp:testDebugUnitTest`, `:androidApp:lintDebug`, `:androidApp:assembleDebug`, `:androidApp:assembleRelease` (R8) — all green on this machine (Gradle and the Firestore emulator both run locally here, contrary to the 1 September note below).
+
+---
+
 Audit date: 1 September 2026 · Baseline commit: `3829789`
 
 ## Executive summary
