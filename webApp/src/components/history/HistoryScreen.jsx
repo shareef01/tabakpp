@@ -553,9 +553,8 @@ export const HistoryScreen = React.memo(({
                     >
                       <Edit2 size={15} strokeWidth={2.5} />
                     </button>
-                    {/* Delete/restore for dated day records is not yet implemented
-                        (deliberately deferred — see AUDIT.md); legacy log rows
-                        keep full delete/restore/undo. */}
+                    {/* Delete/restore for dated day records is not yet implemented;
+                        legacy log rows keep full delete/restore/undo. */}
                     {!isDayDoc && (
                       <button
                         type="button"

@@ -8,7 +8,7 @@ rules_version = '2';
 // plus API-key restrictions are the security boundary. See README → Security
 // and SETUP_GUIDE.md for the upgrade path.
 //
-// SCHEMA (v2 — dated daily-document model, see AUDIT.md "Schema changes"):
+// SCHEMA (v2 — dated daily-document model):
 //   users/{uid}                    profile + settings + lifetimeAggregates rollup.
 //     Legacy `activeCounts`/`avatar` fields are still ACCEPTED here (never
 //     required) so an out-of-date Android APK — this app has no forced-update

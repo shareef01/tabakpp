@@ -12,7 +12,24 @@ google-services.json
 GoogleService-Info.plist
 .kotlin
 .idea-modules
+node_modules/
 webApp/dist/
+webApp/dist-demo/
+coverage/
+playwright-report/
+test-results/
+*.log
+
+# Keystores and signing credentials
+*.jks
+*.keystore
+*.p12
+*signing.properties
+
+# Environment variables
+.env
+.env.*
+!.env.example
 
 # Local diagnostics may contain account identifiers or App Check tokens.
 signin*.txt

@@ -2,12 +2,11 @@
 
 `domain-fixtures.json` is a single set of semantic test vectors run against
 **both** the JavaScript (`webApp/src/utils/smokingCalculator.js`) and Kotlin
-(`shared/.../domain/SmokingCalculator.kt`) ports of the domain math (item 11
-of the production-hardening audit — see `AUDIT.md`).
+(`shared/.../domain/SmokingCalculator.kt`) ports of the domain math.
 
 The two implementations are hand-mirrored, not code-shared, so semantic drift
 between them has historically only been caught by manually-duplicated unit
-tests (see `AUDIT.md` "Technical debt"). This file is the single source of
+tests. This file is the single source of
 truth both platforms are checked against; a value on one side that no longer
 matches the other fails CI on **both** `npm run test:contract` (web) and
 `:shared:testDebugUnitTest` (Android/KMP, `DomainContractFixturesTest`).
@@ -28,7 +27,7 @@ matches the other fails CI on **both** `npm run test:contract` (web) and
 | `reduction` | `getReduction` | Baseline vs. actual (item 3) — `null` baseline must produce a `null` result, never a fabricated number. |
 | `baselineSavings` | `calculateBaselineSavings` | Money saved from baseline vs. actual — must never match a `target`-based computation (item 3). |
 | `dayCredit` | `computeDayCredit` | The dated-daily-document model's self-contained per-day financial stamp (item 2) — computed only from `trackerSnapshots`, never live config. |
-| `formatCurrency` | `formatCurrency` | Cross-platform cent-rounding parity (already a known historical drift point — see `AUDIT_REPORT.md`). |
+| `formatCurrency` | `formatCurrency` | Cross-platform cent-rounding parity (already a known historical drift point). |
 | `backfillAllowed` | `isBackfillDateAllowed` | Manual-entry date bound. |
 
 ## Running
@@ -48,4 +47,4 @@ richer inputs (full log/day-doc histories) than the flat `input`/`expected`
 shape here comfortably expresses. Extending this fixture format to cover them
 — e.g. an `op: "calculateStreak"` taking a list of day-docs — is a reasonable
 next step; it was left out of this pass to keep the dispatcher in both
-languages small and reviewable (see `AUDIT.md` "Deferred").
+languages small and reviewable.

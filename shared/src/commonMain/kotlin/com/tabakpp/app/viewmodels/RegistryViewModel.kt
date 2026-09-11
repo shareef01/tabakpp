@@ -28,31 +28,45 @@ class RegistryViewModel(
 
     private val userUid: Flow<String?> = authUser.map { it?.uid }
 
+    // Every Firestore-backed flow below is defensively `.catch`-guarded: a
+    // rejected/failed listener (permission-denied, a dropped connection, an
+    // expired token — anything) must degrade to an error message, never
+    // propagate as an uncaught exception and kill the app. This mirrors the
+    // web client's onListenerError callbacks, which have always done this.
+
     val userProfile: StateFlow<UserProfile?> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(null)
         else registryRepository.subscribeToUserProfile(uid)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    }.catch { e -> setError(e, "Could not sync your profile. Check your connection and try again."); emit(null) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val configs: StateFlow<List<TrackerConfig>> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(emptyList())
         else registryRepository.subscribeToConfigs(uid)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.catch { e -> setError(e, "Could not sync your trackers. Check your connection and try again."); emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val logs: StateFlow<List<LogEntry>> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(emptyList())
         else registryRepository.subscribeToLogs(uid)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.catch { e -> setError(e, "Could not sync your history. Check your connection and try again."); emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Bounded window of `days/{date}` documents (item 1) — chart/streak use. */
     val dayDocs: StateFlow<List<DayDocument>> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(emptyList())
         else registryRepository.subscribeToDays(uid)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    }.catch { e -> setError(e, "Could not sync your history. Check your connection and try again."); emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Avatar (item 12) — decoupled from the high-frequency profile document. */
     val avatar: StateFlow<String?> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(null)
         else registryRepository.subscribeToProfileExtra(uid).map { it?.avatar }
+    }.catch { _ ->
+        // Avatar is decorative — fail silently (no avatar shown) rather than
+        // surfacing a user-facing error for a non-essential listener.
+        emit(null)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val historyIsTruncated: StateFlow<Boolean> = logs
@@ -143,8 +157,8 @@ class RegistryViewModel(
                 try {
                     registryRepository.ensureUserDocument(user.uid, user.displayName)
                     registryRepository.migrateSmokingUnitsIfNeeded(user.uid)
-                    // One-time, idempotent, self-healing migrations (item 1/12 —
-                    // see AUDIT.md "Migration"). Safe every session: each is a
+                    // One-time, idempotent, self-healing migrations (activeCounts ->
+                    // days, avatar -> meta/profile). Safe every session: each is a
                     // no-op once already applied.
                     registryRepository.migrateLegacyActiveCounts(user.uid)
                     registryRepository.migrateAvatarToProfileMeta(user.uid)
@@ -194,7 +208,14 @@ class RegistryViewModel(
                     pendingDelta.clear()
                     latestServerCounts = emptyMap()
                     publishCounterOverlay()
-                    if (uid == null) flowOf(null) else registryRepository.subscribeToDay(uid, day)
+                    if (uid == null) flowOf(null)
+                    else registryRepository.subscribeToDay(uid, day).catch { e ->
+                        setError(e, "Could not sync today's counts. Check your connection and try again.")
+                        emit(null)
+                    }
+                }
+                .catch { e ->
+                    setError(e, "Could not sync today's counts. Check your connection and try again.")
                 }
                 .collect { day ->
                     latestServerCounts = day?.counts ?: emptyMap()
