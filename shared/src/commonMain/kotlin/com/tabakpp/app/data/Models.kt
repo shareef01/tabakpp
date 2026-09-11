@@ -99,7 +99,15 @@ data class LifetimeAggregates(
     val saved: Double = 0.0,
     val wasted: Double = 0.0,
     /** Archived/manual smoking units (CIGARETTE/RYO; legacy JOINT still counts) — authoritative for life-lost beyond the log window. */
-    val smokingUnits: Double = 0.0
+    val smokingUnits: Double = 0.0,
+    /**
+     * Money saved strictly from baseline vs. actual (item 3) — NEVER derived
+     * from target vs. actual. See SmokingCalculator.calculateBaselineSavings.
+     * Absent/zero on legacy accounts and historical days predating baseline
+     * support; that is a documented "unknown, not fabricated" state, not a
+     * claim that nothing was ever saved.
+     */
+    val baselineSaved: Double = 0.0
 )
 
 @Serializable
@@ -120,13 +128,31 @@ data class UserProfile(
     val pouchPrice: Double = 0.0,
     val estimatedYield: Int = 0,
     val dayStartHour: Int = 6,
+    /**
+     * LEGACY (item 1/12): still readable/writable so an out-of-date client —
+     * this app has no forced-update mechanism — keeps working during the
+     * rollout. Updated clients never write this; see [DayDocument] and
+     * `RegistryRepository.migrateLegacyActiveCounts`.
+     */
     val activeCounts: Map<String, Double> = emptyMap(),
     val lifetimeAggregates: LifetimeAggregates = LifetimeAggregates(),
     /** One-shot backfill of smokingUnits from full log history completed. */
     val smokingUnitsMigrated: Boolean = false,
+    /** LEGACY (item 12): moved to `users/{uid}/meta/profile`; see [ProfileExtra]. */
     val avatar: String? = null,
+    /** 2 once activeCounts has been migrated into the dated day-doc model. Absent/0 = not yet migrated. */
+    val schemaVersion: Int = 0,
+    /** In-flight claim from `migrateLegacyActiveCounts` phase 1, resumed by phase 2. Always paired with [migratingLegacyDate]. */
+    val migratingLegacyCounts: Map<String, Double> = emptyMap(),
+    val migratingLegacyDate: String? = null,
     @Serializable(with = TimestampOrLongSerializer::class) val createdAt: Timestamp? = null,
     @Serializable(with = TimestampOrLongSerializer::class) val updatedAt: Timestamp? = null
+)
+
+/** `users/{uid}/meta/profile` (item 12) — split from [UserProfile] so a large, rarely-changing avatar never rides along on a high-frequency write. */
+@Serializable
+data class ProfileExtra(
+    val avatar: String? = null
 )
 
 @Serializable
@@ -139,8 +165,56 @@ data class TrackerConfig(
     val pricePerUnit: Double? = null,
     val isFinanciallyTracked: Boolean = true,
     val isPrimaryTracked: Boolean = true,
+    /**
+     * Baseline consumption (item 3) — the user's previous/reference average,
+     * kept strictly separate from [limit] (the current target). Null = "not
+     * set"; onboarding never requires it. Reduction and money-saved are
+     * always computed from baseline vs. actual, never from target vs.
+     * actual — see SmokingCalculator.calculateBaselineSavings.
+     */
+    val baseline: Int? = null,
     @Serializable(with = TimestampOrLongSerializer::class) val createdAt: Timestamp? = null,
     @Serializable(with = TimestampOrLongSerializer::class) val updatedAt: Timestamp? = null
+)
+
+/**
+ * Stamped historical config for one tracker on one [DayDocument] (item 2).
+ * Once a day is closed, this is immutable at the rules level — see
+ * firestore.rules `validDayUpdate`. A day with no snapshot for a tracker
+ * (legacy data, or a tracker never touched that day) falls back to that
+ * tracker's CURRENT live config — a documented, non-fabricating fallback,
+ * not a silent difference in meaning for any day that DOES have a snapshot.
+ */
+@Serializable
+data class TrackerSnapshot(
+    val name: String = "",
+    val type: TrackerType = TrackerType.CIGARETTE,
+    val target: Int = 0,
+    val baseline: Int? = null,
+    val unitPrice: Double? = null,
+    val isFinanciallyTracked: Boolean = true,
+    val isPrimaryTracked: Boolean = true
+)
+
+/**
+ * `users/{uid}/days/{YYYY-MM-DD}` — the dated daily-document model (item 1,
+ * the P0 rollover fix). Every count always belongs to an explicit tracking
+ * date decided by the caller at write time; there is no separate "current
+ * session" bucket that can carry counts across a rollover boundary. See
+ * AUDIT.md "Schema changes" for the full write-up.
+ */
+@Serializable
+data class DayDocument(
+    val date: String = "",
+    val counts: Map<String, Double> = emptyMap(),
+    val trackerSnapshots: Map<String, TrackerSnapshot> = emptyMap(),
+    val aggregateCredit: LifetimeAggregates? = null,
+    val status: String = "open", // "open" | "closed"
+    val foldedIntoLifetime: Boolean = false,
+    val legacyMigrationApplied: Boolean = false,
+    @Serializable(with = BaseTimestampOrLongSerializer::class) val createdAt: BaseTimestamp? = null,
+    @Serializable(with = BaseTimestampOrLongSerializer::class) val updatedAt: BaseTimestamp? = null,
+    @Serializable(with = BaseTimestampOrLongSerializer::class) val closedAt: BaseTimestamp? = null
 )
 
 @Serializable
