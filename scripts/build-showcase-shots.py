@@ -2,7 +2,7 @@ from PIL import Image
 from pathlib import Path
 import shutil
 
-root = Path(r"C:\Users\LENOVO\AndroidStudioProjects\tabakpp\assets\screenshots")
+root = Path(__file__).resolve().parent.parent / "assets" / "screenshots"
 out = root / "showcase"
 out.mkdir(exist_ok=True)
 

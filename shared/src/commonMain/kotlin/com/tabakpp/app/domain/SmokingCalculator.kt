@@ -5,7 +5,6 @@ import kotlinx.datetime.*
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
-import kotlin.math.min
 
 object SmokingCalculator {
     const val DEFAULT_DAY_START_HOUR = 6

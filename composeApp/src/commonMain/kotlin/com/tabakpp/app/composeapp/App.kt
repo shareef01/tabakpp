@@ -11,23 +11,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.automirrored.filled.ReceiptLong
-import androidx.compose.material.icons.filled.Analytics
-import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -51,7 +41,6 @@ import com.tabakpp.app.composeapp.ui.screens.TrackScreen
 import com.tabakpp.app.composeapp.ui.screens.auth.AuthScreen
 import com.tabakpp.app.viewmodels.AuthViewModel
 import com.tabakpp.app.viewmodels.RegistryViewModel
-import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 sealed class Screen(val route: String, val icon: ImageVector, val label: String) {
