@@ -11,7 +11,10 @@ const cap = vi.hoisted(() => ({
   profileErr: { current: null },
   configsCb: { current: null },
   logsCb: { current: null },
-  unsub: { profile: vi.fn(), configs: vi.fn(), logs: vi.fn() },
+  daysCb: { current: null },
+  dayCb: { current: null },
+  avatarCb: { current: null },
+  unsub: { profile: vi.fn(), configs: vi.fn(), logs: vi.fn(), days: vi.fn(), day: vi.fn(), avatar: vi.fn() },
 }));
 
 vi.mock('firebase/firestore', () => ({
@@ -35,16 +38,32 @@ vi.mock('../services/registryService', () => ({
       cap.logsErr = errCb;
       return cap.unsub.logs;
     },
+    subscribeToDays: (_uid, cb) => {
+      cap.daysCb.current = cb;
+      return cap.unsub.days;
+    },
+    subscribeToDay: (_uid, _date, cb, errCb) => {
+      cap.dayCb.current = cb;
+      cap.dayErr = errCb;
+      return cap.unsub.day;
+    },
+    subscribeToProfileExtra: (_uid, cb) => {
+      cap.avatarCb.current = cb;
+      return cap.unsub.avatar;
+    },
+    reconcileStaleDays: vi.fn(),
     adjustCounter: vi.fn(),
-    endDay: vi.fn(),
+    closeDay: vi.fn(),
     reorderConfigs: vi.fn(),
     addProtocol: vi.fn(),
     updateProtocol: vi.fn(),
     deleteProtocol: vi.fn(),
     updateHistoricalLog: vi.fn(),
+    updateHistoricalDay: vi.fn(),
     deleteLog: vi.fn(),
     restoreLog: vi.fn(),
     createManualEntry: vi.fn(),
+    updateAvatar: vi.fn(),
   },
 }));
 
@@ -54,17 +73,21 @@ const CIG = { id: 'cig', name: 'Cigarette', type: 'CIGARETTE', limit: 10, priceP
 
 const profileSnap = (data) => ({ exists: () => true, data: () => data });
 const defaultProfile = (over = {}) => ({
-  activeCounts: {}, lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0 },
-  accent: '#111', widgetSize: 'MEDIUM', avatar: null, unitPrice: 0.5, dayStartHour: 6, ...over,
+  lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 },
+  accent: '#111', widgetSize: 'MEDIUM', unitPrice: 0.5, dayStartHour: 6, ...over,
 });
+const dayData = (counts = {}, over = {}) => ({ date: TODAY, counts, trackerSnapshots: {}, status: 'open', ...over });
 
-// Mount the hook and push an initial profile/configs/logs snapshot through.
-const mountHydrated = ({ user = USER, profile = defaultProfile(), configs = [CIG], logs = [] } = {}) => {
+// Mount the hook and push an initial profile/configs/logs/day snapshot through.
+const mountHydrated = ({ user = USER, profile = defaultProfile(), configs = [CIG], logs = [], day = dayData() } = {}) => {
   const view = renderHook((props) => useRegistry(props.user, TODAY, 0.5), { initialProps: { user } });
   if (user) {
     act(() => cap.profileCb.current(profileSnap(profile)));
     act(() => cap.configsCb.current(configs));
     act(() => cap.logsCb.current(logs));
+    act(() => cap.daysCb.current([]));
+    act(() => cap.dayCb.current(day));
+    act(() => cap.avatarCb.current({ avatar: null }));
   }
   return view;
 };
@@ -73,9 +96,12 @@ beforeEach(() => {
   cap.profileCb.current = null;
   cap.configsCb.current = null;
   cap.logsCb.current = null;
+  cap.daysCb.current = null;
+  cap.dayCb.current = null;
+  cap.avatarCb.current = null;
   vi.clearAllMocks();
   // Re-establish a resolving default for every action spy (clearAllMocks keeps
-  // implementations, but individual tests may override endDay).
+  // implementations, but individual tests may override closeDay).
   for (const fn of Object.values(RegistryService)) {
     if (vi.isMockFunction(fn)) fn.mockResolvedValue(undefined);
   }
@@ -84,30 +110,35 @@ beforeEach(() => {
 describe('useRegistry hydration', () => {
   it('subscribes and exposes configs, logs, settings and clears loading', () => {
     const { result } = mountHydrated({
-      profile: defaultProfile({ activeCounts: { cig: 3 }, accent: '#abc', unitPrice: 0.25 }),
+      profile: defaultProfile({ accent: '#abc', unitPrice: 0.25 }),
+      day: dayData({ cig: 3 }),
     });
 
     expect(result.current.loading).toBe(false);
     expect(result.current.configs).toEqual([CIG]);
     expect(result.current.profileSettings.accent).toBe('#abc');
     expect(result.current.profileSettings.unitPrice).toBe(0.25);
-    // metrics come from the real SmokingCalculator over the live session
+    // metrics come from the real SmokingCalculator over the live day doc
     expect(result.current.metrics.count).toBe(3);
     expect(result.current.metrics.limit).toBe(10);
   });
 
-  it('derives rank and the budgetLeft alias', () => {
-    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: { cig: 2 } }) });
-    expect(typeof result.current.metrics.rank).toBe('string');
+  it('derives the budgetLeft alias', () => {
+    const { result } = mountHydrated({ day: dayData({ cig: 2 }) });
     expect(result.current.metrics.budgetLeft).toBe(result.current.metrics.budgetLeftToday);
+  });
+
+  it('reconciles stale open days whenever the tracking date is (re)established', () => {
+    mountHydrated();
+    expect(RegistryService.reconcileStaleDays).toHaveBeenCalledWith('u1', TODAY);
   });
 });
 
 describe('useRegistry counter actions', () => {
-  it('increments through RegistryService', async () => {
+  it('increments through RegistryService with the tracking date and unit price', async () => {
     const { result } = mountHydrated();
     await act(async () => { await result.current.increment('cig'); });
-    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', 1);
+    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', 1, TODAY, 0.5);
   });
 
   it('updates the count optimistically before Firestore resolves', async () => {
@@ -115,7 +146,7 @@ describe('useRegistry counter actions', () => {
     RegistryService.adjustCounter.mockImplementation(
       () => new Promise((resolve) => { release = resolve; })
     );
-    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: { cig: 2 } }) });
+    const { result } = mountHydrated({ day: dayData({ cig: 2 }) });
 
     let pending;
     act(() => { pending = result.current.increment('cig'); });
@@ -125,23 +156,23 @@ describe('useRegistry counter actions', () => {
       release();
       await pending;
     });
-    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', 1);
+    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', 1, TODAY, 0.5);
   });
 
   it('decrements only when the live count is above zero', async () => {
-    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: { cig: 0 } }) });
+    const { result } = mountHydrated({ day: dayData({ cig: 0 }) });
 
     await act(async () => { await result.current.decrement('cig'); });
     expect(RegistryService.adjustCounter).not.toHaveBeenCalled();
 
-    act(() => cap.profileCb.current(profileSnap(defaultProfile({ activeCounts: { cig: 2 } }))));
+    act(() => cap.dayCb.current(dayData({ cig: 2 })));
     await act(async () => { await result.current.decrement('cig'); });
-    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', -1);
+    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', -1, TODAY, 0.5);
   });
 
   it('rolls back an optimistic increment when the write fails', async () => {
     RegistryService.adjustCounter.mockRejectedValueOnce(new Error('denied'));
-    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: { cig: 2 } }) });
+    const { result } = mountHydrated({ day: dayData({ cig: 2 }) });
 
     await act(async () => {
       await expect(result.current.increment('cig')).rejects.toThrow('denied');
@@ -157,28 +188,28 @@ describe('useRegistry counter actions', () => {
   });
 });
 
-describe('useRegistry.endDay', () => {
+describe('useRegistry.endDay (closeDay under the hood)', () => {
   it('guards against a concurrent second call while one is in flight', async () => {
     let release;
-    RegistryService.endDay.mockImplementation(() => new Promise((r) => { release = r; }));
+    RegistryService.closeDay.mockImplementation(() => new Promise((r) => { release = r; }));
     const { result } = mountHydrated();
 
     act(() => { result.current.endDay(); });
     expect(result.current.isEndingDay).toBe(true);
-    expect(RegistryService.endDay).toHaveBeenCalledTimes(1);
+    expect(RegistryService.closeDay).toHaveBeenCalledTimes(1);
 
     // second invocation while still pending must be ignored
     act(() => { result.current.endDay(); });
-    expect(RegistryService.endDay).toHaveBeenCalledTimes(1);
+    expect(RegistryService.closeDay).toHaveBeenCalledTimes(1);
 
     await act(async () => { release(); });
     expect(result.current.isEndingDay).toBe(false);
   });
 
-  it('passes the tracking date and effective unit price', async () => {
-    const { result } = mountHydrated({ profile: defaultProfile({ unitPrice: 0.9 }) });
+  it('never assigns a date — it only closes the current tracking date', async () => {
+    const { result } = mountHydrated();
     await act(async () => { await result.current.endDay(); });
-    expect(RegistryService.endDay).toHaveBeenCalledWith('u1', TODAY, 0.9);
+    expect(RegistryService.closeDay).toHaveBeenCalledWith('u1', TODAY);
   });
 });
 
@@ -188,14 +219,14 @@ describe('useRegistry optimistic overlay', () => {
     RegistryService.adjustCounter.mockImplementation(
       () => new Promise((resolve) => { release = resolve; })
     );
-    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: { cig: 2 } }) });
+    const { result } = mountHydrated({ day: dayData({ cig: 2 }) });
 
     let pending;
     act(() => { pending = result.current.increment('cig'); });
     expect(result.current.metrics.activeCounts.cig).toBe(3);
 
     // Higher mid-flight snapshot merges with the still-pending tap.
-    act(() => cap.profileCb.current(profileSnap(defaultProfile({ activeCounts: { cig: 9 } }))));
+    act(() => cap.dayCb.current(dayData({ cig: 9 })));
     expect(result.current.metrics.activeCounts.cig).toBe(10);
 
     await act(async () => { release(); await pending; });
@@ -207,7 +238,7 @@ describe('useRegistry optimistic overlay', () => {
     RegistryService.adjustCounter.mockImplementation(
       () => new Promise((resolve) => { releases.push(resolve); })
     );
-    const { result } = mountHydrated({ profile: defaultProfile({ activeCounts: { cig: 2 } }) });
+    const { result } = mountHydrated({ day: dayData({ cig: 2 }) });
 
     let pending1;
     let pending2;
@@ -217,7 +248,7 @@ describe('useRegistry optimistic overlay', () => {
     });
     expect(result.current.metrics.activeCounts.cig).toBe(4);
 
-    act(() => cap.profileCb.current(profileSnap(defaultProfile({ activeCounts: { cig: 2 } }))));
+    act(() => cap.dayCb.current(dayData({ cig: 2 })));
     expect(result.current.metrics.activeCounts.cig).toBe(4);
 
     await act(async () => {
@@ -267,13 +298,19 @@ describe('useRegistry protocol helpers', () => {
     act(() => { result.current.addProtocol({ name: 'New' }); });
     expect(RegistryService.addProtocol).toHaveBeenCalledWith('u1', { name: 'New', order: 2 });
   });
+
+  it('deleteProtocol passes the current tracking date for live cleanup', () => {
+    const { result } = mountHydrated();
+    act(() => { result.current.deleteProtocol('cig'); });
+    expect(RegistryService.deleteProtocol).toHaveBeenCalledWith('u1', 'cig', TODAY);
+  });
 });
 
 describe('useRegistry lifecycle', () => {
   it('clears prior account state when user becomes null', () => {
     const { result, rerender } = mountHydrated({
       configs: [CIG],
-      profile: defaultProfile({ activeCounts: { cig: 3 } }),
+      day: dayData({ cig: 3 }),
     });
     expect(result.current.configs).toHaveLength(1);
     act(() => rerender({ user: null }));
@@ -286,7 +323,8 @@ describe('useRegistry lifecycle', () => {
     const USER_B = { uid: 'u2' };
     const { result, rerender } = mountHydrated({
       configs: [CIG],
-      profile: defaultProfile({ activeCounts: { cig: 3 }, accent: '#abc' }),
+      profile: defaultProfile({ accent: '#abc' }),
+      day: dayData({ cig: 3 }),
     });
     expect(result.current.profileSettings.accent).toBe('#abc');
 
@@ -295,7 +333,7 @@ describe('useRegistry lifecycle', () => {
     expect(result.current.profileSettings).toBeNull();
     expect(result.current.loading).toBe(true);
 
-    act(() => cap.profileCb.current(profileSnap(defaultProfile({ accent: '#def', activeCounts: {} }))));
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ accent: '#def' }))));
     act(() => cap.configsCb.current([]));
     act(() => cap.logsCb.current([]));
     expect(result.current.loading).toBe(false);
@@ -308,6 +346,9 @@ describe('useRegistry lifecycle', () => {
     expect(cap.unsub.profile).toHaveBeenCalled();
     expect(cap.unsub.configs).toHaveBeenCalled();
     expect(cap.unsub.logs).toHaveBeenCalled();
+    expect(cap.unsub.days).toHaveBeenCalled();
+    expect(cap.unsub.day).toHaveBeenCalled();
+    expect(cap.unsub.avatar).toHaveBeenCalled();
   });
 
   it('tracks connectivity via window online/offline events', () => {

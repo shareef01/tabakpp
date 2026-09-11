@@ -7,6 +7,32 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock
 
+/** Schema version marking the dated-daily-document migration (see AUDIT.md). */
+private const val CURRENT_SCHEMA_VERSION = 2
+
+private fun nowTimestamp(): Timestamp {
+    val ms = Clock.System.now().toEpochMilliseconds()
+    return Timestamp(ms / 1000, ((ms % 1000) * 1_000_000).toInt())
+}
+
+/**
+ * ## Data model (see AUDIT.md "Schema changes" for the full write-up)
+ *
+ * `users/{uid}/days/{YYYY-MM-DD}` is the dated daily-document model (item 1):
+ * every count always belongs to an explicit tracking date decided AT WRITE
+ * TIME by the caller, never to a mutable "current session" bucket that can
+ * outlive the day it started on. "Close day" only marks a day complete and
+ * folds its stamped credit into `lifetimeAggregates`; it is never what
+ * decides which date a count belongs to.
+ *
+ * `users/{uid}/logs/{logId}` is the pre-existing ledger, kept for backward
+ * compatibility: legacy day archives (`{date}_DAY`, no longer created by
+ * updated clients) and manual backfill entries (still created here).
+ *
+ * `users/{uid}` no longer carries `activeCounts` for updated clients (item
+ * 12) — see [migrateLegacyActiveCounts]. `avatar` moved to
+ * `users/{uid}/meta/profile` — see [migrateAvatarToProfileMeta]/[updateAvatar].
+ */
 class FirebaseRegistryRepository(
     private val firestore: FirebaseFirestore
 ) : RegistryRepository {
@@ -14,7 +40,7 @@ class FirebaseRegistryRepository(
     private val BATCH_LIMIT = 400
 
     override fun subscribeToUserProfile(uid: String): Flow<UserProfile?> {
-        return firestore.collection("users").document(uid).snapshots().map { 
+        return firestore.collection("users").document(uid).snapshots().map {
             if (it.exists) it.data<UserProfile>() else null
         }
     }
@@ -32,6 +58,26 @@ class FirebaseRegistryRepository(
             .limit(LIVE_LOG_QUERY_LIMIT)
             .snapshots()
             .map { snap -> snap.documents.mapNotNull { doc -> decodeLogEntry(doc) } }
+    }
+
+    override fun subscribeToDay(uid: String, date: String): Flow<DayDocument?> {
+        return firestore.collection("users").document(uid).collection("days").document(date)
+            .snapshots()
+            .map { if (it.exists) decodeDayDocument(it) else null }
+    }
+
+    override fun subscribeToDays(uid: String): Flow<List<DayDocument>> {
+        return firestore.collection("users").document(uid).collection("days")
+            .orderBy("date", Direction.DESCENDING)
+            .limit(LIVE_DAYS_QUERY_LIMIT)
+            .snapshots()
+            .map { snap -> snap.documents.mapNotNull { doc -> decodeDayDocument(doc) } }
+    }
+
+    override fun subscribeToProfileExtra(uid: String): Flow<ProfileExtra?> {
+        return firestore.collection("users").document(uid).collection("meta").document("profile")
+            .snapshots()
+            .map { if (it.exists) it.data<ProfileExtra>() else null }
     }
 
     private suspend fun listConfigIds(uid: String): List<String> {
@@ -64,6 +110,14 @@ class FirebaseRegistryRepository(
         }
     }
 
+    private fun decodeDayDocument(doc: DocumentSnapshot): DayDocument? {
+        return try {
+            doc.data<DayDocument>().copy(date = doc.id)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** Re-read configs by id inside a transaction (client SDK cannot query in a tx). */
     private suspend fun Transaction.loadConfigs(
         configsRef: CollectionReference,
@@ -75,74 +129,271 @@ class FirebaseRegistryRepository(
         }
     }
 
-    override suspend fun updateLiveCounter(uid: String, trackerId: String, delta: Double) {
-        val userRef = firestore.collection("users").document(uid)
-        val configsRef = userRef.collection("configs")
+    override suspend fun updateLiveCounter(
+        uid: String,
+        trackerId: String,
+        delta: Double,
+        trackingDate: String,
+        defaultUnitPrice: Double
+    ) {
+        val configRef = firestore.collection("users").document(uid).collection("configs").document(trackerId)
+        val dayRef = firestore.collection("users").document(uid).collection("days").document(trackingDate)
+
         firestore.runTransaction {
-            val snapshot = get(userRef)
-            if (!snapshot.exists) throw Exception("USER_NOT_FOUND")
-            // Reject counters for trackers that no longer exist (or were never
-            // created) so a modified client cannot plant junk keys in activeCounts.
-            val configSnap = get(configsRef.document(trackerId))
+            val configSnap = get(configRef)
             if (!configSnap.exists) throw Exception("CONFIG_NOT_FOUND")
-            val profile = snapshot.data<UserProfile>()
-            val counts = profile.activeCounts.toMutableMap()
+            val config = configSnap.data<TrackerConfig>().copy(id = trackerId)
+
+            val daySnap = get(dayRef)
+            val existing = if (daySnap.exists) decodeDayDocument(daySnap) else null
+            if (existing?.status == "closed") throw Exception("DAY_CLOSED")
+
+            val counts = (existing?.counts ?: emptyMap()).toMutableMap()
             counts[trackerId] = maxOf(0.0, (counts[trackerId] ?: 0.0) + delta)
+            val trackerSnapshots = (existing?.trackerSnapshots ?: emptyMap()) +
+                (trackerId to SmokingCalculator.buildTrackerSnapshot(config))
+            val credit = SmokingCalculator.computeDayCredit(counts, trackerSnapshots, defaultUnitPrice)
+            val now = nowTimestamp()
+
+            set(
+                dayRef,
+                DayDocument(
+                    date = trackingDate,
+                    counts = counts,
+                    trackerSnapshots = trackerSnapshots,
+                    aggregateCredit = credit,
+                    status = "open",
+                    foldedIntoLifetime = existing?.foldedIntoLifetime ?: false,
+                    legacyMigrationApplied = existing?.legacyMigrationApplied ?: false,
+                    createdAt = existing?.createdAt ?: now,
+                    updatedAt = now,
+                    closedAt = existing?.closedAt
+                )
+            )
+        }
+    }
+
+    override suspend fun closeDay(uid: String, date: String) {
+        val userRef = firestore.collection("users").document(uid)
+        val dayRef = userRef.collection("days").document(date)
+
+        firestore.runTransaction {
+            val daySnap = get(dayRef)
+            if (!daySnap.exists) throw Exception("NOTHING_TO_ARCHIVE")
+            val day = decodeDayDocument(daySnap) ?: throw Exception("NOTHING_TO_ARCHIVE")
+            if (!SmokingCalculator.hasOpenSession(day.counts)) throw Exception("NOTHING_TO_ARCHIVE")
+
+            if (day.foldedIntoLifetime) {
+                if (day.status != "closed") {
+                    set(dayRef, day.copy(status = "closed", closedAt = nowTimestamp()))
+                }
+                return@runTransaction
+            }
+
+            val userSnap = get(userRef)
+            val profile = if (userSnap.exists) userSnap.data<UserProfile>() else UserProfile()
+            val credit = day.aggregateCredit ?: LifetimeAggregates()
+
+            set(dayRef, day.copy(status = "closed", foldedIntoLifetime = true, closedAt = nowTimestamp()))
             updateFields(userRef) {
-                "activeCounts" to counts
+                "lifetimeAggregates.saved" to (profile.lifetimeAggregates.saved + credit.saved)
+                "lifetimeAggregates.wasted" to (profile.lifetimeAggregates.wasted + credit.wasted)
+                "lifetimeAggregates.smokingUnits" to (profile.lifetimeAggregates.smokingUnits + credit.smokingUnits)
+                "lifetimeAggregates.baselineSaved" to (profile.lifetimeAggregates.baselineSaved + credit.baselineSaved)
             }
         }
     }
 
-    override suspend fun endDay(uid: String, trackingDate: String) {
+    override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) {
+        val stale = try {
+            firestore.collection("users").document(uid).collection("days")
+                .orderBy("date", Direction.DESCENDING)
+                .limit(LIVE_DAYS_QUERY_LIMIT)
+                .get()
+                .documents
+                .mapNotNull { decodeDayDocument(it) }
+                .filter { it.status == "open" && it.date < currentTrackingDate }
+        } catch (_: Exception) {
+            emptyList()
+        }
+        for (day in stale) {
+            try {
+                closeDay(uid, day.date)
+            } catch (_: Exception) {
+                // Best-effort — one failure must not block the rest.
+            }
+        }
+    }
+
+    override suspend fun updateHistoricalDay(uid: String, date: String, counts: Map<String, Double>) {
         val userRef = firestore.collection("users").document(uid)
-        val configsRef = userRef.collection("configs")
-        val configIds = listConfigIds(uid)
-        val logRef = userRef.collection("logs").document("${trackingDate}_DAY")
+        val dayRef = userRef.collection("days").document(date)
+        val normalized = InputSanitizer.counts(counts)
 
         firestore.runTransaction {
-            val userSnap = get(userRef)
-            val existingSnap = get(logRef)
-            val profile = userSnap.data<UserProfile>()
-            val activeCounts = profile.activeCounts
-            val configs = loadConfigs(configsRef, configIds)
+            val daySnap = get(dayRef)
+            if (!daySnap.exists) throw Exception("DAY_NOT_FOUND")
+            val day = decodeDayDocument(daySnap) ?: throw Exception("DAY_NOT_FOUND")
 
-            if (!SmokingCalculator.hasOpenSession(activeCounts)) {
-                throw Exception("NOTHING_TO_ARCHIVE")
+            val mergedCounts = day.counts + normalized
+            val newCredit = SmokingCalculator.computeDayCredit(mergedCounts, day.trackerSnapshots)
+
+            if (day.foldedIntoLifetime) {
+                val oldCredit = day.aggregateCredit ?: LifetimeAggregates()
+                val userSnap = get(userRef)
+                if (userSnap.exists) {
+                    val profile = userSnap.data<UserProfile>()
+                    updateFields(userRef) {
+                        "lifetimeAggregates.saved" to (profile.lifetimeAggregates.saved - oldCredit.saved + newCredit.saved)
+                        "lifetimeAggregates.wasted" to (profile.lifetimeAggregates.wasted - oldCredit.wasted + newCredit.wasted)
+                        "lifetimeAggregates.smokingUnits" to (profile.lifetimeAggregates.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits)
+                        "lifetimeAggregates.baselineSaved" to (profile.lifetimeAggregates.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
+                    }
+                }
             }
 
-            // A second end-day on the same tracking date must merge into the
-            // existing archive, not replace it. Aggregates were already credited
-            // with fin(existing), so only the delta to fin(merged) is applied.
-            val existingEntry = if (existingSnap.exists) decodeLogEntry(existingSnap) else null
-            val existingCounts = existingEntry?.counts
-            val dayEnd = RegistryMutations.endDay(
-                current = profile.lifetimeAggregates,
-                existingCounts = existingCounts,
-                activeCounts = activeCounts,
-                configs = configs,
-                unitPrice = profile.unitPrice,
-                existingCredit = existingEntry?.aggregateCredit
-            )
+            set(dayRef, day.copy(counts = mergedCounts, aggregateCredit = newCredit, updatedAt = nowTimestamp()))
+        }
+    }
 
-            val nowMs = Clock.System.now().toEpochMilliseconds()
-            val logEntry = LogEntry(
-                id = "${trackingDate}_DAY",
-                logDate = trackingDate,
-                counts = dayEnd.mergedCounts,
-                isArchive = true,
-                origin = "DAY_RESET",
-                aggregateCredit = dayEnd.logCredit,
-                finalizedAt = Timestamp(nowMs / 1000, ((nowMs % 1000) * 1_000_000).toInt())
-            )
+    /**
+     * Two single-document transactions rather than one atomic users+days
+     * commit — a combined commit measurably hit Firestore's per-commit
+     * rules-evaluation ceiling ("maximum of 1000 expressions") once `days`
+     * validation was added (see firestore.rules `validDayShape`'s comment
+     * and webApp/src/services/registryService.js for the JS twin of this
+     * exact design). Each phase is independently idempotent and safe to
+     * resume after a crash between them, from any device:
+     *   Phase 1 (users/{uid} only) atomically CLAIMS activeCounts — stamps
+     *     it onto migratingLegacyCounts/-Date, clears activeCounts, bumps
+     *     schemaVersion.
+     *   Phase 2 (users/{uid}/days/{date} only) folds the claim into that
+     *     day, marks it legacyMigrationApplied, then (separately) clears the
+     *     claim fields from the profile.
+     */
+    override suspend fun migrateLegacyActiveCounts(uid: String) {
+        val userRef = firestore.collection("users").document(uid)
 
-            set(logRef, logEntry)
+        data class Claim(val counts: Map<String, Double>, val date: String)
+        var claim: Claim? = null
+
+        firestore.runTransaction {
+            val snap = get(userRef)
+            if (!snap.exists) return@runTransaction
+            val profile = snap.data<UserProfile>()
+
+            val pending = InputSanitizer.counts(profile.migratingLegacyCounts)
+            if (profile.migratingLegacyDate != null && SmokingCalculator.hasOpenSession(pending)) {
+                claim = Claim(pending, profile.migratingLegacyDate)
+                return@runTransaction // resume an interrupted phase 2
+            }
+            if (profile.schemaVersion >= CURRENT_SCHEMA_VERSION) return@runTransaction // already migrated
+
+            val legacy = InputSanitizer.counts(profile.activeCounts)
+            if (!SmokingCalculator.hasOpenSession(legacy)) {
+                updateFields(userRef) {
+                    "schemaVersion" to CURRENT_SCHEMA_VERSION
+                    "activeCounts" to FieldValue.delete
+                }
+                return@runTransaction
+            }
+
+            val date = SmokingCalculator.getTrackingDate(Clock.System.now(), profile.dayStartHour)
             updateFields(userRef) {
-                "activeCounts" to emptyMap<String, Double>()
-                "lifetimeAggregates.saved" to dayEnd.aggregates.saved
-                "lifetimeAggregates.wasted" to dayEnd.aggregates.wasted
-                "lifetimeAggregates.smokingUnits" to dayEnd.aggregates.smokingUnits
+                "schemaVersion" to CURRENT_SCHEMA_VERSION
+                "activeCounts" to FieldValue.delete
+                "migratingLegacyCounts" to legacy
+                "migratingLegacyDate" to date
             }
+            claim = Claim(legacy, date)
+        }
+
+        val resolvedClaim = claim ?: return
+
+        // Read non-transactionally: no concurrent-modification stakes worth a
+        // transactional config read here — worst case on a config edited in
+        // the gap before the commit below, one migrated tracker's snapshot
+        // is a moment stale, self-corrected on its next tap.
+        val configById = getConfigsOnce(uid).associateBy { it.id }
+        val dayRef = userRef.collection("days").document(resolvedClaim.date)
+
+        var claimResolved = false
+        firestore.runTransaction {
+            val daySnap = get(dayRef)
+            val existing = if (daySnap.exists) decodeDayDocument(daySnap) else null
+
+            if (existing?.legacyMigrationApplied == true) {
+                claimResolved = true // already folded by a prior run
+                return@runTransaction
+            }
+            if (existing?.status == "closed") {
+                // Exceptionally rare: closed by a newer client in the window
+                // between the claim and this commit. The claim stays parked
+                // on the profile rather than guessing a different date.
+                return@runTransaction
+            }
+
+            val mergedCounts = (existing?.counts ?: emptyMap()) + resolvedClaim.counts
+            val trackerSnapshots = (existing?.trackerSnapshots ?: emptyMap()).toMutableMap()
+            resolvedClaim.counts.keys.forEach { id ->
+                configById[id]?.let { trackerSnapshots[id] = SmokingCalculator.buildTrackerSnapshot(it) }
+            }
+            val credit = SmokingCalculator.computeDayCredit(mergedCounts, trackerSnapshots)
+            val now = nowTimestamp()
+
+            set(
+                dayRef,
+                DayDocument(
+                    date = resolvedClaim.date,
+                    counts = mergedCounts,
+                    trackerSnapshots = trackerSnapshots,
+                    aggregateCredit = credit,
+                    status = "open",
+                    legacyMigrationApplied = true,
+                    createdAt = existing?.createdAt ?: now,
+                    updatedAt = now
+                )
+            )
+            claimResolved = true
+        }
+
+        if (!claimResolved) return // day was closed underneath us — claim stays parked for a future run
+
+        try {
+            userRef.updateFields {
+                "migratingLegacyCounts" to FieldValue.delete
+                "migratingLegacyDate" to FieldValue.delete
+            }
+        } catch (_: Exception) {
+            // Best-effort — next run retries the cleanup.
+        }
+    }
+
+    override suspend fun migrateAvatarToProfileMeta(uid: String) {
+        val userRef = firestore.collection("users").document(uid)
+        val snap = userRef.get()
+        if (!snap.exists) return
+        val avatar = snap.data<UserProfile>().avatar ?: return
+
+        val metaRef = userRef.collection("meta").document("profile")
+        val metaSnap = metaRef.get()
+        if (!metaSnap.exists || metaSnap.data<ProfileExtra>().avatar == null) {
+            metaRef.set(ProfileExtra(avatar = avatar), merge = true)
+        }
+        try {
+            userRef.updateFields { "avatar" to FieldValue.delete }
+        } catch (_: Exception) {
+            // Already gone.
+        }
+    }
+
+    override suspend fun updateAvatar(uid: String, avatar: String?) {
+        val userRef = firestore.collection("users").document(uid)
+        userRef.collection("meta").document("profile").set(ProfileExtra(avatar = avatar), merge = true)
+        try {
+            userRef.updateFields { "avatar" to FieldValue.delete }
+        } catch (_: Exception) {
+            // Already gone.
         }
     }
 
@@ -316,10 +567,13 @@ class FirebaseRegistryRepository(
         firestore.collection("users").document(uid).collection("configs").document(config.id).set(config, merge = true)
     }
 
-    override suspend fun deleteConfig(uid: String, configId: String) {
+    override suspend fun deleteConfig(uid: String, configId: String, trackingDate: String?) {
         val userRef = firestore.collection("users").document(uid)
         val configRef = userRef.collection("configs").document(configId)
+        val dayRef = trackingDate?.let { userRef.collection("days").document(it) }
         firestore.runTransaction {
+            // Legacy cleanup for an out-of-date client still on the pre-days-model
+            // path — harmless no-op once activeCounts is gone.
             val userSnap = get(userRef)
             if (userSnap.exists) {
                 val profile = userSnap.data<UserProfile>()
@@ -328,6 +582,18 @@ class FirebaseRegistryRepository(
                     next.remove(configId)
                     updateFields(userRef) {
                         "activeCounts" to next
+                    }
+                }
+            }
+            if (dayRef != null) {
+                val daySnap = get(dayRef)
+                if (daySnap.exists) {
+                    val day = decodeDayDocument(daySnap)
+                    if (day != null && day.status != "closed" && day.counts.containsKey(configId)) {
+                        val counts = day.counts - configId
+                        val trackerSnapshots = day.trackerSnapshots - configId
+                        val credit = SmokingCalculator.computeDayCredit(counts, trackerSnapshots)
+                        set(dayRef, day.copy(counts = counts, trackerSnapshots = trackerSnapshots, aggregateCredit = credit, updatedAt = nowTimestamp()))
                     }
                 }
             }
@@ -347,9 +613,10 @@ class FirebaseRegistryRepository(
         }
     }
 
-    // Settings-only write path: never touches activeCounts or lifetimeAggregates,
-    // which are owned by the transactional counter/archive paths. Writing the full
-    // profile here would race live increments and silently revert them.
+    // Settings-only write path: never touches activeCounts, lifetimeAggregates,
+    // or avatar (item 12 — avatar lives in users/{uid}/meta/profile), which are
+    // owned by their own dedicated write paths. Writing the full profile here
+    // would race live increments and silently revert them.
     // Also strip legacy web eco keys so rules stay satisfied on older documents.
     override suspend fun updateProfileSettings(uid: String, profile: UserProfile) {
         firestore.collection("users").document(uid).updateFields {
@@ -362,7 +629,6 @@ class FirebaseRegistryRepository(
             "pouchPrice" to profile.pouchPrice
             "estimatedYield" to profile.estimatedYield
             "dayStartHour" to profile.dayStartHour
-            "avatar" to profile.avatar
             "ecoMode" to FieldValue.delete
             "retailPrice" to FieldValue.delete
             "retailQty" to FieldValue.delete
@@ -387,7 +653,7 @@ class FirebaseRegistryRepository(
                 dayStartHour = 6,
                 lifetimeAggregates = LifetimeAggregates(),
                 smokingUnitsMigrated = true,
-                activeCounts = emptyMap()
+                schemaVersion = CURRENT_SCHEMA_VERSION
             )
         )
     }
@@ -418,6 +684,8 @@ class FirebaseRegistryRepository(
     override suspend fun deleteAllUserData(uid: String) {
         deleteCollectionPaged(firestore.collection("users").document(uid).collection("configs"))
         deleteCollectionPaged(firestore.collection("users").document(uid).collection("logs"))
+        deleteCollectionPaged(firestore.collection("users").document(uid).collection("days"))
+        deleteCollectionPaged(firestore.collection("users").document(uid).collection("meta"))
         firestore.collection("users").document(uid).delete()
     }
 

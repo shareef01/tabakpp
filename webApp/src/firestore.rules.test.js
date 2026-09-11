@@ -283,3 +283,152 @@ describe('Firestore ownership and write paths', () => {
     await assertFails(updateDoc(logRef, { logDate: '2026-07-01' }));
   });
 });
+
+describe('tracker baseline field (item 3)', () => {
+  const seedAlice = async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    return testEnv.authenticatedContext('alice').firestore();
+  };
+
+  it('accepts a whole-number baseline, or an explicit null (not set)', async () => {
+    const db = await seedAlice();
+    await assertSucceeds(setDoc(doc(db, 'users/alice/configs/cig'), {
+      name: 'Cig', limit: 10, order: 0, baseline: 20,
+    }));
+    await assertSucceeds(setDoc(doc(db, 'users/alice/configs/cig2'), {
+      name: 'Cig2', limit: 10, order: 1, baseline: null,
+    }));
+    await assertSucceeds(setDoc(doc(db, 'users/alice/configs/cig3'), {
+      name: 'Cig3', limit: 10, order: 2,
+    }));
+  });
+
+  it('rejects a negative, fractional, or oversized baseline', async () => {
+    const db = await seedAlice();
+    await assertFails(setDoc(doc(db, 'users/alice/configs/bad1'), { name: 'x', limit: 10, order: 0, baseline: -1 }));
+    await assertFails(setDoc(doc(db, 'users/alice/configs/bad2'), { name: 'x', limit: 10, order: 0, baseline: 1.5 }));
+    await assertFails(setDoc(doc(db, 'users/alice/configs/bad3'), { name: 'x', limit: 10, order: 0, baseline: 10001 }));
+  });
+});
+
+describe('users/{uid}/days/{date} — dated daily-document model (items 1, 2, 13)', () => {
+  const seedAlice = async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    return testEnv.authenticatedContext('alice').firestore();
+  };
+
+  const openDay = {
+    date: '2026-07-20',
+    counts: { cig: 4 },
+    trackerSnapshots: { cig: { name: 'Cig', type: 'CIGARETTE', target: 10, baseline: 20, unitPrice: 1, isFinanciallyTracked: true } },
+    aggregateCredit: { saved: 6, wasted: 4, smokingUnits: 4, baselineSaved: 16 },
+    status: 'open',
+  };
+
+  it('allows an owner to create a day doc whose date matches the document id', async () => {
+    const db = await seedAlice();
+    await assertSucceeds(setDoc(doc(db, 'users/alice/days/2026-07-20'), openDay));
+  });
+
+  it('rejects a day doc whose date field does not match the document id', async () => {
+    const db = await seedAlice();
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...openDay, date: '2026-07-21' }));
+  });
+
+  it('denies cross-user reads and writes on days', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice/days/2026-07-20'), openDay);
+    });
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'users/alice/days/2026-07-20')));
+    await assertFails(updateDoc(doc(mallory, 'users/alice/days/2026-07-20'), { counts: { cig: 0 } }));
+  });
+
+  it('allows counts/snapshot updates while a day is still open', async () => {
+    const db = await seedAlice();
+    await setDoc(doc(db, 'users/alice/days/2026-07-20'), openDay);
+    await assertSucceeds(updateDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      counts: { cig: 5 },
+      trackerSnapshots: { cig: { ...openDay.trackerSnapshots.cig, target: 12 } },
+      aggregateCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 15 },
+    }));
+  });
+
+  it('closing a day (open -> closed) is allowed, but reopening it is not', async () => {
+    const db = await seedAlice();
+    await setDoc(doc(db, 'users/alice/days/2026-07-20'), openDay);
+    await assertSucceeds(updateDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      status: 'closed', foldedIntoLifetime: true,
+    }));
+    await assertFails(updateDoc(doc(db, 'users/alice/days/2026-07-20'), { status: 'open' }));
+  });
+
+  it('once closed, trackerSnapshots is frozen even though counts may still be corrected', async () => {
+    const db = await seedAlice();
+    await setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...openDay, status: 'closed', foldedIntoLifetime: true });
+
+    // A historical correction to counts (+ its derived credit) is allowed...
+    await assertSucceeds(updateDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      counts: { cig: 6 },
+      aggregateCredit: { saved: 4, wasted: 6, smokingUnits: 6, baselineSaved: 14 },
+    }));
+    // ...but rewriting what the day's target/price/baseline WAS is not, even
+    // if bundled with an otherwise-legitimate counts edit.
+    await assertFails(updateDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      counts: { cig: 6 },
+      trackerSnapshots: { cig: { ...openDay.trackerSnapshots.cig, target: 999 } },
+    }));
+  });
+
+  it('foldedIntoLifetime cannot be reset to false once true', async () => {
+    const db = await seedAlice();
+    await setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...openDay, status: 'closed', foldedIntoLifetime: true });
+    await assertFails(updateDoc(doc(db, 'users/alice/days/2026-07-20'), { foldedIntoLifetime: false }));
+  });
+
+  it('rejects a malformed date, an oversized snapshot map, or extra keys', async () => {
+    const db = await seedAlice();
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...openDay, date: 'not-a-date' }));
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...openDay, somethingElse: true }));
+
+    const oversizedSnapshots = Object.fromEntries(
+      Array.from({ length: 21 }, (_, i) => [`t${i}`, { target: 1 }]),
+    );
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay, trackerSnapshots: oversizedSnapshots,
+    }));
+  });
+});
+
+describe('users/{uid}/meta/{id} — avatar split from the profile doc (item 12)', () => {
+  it('allows an owner to write and read their own avatar doc', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertSucceeds(setDoc(doc(db, 'users/alice/meta/profile'), { avatar: 'data:short' }));
+    await assertSucceeds(getDoc(doc(db, 'users/alice/meta/profile')));
+  });
+
+  it('denies cross-user access', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice/meta/profile'), { avatar: 'x' });
+    });
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'users/alice/meta/profile')));
+    await assertFails(updateDoc(doc(mallory, 'users/alice/meta/profile'), { avatar: 'evil' }));
+  });
+
+  it('rejects an oversized avatar or unknown keys', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(db, 'users/alice/meta/profile'), { avatar: 'A'.repeat(100001) }));
+    await assertFails(setDoc(doc(db, 'users/alice/meta/profile'), { avatar: 'x', extra: true }));
+  });
+});
