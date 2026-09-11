@@ -1,5 +1,18 @@
 # tabak++ Production Readiness Audit
 
+> **Superseded in part — 11 September 2026.** A later pass (see the
+> addendum at the top of `AUDIT_REPORT.md`) found and fixed a P0 the scored
+> findings below did not cover: `activeCounts` had no date, so a live count
+> could be attributed to the wrong tracking day. That pass also resolved
+> **[PERF-01](#perf-01)** (avatar moved to `users/{uid}/meta/profile`, off
+> the hot counter-write path entirely) and made **[PERF-02](#perf-02)**'s
+> 1,200-log ceiling a real cursor-paginated "load older entries" affordance
+> rather than a silent cutoff. **[PARITY-01](#parity-01)** (Rank/XP missing
+> on Android) was already resolved by a commit after this audit's baseline —
+> `composeApp/.../MetricBanner.kt` renders both. The scores/verdict below are
+> a point-in-time snapshot from `main @ 75cf718` and are not re-validated
+> against the current `main`.
+
 **Repository Upstream:** `https://github.com/shareef01/tabakpp`  
 **Audit Target:** Full repository codebase (`main` @ `75cf718`, tag `v1.0.4`)  
 **Audit Date:** 31 August 2026  

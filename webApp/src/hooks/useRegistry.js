@@ -8,21 +8,35 @@ import { db } from '../firebase';
 const emptyRegistry = () => ({
   configs: [],
   logs: [],
+  dayDocs: [],
   activeCounts: {},
   lifetimeAggregates: null,
   profileSettings: null,
+  avatar: null,
 });
 
 /**
  * useRegistry (Hardened Cross-Platform Engine)
- * Single profile listener feeds counters, aggregates, and settings hydration.
+ *
+ * `today` (the tracking date, computed by the caller from
+ * `getTrackingDate(now, dayStartHour)`) is now the key that decides which
+ * `days/{date}` document this hook reads/writes for "live" counts (item 1) —
+ * there is no shared mutable "current session" bucket that can carry counts
+ * across a rollover boundary. When `today` changes (the 30s tick in App.jsx
+ * notices the tracking date rolled over), this hook re-subscribes to the new
+ * day doc and opportunistically folds the previous one into lifetime
+ * aggregates via `reconcileStaleDays` — a convenience rollup, never what
+ * decides which date a count belongs to (that already happened at write
+ * time).
  */
 export const useRegistry = (user, today, unitPrice = 0.5) => {
   const [configs, setConfigs] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [dayDocs, setDayDocs] = useState([]);
   const [activeCounts, setActiveCounts] = useState({});
   const [lifetimeAggregates, setLifetimeAggregates] = useState(null);
   const [profileSettings, setProfileSettings] = useState(null);
+  const [avatar, setAvatar] = useState(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [loading, setLoading] = useState(!!user);
   const [isEndingDay, setIsEndingDay] = useState(false);
@@ -34,6 +48,8 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   activeCountsRef.current = activeCounts;
   const isEndingDayRef = useRef(isEndingDay);
   isEndingDayRef.current = isEndingDay;
+  const todayRef = useRef(today);
+  todayRef.current = today;
 
   const publishCounterOverlay = useCallback(() => {
     const pending = pendingDeltaRef.current;
@@ -67,14 +83,19 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     };
   }, []);
 
+  // Profile listener: settings + lifetime aggregates only. No counters and no
+  // avatar ride along on this document for updated accounts (item 12) — see
+  // the separate day-doc and profile-extra (avatar) listeners below.
   useEffect(() => {
     if (!user) {
       const cleared = emptyRegistry();
       setConfigs(cleared.configs);
       setLogs(cleared.logs);
+      setDayDocs(cleared.dayDocs);
       setActiveCounts(cleared.activeCounts);
       setLifetimeAggregates(cleared.lifetimeAggregates);
       setProfileSettings(cleared.profileSettings);
+      setAvatar(cleared.avatar);
       pendingDeltaRef.current = {};
       latestServerCountsRef.current = {};
       setLoading(false);
@@ -85,9 +106,11 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     // Clear prior account data before attaching new listeners.
     setConfigs([]);
     setLogs([]);
+    setDayDocs([]);
     setActiveCounts({});
     setLifetimeAggregates(null);
     setProfileSettings(null);
+    setAvatar(null);
     setLoading(true);
     setRegistryError(null);
     latestServerCountsRef.current = {};
@@ -103,14 +126,11 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       doc(db, 'users', user.uid),
       (s) => {
         if (!s.exists()) {
-          latestServerCountsRef.current = {};
-          publishCounterOverlay();
-          setLifetimeAggregates({ saved: 0, wasted: 0, smokingUnits: 0 });
+          setLifetimeAggregates({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
           setProfileSettings({
             name: '',
             accent: null,
             widgetSize: 'MEDIUM',
-            avatar: null,
             unitPrice: 0.5,
             unitsPerPack: 20,
             dayStartHour: 6,
@@ -121,15 +141,14 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
           return;
         }
         const d = s.data();
-        latestServerCountsRef.current = d.activeCounts || {};
-        publishCounterOverlay();
         setLifetimeAggregates((prev) => {
-          const next = d.lifetimeAggregates || { saved: 0, wasted: 0, smokingUnits: 0 };
+          const next = d.lifetimeAggregates || { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 };
           if (
             prev &&
             prev.saved === next.saved &&
             prev.wasted === next.wasted &&
-            prev.smokingUnits === next.smokingUnits
+            prev.smokingUnits === next.smokingUnits &&
+            prev.baselineSaved === next.baselineSaved
           ) {
             return prev;
           }
@@ -140,26 +159,28 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
             name: d.name || '',
             accent: d.accent || null,
             widgetSize: d.widgetSize || 'MEDIUM',
-            avatar: d.avatar || null,
             unitPrice: d.unitPrice ?? 0.5,
             unitsPerPack: d.unitsPerPack ?? 20,
             dayStartHour: d.dayStartHour ?? 6,
             purchaseType: d.purchaseType || 'PACK',
             pouchPrice: d.pouchPrice ?? 0,
             estimatedYield: d.estimatedYield ?? 0,
+            // Legacy fallback only — updated writes never touch this field.
+            // Cleared automatically by migrateAvatarToProfileMeta.
+            legacyAvatar: d.avatar || null,
           };
           if (prev) {
             const isUnchanged =
               prev.name === next.name &&
               prev.accent === next.accent &&
               prev.widgetSize === next.widgetSize &&
-              prev.avatar === next.avatar &&
               prev.unitPrice === next.unitPrice &&
               prev.unitsPerPack === next.unitsPerPack &&
               prev.dayStartHour === next.dayStartHour &&
               prev.purchaseType === next.purchaseType &&
               prev.pouchPrice === next.pouchPrice &&
-              prev.estimatedYield === next.estimatedYield;
+              prev.estimatedYield === next.estimatedYield &&
+              prev.legacyAvatar === next.legacyAvatar;
             if (isUnchanged) return prev;
           }
           return next;
@@ -178,13 +199,49 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       setLogs(data);
     }, onListenerError);
 
+    const unsubDays = RegistryService.subscribeToDays(user.uid, (data) => {
+      setDayDocs(data);
+    }, onListenerError);
+
+    const unsubAvatar = RegistryService.subscribeToProfileExtra(user.uid, (data) => {
+      setAvatar(data?.avatar ?? null);
+    }, () => { /* non-fatal — avatar is decorative */ });
+
     return () => {
       unsubProfile();
       unsubConfigs();
       unsubLogs();
+      unsubDays();
+      unsubAvatar();
     };
-  }, [user?.uid, publishCounterOverlay]);
+  }, [user?.uid]);
 
+  // Live "today" bucket — the dated day doc `today` currently points at. This
+  // is the entire fix for item 1: `today` is recomputed independently of this
+  // effect (in App.jsx, from wall-clock time), and whenever it changes this
+  // effect tears down the old subscription and attaches a fresh one to the
+  // new date's doc, which starts empty until the first tap creates it. There
+  // is nothing to "reset" — the previous date's doc simply stops changing.
+  useEffect(() => {
+    if (!user || !today) return undefined;
+    latestServerCountsRef.current = {};
+    pendingDeltaRef.current = {};
+    publishCounterOverlay();
+
+    const unsub = RegistryService.subscribeToDay(user.uid, today, (dayData) => {
+      latestServerCountsRef.current = dayData?.counts || {};
+      publishCounterOverlay();
+    }, (err) => console.error('[REGISTRY] day listener error', err));
+
+    // Best-effort, idempotent: fold any day the tracking date has already
+    // moved past into lifetimeAggregates. Safe to call every time `today`
+    // changes or the app (re)starts — see reconcileStaleDays.
+    RegistryService.reconcileStaleDays(user.uid, today).catch(() => { /* best-effort */ });
+
+    return () => unsub();
+  }, [user?.uid, today, publishCounterOverlay]);
+
+  const avatarValue = avatar ?? profileSettings?.legacyAvatar ?? null;
   const effectiveUnitPrice = profileSettings?.unitPrice ?? unitPrice;
 
   const metrics = useMemo(() => {
@@ -194,16 +251,14 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       activeCounts,
       today,
       effectiveUnitPrice,
-      lifetimeAggregates
+      lifetimeAggregates,
+      dayDocs
     );
-    const xp = SmokingCalculator.calculateXP(logs, base.streak);
     return {
       ...base,
       budgetLeft: base.budgetLeftToday,
-      rank: SmokingCalculator.getRank(xp),
-      xp
     };
-  }, [logs, configs, activeCounts, effectiveUnitPrice, today, lifetimeAggregates]);
+  }, [logs, configs, activeCounts, effectiveUnitPrice, today, lifetimeAggregates, dayDocs]);
 
   const runMutation = useCallback(async (fn, fallback) => {
     try {
@@ -219,11 +274,12 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
 
   const increment = useCallback(async (id) => {
     if (!user) return;
+    const trackingDate = todayRef.current;
     adjustPending(id, 1);
     publishCounterOverlay();
     try {
       await runMutation(
-        () => RegistryService.adjustCounter(user.uid, id, 1),
+        () => RegistryService.adjustCounter(user.uid, id, 1, trackingDate, effectiveUnitPrice),
         'Could not update counter.'
       );
       latestServerCountsRef.current = {
@@ -237,15 +293,16 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       publishCounterOverlay();
       throw e;
     }
-  }, [user?.uid, runMutation, adjustPending, publishCounterOverlay]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, adjustPending, publishCounterOverlay]);
 
   const decrement = useCallback(async (id) => {
     if (!user || (activeCountsRef.current[id] || 0) <= 0) return;
+    const trackingDate = todayRef.current;
     adjustPending(id, -1);
     publishCounterOverlay();
     try {
       await runMutation(
-        () => RegistryService.adjustCounter(user.uid, id, -1),
+        () => RegistryService.adjustCounter(user.uid, id, -1, trackingDate, effectiveUnitPrice),
         'Could not update counter.'
       );
       latestServerCountsRef.current = {
@@ -259,20 +316,25 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       publishCounterOverlay();
       throw e;
     }
-  }, [user?.uid, runMutation, adjustPending, publishCounterOverlay]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, adjustPending, publishCounterOverlay]);
 
+  /**
+   * "Close day" — a UX affordance only (see registryService.closeDay). It
+   * never decides which date a count belongs to; that already happened, at
+   * write time, in `increment`/`decrement` above.
+   */
   const endDay = useCallback(async () => {
     if (!user || isEndingDayRef.current) return;
     setIsEndingDay(true);
     try {
       await runMutation(
-        () => RegistryService.endDay(user.uid, today, effectiveUnitPrice),
-        'Could not end day. Try again.'
+        () => RegistryService.closeDay(user.uid, today),
+        'Could not close the tracking day. Try again.'
       );
     } finally {
       setIsEndingDay(false);
     }
-  }, [user?.uid, today, effectiveUnitPrice, runMutation]);
+  }, [user?.uid, today, runMutation]);
 
   const updateHistoricalLog = useCallback(async (logId, counts) => {
     if (!user) return;
@@ -281,6 +343,14 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       'Could not update history.'
     );
   }, [user?.uid, effectiveUnitPrice, runMutation]);
+
+  const updateHistoricalDay = useCallback(async (date, counts) => {
+    if (!user) return;
+    return runMutation(
+      () => RegistryService.updateHistoricalDay(user.uid, date, counts),
+      'Could not update history.'
+    );
+  }, [user?.uid, runMutation]);
 
   const deleteLog = useCallback(async (logId) => {
     if (!user) return;
@@ -336,15 +406,24 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   const deleteProtocol = useCallback(async (id) => {
     if (!user) return;
     return runMutation(
-      () => RegistryService.deleteProtocol(user.uid, id),
+      () => RegistryService.deleteProtocol(user.uid, id, todayRef.current),
       'Could not delete tracker.'
     );
   }, [user?.uid, runMutation]);
 
+  const updateAvatar = useCallback(async (nextAvatar) => {
+    if (!user) return;
+    return runMutation(
+      () => RegistryService.updateAvatar(user.uid, nextAvatar),
+      'Could not update avatar.'
+    );
+  }, [user?.uid, runMutation]);
+
   return {
-    configs, logs, metrics, loading, isEndingDay, isOnline, profileSettings, registryError,
+    configs, logs, dayDocs, metrics, loading, isEndingDay, isOnline, profileSettings,
+    avatar: avatarValue, registryError,
     clearRegistryError: () => setRegistryError(null),
-    increment, decrement, endDay, updateHistoricalLog, deleteLog, restoreLog, createManualEntry,
-    reorder, addProtocol, updateProtocol, deleteProtocol
+    increment, decrement, endDay, updateHistoricalLog, updateHistoricalDay, deleteLog, restoreLog,
+    createManualEntry, reorder, addProtocol, updateProtocol, deleteProtocol, updateAvatar
   };
 };

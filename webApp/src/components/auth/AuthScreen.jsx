@@ -172,7 +172,7 @@ export const AuthScreen = React.memo(({ accent = '#FF5F5F' }) => {
           {/* Mobile Hero (Logo) */}
           <div className="lg:hidden flex flex-col items-center mb-16 opacity-80">
             <Logo size="lg" />
-            <span className="mt-4 text-[11px] font-black uppercase tracking-[0.18em] text-white/55">Executive Terminal</span>
+            <span className="mt-4 text-[11px] font-black uppercase tracking-[0.18em] text-white/55">Habit Tracker</span>
           </div>
 
           <motion.div

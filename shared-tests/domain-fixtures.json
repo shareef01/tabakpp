@@ -1,0 +1,112 @@
+{
+  "$schema": "Cross-platform domain contract fixtures — see shared-tests/README.md.",
+  "fixtures": [
+    { "case": "tracking_date_before_daystart_previous_day", "op": "trackingDate",
+      "input": { "localDateTime": [2024, 5, 20, 5, 59, 0], "dayStartHour": 6 },
+      "expected": "2024-05-19" },
+    { "case": "tracking_date_at_daystart_same_day", "op": "trackingDate",
+      "input": { "localDateTime": [2024, 5, 20, 6, 0, 0], "dayStartHour": 6 },
+      "expected": "2024-05-20" },
+    { "case": "tracking_date_late_night_same_day", "op": "trackingDate",
+      "input": { "localDateTime": [2024, 5, 20, 23, 59, 0], "dayStartHour": 6 },
+      "expected": "2024-05-20" },
+    { "case": "tracking_date_custom_daystart_midnight_previous_day", "op": "trackingDate",
+      "input": { "localDateTime": [2024, 5, 20, 23, 30, 0], "dayStartHour": 0 },
+      "expected": "2024-05-20" },
+    { "case": "tracking_date_custom_daystart_noon", "op": "trackingDate",
+      "input": { "localDateTime": [2024, 5, 20, 11, 59, 0], "dayStartHour": 12 },
+      "expected": "2024-05-19" },
+    { "case": "tracking_date_default_daystart_midnight_is_previous_day", "op": "trackingDate",
+      "input": { "localDateTime": [2024, 5, 21, 0, 0, 0], "dayStartHour": 6 },
+      "expected": "2024-05-20" },
+
+    { "case": "zero_target_at_zero_actual", "op": "limitStatus",
+      "input": { "actual": 0, "target": 0 },
+      "expected": { "status": "at", "aboveTarget": 0, "belowTarget": 0 } },
+    { "case": "zero_target_over_limit", "op": "limitStatus",
+      "input": { "actual": 1, "target": 0 },
+      "expected": { "status": "over", "aboveTarget": 1, "belowTarget": 0 } },
+    { "case": "zero_target_over_limit_by_five", "op": "limitStatus",
+      "input": { "actual": 5, "target": 0 },
+      "expected": { "status": "over", "aboveTarget": 5, "belowTarget": 0 } },
+    { "case": "under_target", "op": "limitStatus",
+      "input": { "actual": 3, "target": 10 },
+      "expected": { "status": "under", "aboveTarget": 0, "belowTarget": 7 } },
+    { "case": "exactly_at_target_nonzero", "op": "limitStatus",
+      "input": { "actual": 10, "target": 10 },
+      "expected": { "status": "at", "aboveTarget": 0, "belowTarget": 0 } },
+    { "case": "over_target_nonzero", "op": "limitStatus",
+      "input": { "actual": 12, "target": 10 },
+      "expected": { "status": "over", "aboveTarget": 2, "belowTarget": 0 } },
+
+    { "case": "reduction_no_baseline_returns_null", "op": "reduction",
+      "input": { "actual": 8, "baseline": null },
+      "expected": null },
+    { "case": "reduction_baseline_20_actual_8", "op": "reduction",
+      "input": { "actual": 8, "baseline": 20 },
+      "expected": { "baseline": 20, "actual": 8, "avoided": 12, "percent": 0.6 } },
+    { "case": "reduction_baseline_zero_no_percent", "op": "reduction",
+      "input": { "actual": 0, "baseline": 0 },
+      "expected": { "baseline": 0, "actual": 0, "avoided": 0, "percent": null } },
+    { "case": "reduction_actual_exceeds_baseline_clamped_at_zero", "op": "reduction",
+      "input": { "actual": 25, "baseline": 20 },
+      "expected": { "baseline": 20, "actual": 25, "avoided": 0, "percent": 0 } },
+
+    { "case": "baseline_savings_from_baseline_not_target", "op": "baselineSavings",
+      "input": {
+        "counts": { "c1": 8 },
+        "configs": [{ "id": "c1", "limit": 10, "baseline": 20, "pricePerUnit": 1.0, "isFinanciallyTracked": true }],
+        "defaultPrice": 1.0
+      },
+      "expected": { "moneySaved": 12.0, "unitsAvoided": 12.0, "hasBaseline": true } },
+    { "case": "baseline_savings_no_baseline_on_tracker", "op": "baselineSavings",
+      "input": {
+        "counts": { "c1": 3 },
+        "configs": [{ "id": "c1", "limit": 10, "baseline": null, "pricePerUnit": 1.0, "isFinanciallyTracked": true }],
+        "defaultPrice": 1.0
+      },
+      "expected": { "moneySaved": 0.0, "unitsAvoided": 0.0, "hasBaseline": false } },
+    { "case": "baseline_savings_never_negative", "op": "baselineSavings",
+      "input": {
+        "counts": { "c1": 9 },
+        "configs": [{ "id": "c1", "limit": 10, "baseline": 5, "pricePerUnit": 1.0, "isFinanciallyTracked": true }],
+        "defaultPrice": 1.0
+      },
+      "expected": { "moneySaved": 0.0, "unitsAvoided": 0.0, "hasBaseline": true } },
+
+    { "case": "day_credit_self_contained_from_snapshot", "op": "dayCredit",
+      "input": {
+        "counts": { "c1": 8 },
+        "trackerSnapshots": { "c1": { "target": 10, "baseline": 20, "unitPrice": 0.5, "type": "CIGARETTE", "isFinanciallyTracked": true } },
+        "defaultUnitPrice": 0.5
+      },
+      "expected": { "wasted": 4.0, "saved": 1.0, "smokingUnits": 8.0, "baselineSaved": 6.0 } },
+    { "case": "day_credit_non_financial_tracker_excludes_money", "op": "dayCredit",
+      "input": {
+        "counts": { "c1": 3 },
+        "trackerSnapshots": { "c1": { "target": 5, "baseline": null, "unitPrice": 1.0, "type": "CIGARETTE", "isFinanciallyTracked": false } },
+        "defaultUnitPrice": 0.5
+      },
+      "expected": { "wasted": 0.0, "saved": 0.0, "smokingUnits": 3.0, "baselineSaved": 0.0 } },
+    { "case": "day_credit_unknown_tracker_contributes_nothing", "op": "dayCredit",
+      "input": {
+        "counts": { "c1": 5, "ghost": 9 },
+        "trackerSnapshots": { "c1": { "target": 10, "baseline": null, "unitPrice": 1.0, "type": "CIGARETTE", "isFinanciallyTracked": true } },
+        "defaultUnitPrice": 0.5
+      },
+      "expected": { "wasted": 5.0, "saved": 5.0, "smokingUnits": 5.0, "baselineSaved": 0.0 } },
+
+    { "case": "format_currency_simple", "op": "formatCurrency", "input": { "amount": 8.03 }, "expected": "8,03 €" },
+    { "case": "format_currency_half_cent_ties_up", "op": "formatCurrency", "input": { "amount": 0.125 }, "expected": "0,13 €" },
+    { "case": "format_currency_negative", "op": "formatCurrency", "input": { "amount": -1.5 }, "expected": "-1,50 €" },
+
+    { "case": "backfill_same_day_allowed", "op": "backfillAllowed",
+      "input": { "date": "2024-05-20", "trackingDay": "2024-05-20" }, "expected": true },
+    { "case": "backfill_past_day_allowed", "op": "backfillAllowed",
+      "input": { "date": "2024-05-19", "trackingDay": "2024-05-20" }, "expected": true },
+    { "case": "backfill_future_day_rejected", "op": "backfillAllowed",
+      "input": { "date": "2024-05-21", "trackingDay": "2024-05-20" }, "expected": false },
+    { "case": "backfill_invalid_calendar_date_rejected", "op": "backfillAllowed",
+      "input": { "date": "2026-02-31", "trackingDay": "2026-12-31" }, "expected": false }
+  ]
+}

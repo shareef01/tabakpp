@@ -1,6 +1,6 @@
 import {
   collection, doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
-  query, onSnapshot, orderBy, writeBatch, limit, serverTimestamp,
+  query, onSnapshot, orderBy, where, writeBatch, limit, serverTimestamp,
   runTransaction, deleteField, startAfter
 } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -10,14 +10,21 @@ import { sanitizeTrackerName } from '../utils/security';
 /** Doc id always wins over any payload `id` field (Android parity). */
 const withDocId = (d) => ({ ...d.data(), id: d.id });
 
-/** Settings keys mirrored from Android `updateProfileSettings` — never counters/aggregates. */
+/**
+ * Settings keys mirrored from Android `updateProfileSettings` — never counters/
+ * aggregates. `avatar` moved to `users/{uid}/meta/profile` (item 12) — see
+ * `updateAvatar` — so it is deliberately absent here.
+ */
 const PROFILE_SETTINGS_KEYS = new Set([
   'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
-  'pouchPrice', 'estimatedYield', 'dayStartHour', 'avatar'
+  'pouchPrice', 'estimatedYield', 'dayStartHour'
 ]);
 
 /** Legacy web-only economics keys — strip on every settings write. */
 const LEGACY_ECO_KEYS = ['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'];
+
+/** Schema version marking the dated-daily-document migration (see AUDIT.md). */
+const CURRENT_SCHEMA_VERSION = 2;
 
 const normalizeCounts = (counts) => Object.fromEntries(
   Object.entries(counts || {})
@@ -51,10 +58,16 @@ const sanitizeConfigPayload = (data = {}) => {
   if ('pricePerUnit' in out && out.pricePerUnit !== null) {
     out.pricePerUnit = clampNumber(out.pricePerUnit, 0, 1_000, 0.5);
   }
+  // Baseline (item 3): explicit null means "not set" — never silently invent one.
+  if ('baseline' in out) {
+    out.baseline = (out.baseline === null || out.baseline === undefined || out.baseline === '')
+      ? null
+      : Math.round(clampNumber(out.baseline, 0, 10_000, 0));
+  }
   return out;
 };
 
-/** Absolute lifetime contribution of a counts map (Android RegistryMutations.contribution). */
+/** Absolute lifetime contribution of a counts map (legacy `logs` path only). */
 const contributionFrom = (counts, configs, price) => {
   const fin = SmokingCalculator.calculateDayFinancials(counts || {}, configs, price);
   return {
@@ -94,9 +107,31 @@ const mergeHistoricalEditCounts = (incoming, previous, liveConfigIds) => {
   return merged;
 };
 
+const emptyAggregates = () => ({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
+
 /**
  * RegistryService (Model Layer)
  * Hardened for Cross-Platform Parity and Atomic Integrity.
+ *
+ * ## Data model (see AUDIT.md "Schema changes" for the full write-up)
+ *
+ * `users/{uid}/days/{YYYY-MM-DD}` is the dated daily-document model (item 1):
+ * every count always belongs to an explicit tracking date decided AT WRITE
+ * TIME by the caller (`getTrackingDate(now, dayStartHour)`), never to a
+ * mutable "current session" bucket that can outlive the day it started on.
+ * There is nothing to "roll over" — a day's doc is written under its own
+ * date from the first tap and simply stops changing once the tracking date
+ * moves on. "Close day" only marks the day complete and folds its stamped
+ * credit into `lifetimeAggregates`; it is never what decides which date a
+ * count belongs to.
+ *
+ * `users/{uid}/logs/{logId}` is the pre-existing ledger, kept for backward
+ * compatibility: legacy day archives (`{date}_DAY`, no longer created by
+ * updated clients) and manual backfill entries (still created here).
+ *
+ * `users/{uid}` no longer carries `activeCounts` for updated clients (item
+ * 12) — see `migrateLegacyActiveCounts`. `avatar` moved to
+ * `users/{uid}/meta/profile` — see `updateAvatar`.
  */
 export const RegistryService = {
 
@@ -129,16 +164,39 @@ export const RegistryService = {
     });
   },
 
-  deleteProtocol: async (uid, pid) => {
+  /**
+   * `trackingDate` (optional) additionally strips this tracker out of TODAY's
+   * still-open day doc, mirroring the old activeCounts cleanup, WITHOUT ever
+   * touching a closed/historical day — deleting a tracker must not make past
+   * records uninterpretable (item 2); its trackerSnapshot there is untouched.
+   */
+  deleteProtocol: async (uid, pid, trackingDate) => {
     const userRef = doc(db, 'users', uid);
     const configRef = doc(db, 'users', uid, 'configs', pid);
+    const dayRef = trackingDate ? doc(db, 'users', uid, 'days', trackingDate) : null;
     return runTransaction(db, async (transaction) => {
+      // Legacy cleanup for accounts an old (pre-days-model) Android build may
+      // still be writing to — harmless no-op once activeCounts is gone.
       const userSnap = await transaction.get(userRef);
       if (userSnap.exists()) {
-        const counts = { ...(userSnap.data().activeCounts || {}) };
-        if (Object.prototype.hasOwnProperty.call(counts, pid)) {
-          delete counts[pid];
-          transaction.update(userRef, { activeCounts: counts });
+        const legacyCounts = { ...(userSnap.data().activeCounts || {}) };
+        if (Object.prototype.hasOwnProperty.call(legacyCounts, pid)) {
+          delete legacyCounts[pid];
+          transaction.update(userRef, { activeCounts: legacyCounts });
+        }
+      }
+      if (dayRef) {
+        const daySnap = await transaction.get(dayRef);
+        if (daySnap.exists() && daySnap.data().status !== 'closed') {
+          const day = daySnap.data();
+          if (Object.prototype.hasOwnProperty.call(day.counts || {}, pid)) {
+            const counts = { ...day.counts };
+            delete counts[pid];
+            const trackerSnapshots = { ...(day.trackerSnapshots || {}) };
+            delete trackerSnapshots[pid];
+            const aggregateCredit = SmokingCalculator.computeDayCredit(counts, trackerSnapshots);
+            transaction.update(dayRef, { counts, trackerSnapshots, aggregateCredit, updatedAt: serverTimestamp() });
+          }
         }
       }
       transaction.delete(configRef);
@@ -156,7 +214,8 @@ export const RegistryService = {
 
   /**
    * Creates a default user doc only when missing — never overwrites
-   * activeCounts / lifetimeAggregates on an existing account.
+   * existing counters/aggregates. New accounts are created directly on the
+   * current schema (no `activeCounts`, no migration ever needed for them).
    */
   ensureUserDocument: async (uid, { name = '', accent = '#FF5F5F' } = {}) => {
     if (!uid) throw new Error('INVALID_REF');
@@ -172,16 +231,17 @@ export const RegistryService = {
       pouchPrice: 0,
       estimatedYield: 0,
       dayStartHour: 6,
-      activeCounts: {},
-      lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0 },
-      smokingUnitsMigrated: true
+      lifetimeAggregates: emptyAggregates(),
+      smokingUnitsMigrated: true,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
     });
   },
 
   /**
    * Settings-only write path (Android `updateProfileSettings` parity).
-   * Never touches activeCounts / lifetimeAggregates. Strips unknown keys and
-   * deletes legacy web eco fields so hardened rules stay satisfied.
+   * Never touches counters/aggregates. Strips unknown keys and deletes legacy
+   * web eco fields (and any lingering legacy `activeCounts`/`avatar`) so
+   * hardened rules stay satisfied and old fields drain off the doc over time.
    */
   updateProfileSettings: async (uid, patch = {}) => {
     if (!uid) throw new Error('INVALID_REF');
@@ -219,7 +279,358 @@ export const RegistryService = {
     });
   },
 
-  // --- LOGS & TRANSACTIONS ---
+  /**
+   * One-shot, idempotent migration of legacy `activeCounts` into the dated
+   * daily-document model (item 1 / P0 fix — see AUDIT.md "Migration").
+   *
+   * Whatever is sitting in `activeCounts` at the moment this runs is folded
+   * into `days/{date}`, where `date` is computed with the EXACT SAME
+   * `getTrackingDate(now, dayStartHour)` rule the old `endDay()` used — i.e.
+   * the date the old app would have archived those counts under had the user
+   * pressed "End day" at this instant. This is a deterministic mapping, not a
+   * guess: it never invents a date, and it never discards counts.
+   *
+   * Runs as TWO single-document transactions rather than one atomic
+   * users+days commit. A combined commit was tried first and measurably hit
+   * Firestore's hard per-commit rules-evaluation ceiling ("maximum of 1000
+   * expressions") in the emulator once `days` validation was added — that is
+   * a platform limit, not a bug in the math, and splitting the write is the
+   * documented fix (see firestore.rules `validDayShape`'s comment). Each
+   * phase is independently idempotent and safe to resume after a crash
+   * between them, from any device:
+   *   Phase 1 (single doc: users/{uid}) atomically CLAIMS `activeCounts` —
+   *     stamps it onto `migratingLegacyCounts` + `migratingLegacyDate`,
+   *     clears `activeCounts`, bumps `schemaVersion`. Guarded so it can only
+   *     ever claim once.
+   *   Phase 2 (single doc: users/{uid}/days/{date}) folds the claim into
+   *     that day, marks the day `legacyMigrationApplied`, and (separately)
+   *     clears the claim fields from the profile. A crash after phase 2's
+   *     day-write but before the profile cleanup just leaves a harmless,
+   *     already-applied claim that the next run detects and clears without
+   *     re-folding (`legacyMigrationApplied` guards against double credit).
+   */
+  migrateLegacyActiveCounts: async (uid) => {
+    if (!uid) return;
+    const userRef = doc(db, 'users', uid);
+
+    let claim = null;
+    await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(userRef);
+      if (!snap.exists()) return;
+      const profile = snap.data();
+
+      const pending = normalizeCounts(profile.migratingLegacyCounts || {});
+      if (profile.migratingLegacyDate && Object.values(pending).some((v) => v > 0)) {
+        claim = { counts: pending, date: profile.migratingLegacyDate };
+        return; // resume an interrupted phase 2
+      }
+      if ((profile.schemaVersion || 0) >= CURRENT_SCHEMA_VERSION) return; // fully migrated already
+
+      const legacy = normalizeCounts(profile.activeCounts || {});
+      if (!Object.values(legacy).some((v) => v > 0)) {
+        transaction.update(userRef, { schemaVersion: CURRENT_SCHEMA_VERSION, activeCounts: deleteField() });
+        return;
+      }
+
+      const date = SmokingCalculator.getTrackingDate(new Date(), profile.dayStartHour ?? 6);
+      transaction.update(userRef, {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        activeCounts: deleteField(),
+        migratingLegacyCounts: legacy,
+        migratingLegacyDate: date,
+      });
+      claim = { counts: legacy, date };
+    });
+
+    if (!claim) return;
+
+    // Read non-transactionally: no concurrent-modification stakes worth a
+    // transactional config read here (see the cost note above) — worst case
+    // on a config edited in the gap before the commit below, one migrated
+    // tracker's snapshot is a moment stale, self-corrected on its next tap.
+    const configById = Object.fromEntries((await getConfigsOnce(uid)).map((c) => [c.id, c]));
+    const dayRef = doc(db, 'users', uid, 'days', claim.date);
+
+    let claimResolved = false;
+    await runTransaction(db, async (transaction) => {
+      const daySnap = await transaction.get(dayRef);
+      const existing = daySnap.exists() ? daySnap.data() : null;
+      if (existing?.legacyMigrationApplied) {
+        claimResolved = true; // already folded by a prior run — safe to clean up
+        return;
+      }
+
+      if (existing?.status === 'closed') {
+        // Exceptionally rare: closed by a newer client in the window between
+        // the claim and this commit. The claim is already safely parked on
+        // the profile (migratingLegacyCounts/-Date) — leave it there rather
+        // than guessing a different date or discarding it. claimResolved
+        // stays false, so the cleanup below is correctly skipped.
+        return;
+      }
+
+      const mergedCounts = SmokingCalculator.mergeCounts(existing?.counts, claim.counts);
+      const trackerSnapshots = { ...(existing?.trackerSnapshots || {}) };
+      Object.keys(claim.counts).forEach((id) => {
+        if (configById[id]) trackerSnapshots[id] = SmokingCalculator.buildTrackerSnapshot(configById[id]);
+      });
+      const aggregateCredit = SmokingCalculator.computeDayCredit(mergedCounts, trackerSnapshots, 0.5);
+
+      const payload = {
+        date: claim.date,
+        counts: mergedCounts,
+        trackerSnapshots,
+        aggregateCredit,
+        status: 'open',
+        legacyMigrationApplied: true,
+        updatedAt: serverTimestamp(),
+      };
+      if (existing) transaction.update(dayRef, payload);
+      else transaction.set(dayRef, { ...payload, createdAt: serverTimestamp() });
+      claimResolved = true;
+    });
+
+    if (!claimResolved) return; // day was closed underneath us — claim stays parked for a future run
+
+    // Cleanup (separate single-document write): only reached once the day
+    // fold above is either freshly applied or was already applied by a prior
+    // run. A crash between the two leaves a harmless, idempotently-resumable
+    // claim — the next call re-detects it via migratingLegacyDate.
+    await updateDoc(userRef, {
+      migratingLegacyCounts: deleteField(),
+      migratingLegacyDate: deleteField(),
+    }).catch(() => { /* best-effort — next run retries the cleanup */ });
+  },
+
+  /**
+   * One-shot, best-effort migration of the legacy root-level `avatar` field
+   * into `users/{uid}/meta/profile` (item 12 — decouples large, rarely-
+   * changing avatar payloads from the profile doc entirely). Not
+   * transactional across the two documents: on a rare concurrent-device race
+   * the avatar may be copied twice (harmless — same bytes) but is never lost.
+   */
+  migrateAvatarToProfileMeta: async (uid) => {
+    if (!uid) return;
+    const userRef = doc(db, 'users', uid);
+    const snap = await getDoc(userRef);
+    if (!snap.exists()) return;
+    const avatar = snap.data().avatar;
+    if (avatar == null) return;
+    const metaRef = doc(db, 'users', uid, 'meta', 'profile');
+    const metaSnap = await getDoc(metaRef);
+    if (!metaSnap.exists() || metaSnap.data().avatar == null) {
+      await setDoc(metaRef, { avatar, updatedAt: serverTimestamp() }, { merge: true });
+    }
+    await updateDoc(userRef, { avatar: deleteField() }).catch(() => { /* already gone */ });
+  },
+
+  // --- PROFILE EXTRA (avatar; item 12 hot/profile split) ---
+
+  subscribeToProfileExtra: (uid, onSuccess, onError) => {
+    if (!uid) return () => {};
+    return onSnapshot(doc(db, 'users', uid, 'meta', 'profile'), (s) => {
+      onSuccess(s.exists() ? s.data() : { avatar: null });
+    }, onError);
+  },
+
+  updateAvatar: async (uid, avatar) => {
+    if (!uid) throw new Error('INVALID_REF');
+    await setDoc(doc(db, 'users', uid, 'meta', 'profile'), {
+      avatar: avatar ?? null,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+    // Best-effort: drain the legacy field so old profile snapshot listeners
+    // stop re-transmitting it. Not required for correctness.
+    try { await updateDoc(doc(db, 'users', uid), { avatar: deleteField() }); } catch { /* already gone */ }
+  },
+
+  // --- DATED DAILY DOCUMENTS (item 1 — P0 rollover fix) ---
+
+  subscribeToDay: (uid, date, onSuccess, onError) => {
+    if (!uid || !date) return () => {};
+    return onSnapshot(doc(db, 'users', uid, 'days', date), (s) => {
+      onSuccess(s.exists() ? { ...s.data(), date: s.id } : null);
+    }, onError);
+  },
+
+  /** Bounded window (comfortably covers the 366-day streak lookback) for chart/streak use. */
+  subscribeToDays: (uid, onSuccess, onError, maxDays = 400) => {
+    if (!uid) return () => {};
+    const q = query(
+      collection(db, 'users', uid, 'days'),
+      orderBy('date', 'desc'),
+      limit(maxDays)
+    );
+    return onSnapshot(q, (s) => {
+      onSuccess(s.docs.map((d) => ({ ...d.data(), date: d.id })));
+    }, onError);
+  },
+
+  /**
+   * ATOMIC COUNTER ADJUSTMENT — the core P0 fix.
+   *
+   * `trackingDate` is computed by the caller AT CALL TIME from wall-clock now
+   * + dayStartHour, and is where this write always lands — there is no
+   * separate "current session" bucket that can carry counts across a
+   * rollover boundary, regardless of whether the app was open at the exact
+   * rollover moment, whether a 30s timer fired, or whether "End day" was ever
+   * pressed. Refreshes that tracker's historical snapshot on every write,
+   * which is correct specifically because the target day IS still today: the
+   * live config *is* today's config-in-progress.
+   *
+   * `defaultUnitPrice` (the profile's fallback price) is supplied by the
+   * caller rather than re-read here, so this transaction never has to touch
+   * `users/{uid}` — keeping the hottest write path in the app fully
+   * decoupled from the profile document (item 12).
+   */
+  adjustCounter: async (uid, counterId, delta, trackingDate, defaultUnitPrice = 0.5) => {
+    if (!uid || !counterId) throw new Error('INVALID_REF');
+    if (!trackingDate || !SmokingCalculator.isValidDate(trackingDate)) {
+      throw new Error('INVALID_TRACKING_DATE');
+    }
+    const configRef = doc(db, 'users', uid, 'configs', counterId);
+    const dayRef = doc(db, 'users', uid, 'days', trackingDate);
+
+    return runTransaction(db, async (transaction) => {
+      const configSnap = await transaction.get(configRef);
+      if (!configSnap.exists()) throw new Error('CONFIG_NOT_FOUND');
+      const config = { ...configSnap.data(), id: counterId };
+
+      const daySnap = await transaction.get(dayRef);
+      const existing = daySnap.exists() ? daySnap.data() : null;
+      if (existing?.status === 'closed') throw new Error('DAY_CLOSED');
+
+      const counts = { ...(existing?.counts || {}) };
+      counts[counterId] = Math.max(0, (counts[counterId] || 0) + delta);
+      const trackerSnapshots = {
+        ...(existing?.trackerSnapshots || {}),
+        [counterId]: SmokingCalculator.buildTrackerSnapshot(config),
+      };
+      const aggregateCredit = SmokingCalculator.computeDayCredit(counts, trackerSnapshots, defaultUnitPrice);
+
+      const payload = {
+        date: trackingDate,
+        counts,
+        trackerSnapshots,
+        aggregateCredit,
+        status: 'open',
+        updatedAt: serverTimestamp(),
+      };
+      if (existing) transaction.update(dayRef, payload);
+      else transaction.set(dayRef, { ...payload, createdAt: serverTimestamp() });
+    });
+  },
+
+  /**
+   * Close a tracking day: marks it complete and folds its stamped credit
+   * into `lifetimeAggregates`. Purely a UX/rollup affordance — it is NEVER
+   * what assigns counts to a date (that already happened, at write time, in
+   * `adjustCounter`). Idempotent: a day already folded just gets the
+   * cosmetic `status: 'closed'` flip without re-crediting.
+   */
+  closeDay: async (uid, date) => {
+    if (!uid || !date) throw new Error('INVALID_PAYLOAD');
+    const userRef = doc(db, 'users', uid);
+    const dayRef = doc(db, 'users', uid, 'days', date);
+
+    return runTransaction(db, async (transaction) => {
+      const daySnap = await transaction.get(dayRef);
+      if (!daySnap.exists()) throw new Error('NOTHING_TO_ARCHIVE');
+      const day = daySnap.data();
+      if (!SmokingCalculator.hasOpenSession(day.counts)) throw new Error('NOTHING_TO_ARCHIVE');
+
+      if (day.foldedIntoLifetime) {
+        if (day.status !== 'closed') transaction.update(dayRef, { status: 'closed', closedAt: serverTimestamp() });
+        return;
+      }
+
+      const userSnap = await transaction.get(userRef);
+      const profile = userSnap.exists() ? userSnap.data() : {};
+      const current = profile.lifetimeAggregates || emptyAggregates();
+      const credit = day.aggregateCredit || emptyAggregates();
+
+      transaction.update(dayRef, { status: 'closed', foldedIntoLifetime: true, closedAt: serverTimestamp() });
+      transaction.update(userRef, {
+        'lifetimeAggregates.saved': (current.saved || 0) + (credit.saved || 0),
+        'lifetimeAggregates.wasted': (current.wasted || 0) + (credit.wasted || 0),
+        'lifetimeAggregates.smokingUnits': (current.smokingUnits || 0) + (credit.smokingUnits || 0),
+        'lifetimeAggregates.baselineSaved': (current.baselineSaved || 0) + (credit.baselineSaved || 0),
+      });
+    });
+  },
+
+  /**
+   * Fold any day that is still marked `open` but is no longer the current
+   * tracking date (item 1 — correctness must not depend on the app being
+   * open at rollover or on "End day" ever being pressed). Safe to call on
+   * every app start / tracking-date change; best-effort per day so one
+   * failure does not block the rest.
+   */
+  reconcileStaleDays: async (uid, currentTrackingDate) => {
+    if (!uid || !currentTrackingDate) return;
+    const q = query(
+      collection(db, 'users', uid, 'days'),
+      where('status', '==', 'open'),
+      limit(30)
+    );
+    let snap;
+    try {
+      snap = await getDocs(q);
+    } catch (e) {
+      console.warn('[REGISTRY] reconcileStaleDays query failed', e);
+      return;
+    }
+    const stale = snap.docs.filter((d) => (d.data().date || d.id) < currentTrackingDate);
+    for (const d of stale) {
+      try {
+        // Sequential is intentional: bounded (<=30), best-effort, one failure
+        // must not abort the rest.
+        await RegistryService.closeDay(uid, d.id);
+      } catch (e) {
+        console.warn('[REGISTRY] reconcile failed for', d.id, e);
+      }
+    }
+  },
+
+  /**
+   * Edit a closed historical day's counts (History screen). Never adds or
+   * changes a `trackerSnapshots` entry — a historical day's stamped
+   * config is immutable (item 2); a tracker with no snapshot for that day
+   * contributes 0 to its financials rather than borrowing today's price, a
+   * documented, non-fabricating fallback (see AUDIT.md).
+   */
+  updateHistoricalDay: async (uid, date, counts) => {
+    if (!uid || !date) throw new Error('INVALID_REF');
+    const userRef = doc(db, 'users', uid);
+    const dayRef = doc(db, 'users', uid, 'days', date);
+    const normalized = normalizeCounts(counts);
+
+    return runTransaction(db, async (transaction) => {
+      const daySnap = await transaction.get(dayRef);
+      if (!daySnap.exists()) throw new Error('DAY_NOT_FOUND');
+      const day = daySnap.data();
+      const mergedCounts = { ...(day.counts || {}), ...normalized };
+      const newCredit = SmokingCalculator.computeDayCredit(mergedCounts, day.trackerSnapshots || {});
+
+      if (day.foldedIntoLifetime) {
+        const oldCredit = day.aggregateCredit || emptyAggregates();
+        const userSnap = await transaction.get(userRef);
+        if (userSnap.exists()) {
+          const current = userSnap.data().lifetimeAggregates || emptyAggregates();
+          transaction.update(userRef, {
+            'lifetimeAggregates.saved': (current.saved || 0) - (oldCredit.saved || 0) + newCredit.saved,
+            'lifetimeAggregates.wasted': (current.wasted || 0) - (oldCredit.wasted || 0) + newCredit.wasted,
+            'lifetimeAggregates.smokingUnits': (current.smokingUnits || 0) - (oldCredit.smokingUnits || 0) + newCredit.smokingUnits,
+            'lifetimeAggregates.baselineSaved': (current.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0),
+          });
+        }
+      }
+
+      transaction.update(dayRef, { counts: mergedCounts, aggregateCredit: newCredit, updatedAt: serverTimestamp() });
+    });
+  },
+
+  // --- LOGS (legacy ledger — manual backfill entries; kept for compatibility) ---
 
   subscribeToLogs: (uid, onSuccess, onError) => {
     if (!uid) return () => {};
@@ -235,87 +646,32 @@ export const RegistryService = {
   },
 
   /**
-   * ATOMIC COUNTER ADJUSTMENT (Android Parity)
-   * Updates 'activeCounts' inside the User document.
+   * One-shot cursor page of logs older than the live subscription window
+   * (item 14 — real pagination instead of assuming the 1,200 cap means
+   * truncation). `hasMore` is derived from an actual full page being
+   * returned, not a hardcoded count.
    */
-  adjustCounter: async (uid, counterId, delta) => {
-    if (!uid || !counterId) throw new Error("INVALID_REF");
-    const userRef = doc(db, 'users', uid);
-    const configRef = doc(db, 'users', uid, 'configs', counterId);
-
-    return runTransaction(db, async (transaction) => {
-      const snap = await transaction.get(userRef);
-      if (!snap.exists()) throw new Error("USER_NOT_FOUND");
-      const configSnap = await transaction.get(configRef);
-      if (!configSnap.exists()) throw new Error("CONFIG_NOT_FOUND");
-
-      const profile = snap.data();
-      const counts = { ...(profile.activeCounts || {}) };
-      counts[counterId] = Math.max(0, (counts[counterId] || 0) + delta);
-
-      transaction.update(userRef, { activeCounts: counts });
-    });
-  },
-
-  /**
-   * END TRACKING DAY (Android Parity)
-   * A second end-day on the same tracking date merges into the existing
-   * archive instead of replacing it; aggregates are credited by the delta
-   * so archive counts and lifetime totals can never drift apart.
-   */
-  endDay: async (uid, date, unitPrice = 0.5) => {
-    if (!uid || !date) throw new Error("INVALID_PAYLOAD");
-
-    const userRef = doc(db, 'users', uid);
-    const logRef = doc(db, 'users', uid, 'logs', `${date}_DAY`);
-    const configIds = await listConfigIds(uid);
-
-    return runTransaction(db, async (transaction) => {
-      const userSnap = await transaction.get(userRef);
-      if (!userSnap.exists()) return;
-      const logSnap = await transaction.get(logRef);
-      const configs = await loadConfigsInTransaction(transaction, uid, configIds);
-
-      const profile = userSnap.data();
-      const price = profile.unitPrice ?? unitPrice;
-      const activeCounts = profile.activeCounts || {};
-
-      if (!SmokingCalculator.hasOpenSession(activeCounts)) {
-        throw new Error("NOTHING_TO_ARCHIVE");
+  fetchOlderLogs: async (uid, { cursorLogDate, pageSize = 200 } = {}) => {
+    if (!uid) return { items: [], hasMore: false };
+    let q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), limit(pageSize));
+    if (cursorLogDate) {
+      const cursorDocs = await getDocs(
+        query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), where('logDate', '==', cursorLogDate), limit(1))
+      );
+      if (!cursorDocs.empty) {
+        q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), startAfter(cursorDocs.docs[0]), limit(pageSize));
       }
-
-      const existingCounts = logSnap.exists() ? (logSnap.data().counts || {}) : null;
-      const existingCredit = logSnap.exists() ? logSnap.data().aggregateCredit : null;
-      const mergedCounts = SmokingCalculator.mergeCounts(existingCounts, activeCounts);
-
-      const previousCredit = existingCounts
-        ? resolveContribution(existingCredit, existingCounts, configs, price)
-        : { saved: 0, wasted: 0, smokingUnits: 0 };
-      const mergedCredit = contributionFrom(mergedCounts, configs, price);
-
-      const logEntry = {
-        id: `${date}_DAY`,
-        logDate: date,
-        counts: mergedCounts,
-        isArchive: true,
-        origin: "DAY_RESET",
-        aggregateCredit: mergedCredit,
-        finalizedAt: serverTimestamp()
-      };
-
-      transaction.set(logRef, logEntry);
-      transaction.update(userRef, {
-        activeCounts: {},
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - previousCredit.saved + mergedCredit.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - previousCredit.wasted + mergedCredit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - previousCredit.smokingUnits + mergedCredit.smokingUnits
-      });
-    });
+    }
+    const snap = await getDocs(q);
+    const items = snap.docs.map(withDocId);
+    return { items, hasMore: items.length === pageSize, nextCursor: items.length ? items[items.length - 1].logDate : null };
   },
 
   /**
    * Edit a historical log's counts, adjusting lifetime aggregates by the
-   * financial delta (Android parity with updateHistoricalLog).
+   * financial delta (Android parity with updateHistoricalLog). Legacy
+   * `logs` path — see `updateHistoricalDay` for the dated-document
+   * equivalent.
    */
   updateHistoricalLog: async (uid, logId, counts, unitPrice = 0.5) => {
     if (!uid || !logId) throw new Error("INVALID_REF");
@@ -415,6 +771,9 @@ export const RegistryService = {
   /**
    * Manual backfill entry (Android parity with createManualEntry).
    * Credits lifetime aggregates inside the same transaction as the log write.
+   * Kept on the legacy `logs` ledger regardless of whether the target date
+   * already has a `days/{date}` doc, so multiple backfills for one date keep
+   * their own editable/undoable rows in History (unchanged UX).
    */
   createManualEntry: async (uid, date, counts, unitPrice = 0.5, trackingDay = null) => {
     if (!uid || !date) throw new Error("INVALID_PAYLOAD");
@@ -464,13 +823,15 @@ export const RegistryService = {
   },
 
   /**
-   * Spark-safe account wipe: delete configs + logs in batches, then user doc.
-   * Caller must reauthenticate and Auth.deleteUser afterward.
+   * Spark-safe account wipe: delete configs + logs + days + meta in batches,
+   * then user doc. Caller must reauthenticate and Auth.deleteUser afterward.
    */
   deleteAllUserData: async (uid) => {
     if (!uid) throw new Error('INVALID_REF');
     await deleteCollectionDocs(uid, 'configs');
     await deleteCollectionDocs(uid, 'logs');
+    await deleteCollectionDocs(uid, 'days');
+    await deleteCollectionDocs(uid, 'meta');
     await deleteDoc(doc(db, 'users', uid));
   }
 };

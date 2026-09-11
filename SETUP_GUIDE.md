@@ -237,7 +237,7 @@ GOOGLE_SERVICES_JSON_BASE64
 After installing a new device build, register its App Check debug token (see Android App Check above).
 
 ### Account deletion
-Settings → Delete Account (web) / DELETE ACCOUNT (Android) reauthenticates, deletes `users/{uid}/configs` + `logs` + the user doc in batches, then deletes the Auth user (with retries). If Auth delete still fails after the wipe, both clients sign out and show recovery copy (`DATA_WIPED_AUTH_REMAINED` on Android). No Cloud Functions required (Spark-safe).
+Settings → Delete Account (web) / DELETE ACCOUNT (Android) reauthenticates, deletes `users/{uid}/configs` + `logs` + `days` + `meta` + the user doc in batches, then deletes the Auth user (with retries). If Auth delete still fails after the wipe, both clients sign out and show recovery copy (`DATA_WIPED_AUTH_REMAINED` on Android). No Cloud Functions required (Spark-safe).
 
 - **Email/password** accounts: enter password to confirm.
 - **Google** accounts: confirm via Google (Credential Manager on Android, popup on web).

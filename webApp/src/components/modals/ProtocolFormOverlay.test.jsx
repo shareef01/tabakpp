@@ -82,4 +82,43 @@ describe('ProtocolFormOverlay', () => {
     await waitFor(() => expect(onApply).toHaveBeenCalled());
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ limit: 0 }));
   });
+
+  describe('baseline (item 3 — optional, never blocks onboarding)', () => {
+    it('defaults to no baseline — "just track for now" needs no extra input', async () => {
+      const onApply = vi.fn().mockResolvedValue(undefined);
+      render(<ProtocolFormOverlay isOpen onClose={vi.fn()} onApply={onApply} title="Create Counter" />);
+
+      fireEvent.change(screen.getByLabelText(/counter name/i), { target: { value: 'Cigarettes' } });
+      fireEvent.click(screen.getByRole('button', { name: /save counter/i }));
+
+      await waitFor(() => expect(onApply).toHaveBeenCalled());
+      expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ baseline: null }));
+    });
+
+    it('saves a baseline once the toggle is enabled and a value entered', async () => {
+      const onApply = vi.fn().mockResolvedValue(undefined);
+      render(<ProtocolFormOverlay isOpen onClose={vi.fn()} onApply={onApply} title="Create Counter" />);
+
+      fireEvent.change(screen.getByLabelText(/counter name/i), { target: { value: 'Cigarettes' } });
+      fireEvent.click(screen.getByLabelText(/set a baseline to track reduction/i));
+      fireEvent.change(screen.getByLabelText(/baseline \(before/i), { target: { value: '20' } });
+      fireEvent.click(screen.getByRole('button', { name: /save counter/i }));
+
+      await waitFor(() => expect(onApply).toHaveBeenCalled());
+      expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ baseline: 20 }));
+    });
+
+    it('pre-fills an existing baseline when editing a tracker', () => {
+      render(
+        <ProtocolFormOverlay
+          isOpen
+          onClose={vi.fn()}
+          onApply={vi.fn()}
+          title="Configure Counter"
+          initialData={{ name: 'Cigarettes', limit: 10, baseline: 25 }}
+        />
+      );
+      expect(screen.getByLabelText(/baseline \(before/i)).toHaveValue(25);
+    });
+  });
 });

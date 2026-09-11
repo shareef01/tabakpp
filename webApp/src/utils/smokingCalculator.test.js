@@ -235,5 +235,180 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(SmokingCalculator.getTrackingDate(at, 6)).toBe('2024-05-20');
       expect(SmokingCalculator.getTrackingDate(after, 6)).toBe('2024-05-20');
     });
+
+    it('handles a DST spring-forward local clock (no day skipped or repeated)', () => {
+      // 2024-03-31 02:30 doesn't exist in most EU zones (clocks jump 02:00->03:00),
+      // but Date arithmetic here is pure local wall-clock hours/date math with no
+      // TZ database dependency, so this must not throw or misfire.
+      const beforeDayStart = new Date(2024, 2, 31, 1, 30, 0);
+      const afterJump = new Date(2024, 2, 31, 6, 30, 0);
+      expect(SmokingCalculator.getTrackingDate(beforeDayStart, 6)).toBe('2024-03-30');
+      expect(SmokingCalculator.getTrackingDate(afterJump, 6)).toBe('2024-03-31');
+    });
+  });
+
+  describe('getLimitStatus (item 4/5 — zero-target semantics, three-state visual status)', () => {
+    it('target=0, actual=0 -> on target ("at"), not a meaningless 0%', () => {
+      expect(SmokingCalculator.getLimitStatus(0, 0)).toEqual({ status: 'at', aboveTarget: 0, belowTarget: 0 });
+    });
+
+    it('target=0, actual=1 -> 1 above target', () => {
+      expect(SmokingCalculator.getLimitStatus(1, 0)).toEqual({ status: 'over', aboveTarget: 1, belowTarget: 0 });
+    });
+
+    it('target=0, actual=5 -> 5 above target', () => {
+      expect(SmokingCalculator.getLimitStatus(5, 0)).toEqual({ status: 'over', aboveTarget: 5, belowTarget: 0 });
+    });
+
+    it('actual < target -> under', () => {
+      expect(SmokingCalculator.getLimitStatus(3, 10)).toEqual({ status: 'under', aboveTarget: 0, belowTarget: 7 });
+    });
+
+    it('actual == target -> at (limit reached), distinct from over', () => {
+      expect(SmokingCalculator.getLimitStatus(10, 10)).toEqual({ status: 'at', aboveTarget: 0, belowTarget: 0 });
+    });
+
+    it('actual > target -> over, with the exact overage', () => {
+      expect(SmokingCalculator.getLimitStatus(12, 10)).toEqual({ status: 'over', aboveTarget: 2, belowTarget: 0 });
+    });
+  });
+
+  describe('getReduction / calculateBaselineSavings (item 3 — baseline as first-class concept)', () => {
+    it('returns null with no baseline set — never fabricates a reduction claim', () => {
+      expect(SmokingCalculator.getReduction(8, null)).toBeNull();
+      expect(SmokingCalculator.getReduction(8, undefined)).toBeNull();
+    });
+
+    it('baseline=20, target=10, actual=8: 12 below baseline, reduction 60%', () => {
+      const reduction = SmokingCalculator.getReduction(8, 20);
+      expect(reduction).toEqual({ baseline: 20, actual: 8, avoided: 12, percent: 0.6 });
+      // Independently, goal adherence vs. target must be a different, unrelated number.
+      expect(SmokingCalculator.getLimitStatus(8, 10)).toEqual({ status: 'under', aboveTarget: 0, belowTarget: 2 });
+    });
+
+    it('money saved comes from baseline vs. actual, never from target vs. actual', () => {
+      const configs = [{ id: 'c1', limit: 10, baseline: 20, pricePerUnit: 1, isFinanciallyTracked: true }];
+      const savings = SmokingCalculator.calculateBaselineSavings({ c1: 8 }, configs, 1);
+      // 12 units avoided at €1 = €12 — NOT (target 10 - actual 8) * 1 = €2.
+      expect(savings).toEqual({ moneySaved: 12, unitsAvoided: 12, hasBaseline: true });
+    });
+
+    it('a tracker with no baseline contributes nothing and is flagged', () => {
+      const configs = [{ id: 'c1', limit: 10, pricePerUnit: 1 }];
+      const savings = SmokingCalculator.calculateBaselineSavings({ c1: 3 }, configs, 1);
+      expect(savings).toEqual({ moneySaved: 0, unitsAvoided: 0, hasBaseline: false });
+    });
+
+    it('never reports negative savings when actual exceeds baseline', () => {
+      const configs = [{ id: 'c1', limit: 10, baseline: 5, pricePerUnit: 1 }];
+      const savings = SmokingCalculator.calculateBaselineSavings({ c1: 9 }, configs, 1);
+      expect(savings).toEqual({ moneySaved: 0, unitsAvoided: 0, hasBaseline: true });
+    });
+  });
+
+  describe('buildTrackerSnapshot (item 2 — historical config immutability)', () => {
+    it('captures target/baseline/price/name/type as of now', () => {
+      const config = { name: 'Cigarettes', type: 'CIGARETTE', limit: 10, baseline: 20, pricePerUnit: 0.5 };
+      expect(SmokingCalculator.buildTrackerSnapshot(config)).toEqual({
+        name: 'Cigarettes',
+        type: 'CIGARETTE',
+        target: 10,
+        baseline: 20,
+        unitPrice: 0.5,
+        isFinanciallyTracked: true,
+        isPrimaryTracked: true,
+      });
+    });
+
+    it('stores a null baseline rather than fabricating one', () => {
+      const config = { name: 'Cig', type: 'CIGARETTE', limit: 10 };
+      expect(SmokingCalculator.buildTrackerSnapshot(config).baseline).toBeNull();
+    });
+  });
+
+  describe('calculateStreak with day-doc snapshots (item 2 — target changes never rewrite history)', () => {
+    const config = () => ([{ id: 'c1', type: 'CIGARETTE', limit: 5 }]); // LIVE target is now 5
+    const today = '2024-07-14';
+
+    it('uses the day\'s stamped target (10), not today\'s live target (5), for a snapshot-backed day', () => {
+      // Yesterday the target was 10 and the user smoked 8 — a legitimate success at the time.
+      const dayDocs = [
+        { date: '2024-07-13', counts: { c1: 8 }, trackerSnapshots: { c1: { target: 10 } } },
+      ];
+      // Without the snapshot (legacy behavior), 8 > today's live limit of 5 would break the streak.
+      expect(SmokingCalculator.calculateStreak([], config(), { c1: 1 }, today, dayDocs)).toBe(2);
+    });
+
+    it('falls back to the live limit when a day has no snapshot (documented legacy fallback)', () => {
+      const logs = [{ logDate: '2024-07-13', counts: { c1: 8 }, origin: 'DAY_RESET' }];
+      // No snapshot recorded for this legacy log — falls back to today's live limit (5), so 8 breaks it.
+      expect(SmokingCalculator.calculateStreak(logs, config(), { c1: 1 }, today, [])).toBe(1);
+    });
+
+    it('changing today\'s target does not change whether a snapshotted historical day succeeded', () => {
+      const dayDocs = [{ date: '2024-07-13', counts: { c1: 8 }, trackerSnapshots: { c1: { target: 10 } } }];
+      const configsWithHigherLiveTarget = [{ id: 'c1', type: 'CIGARETTE', limit: 100 }];
+      const streakWithLowLiveTarget = SmokingCalculator.calculateStreak([], config(), { c1: 1 }, today, dayDocs);
+      const streakWithHighLiveTarget = SmokingCalculator.calculateStreak([], configsWithHigherLiveTarget, { c1: 1 }, today, dayDocs);
+      // The historical day's within-limit result (8 <= stamped 10) is identical either way.
+      expect(streakWithLowLiveTarget).toBe(2);
+      expect(streakWithHighLiveTarget).toBe(2);
+    });
+  });
+
+  describe('calculateTrackingStreak (item 7 — tracking consistency vs. goal streak)', () => {
+    const today = '2024-07-14';
+
+    it('counts consecutive logged days even when over target every day', () => {
+      const configs = [{ id: 'c1', type: 'CIGARETTE', limit: 1 }];
+      const logs = [
+        { logDate: '2024-07-13', counts: { c1: 20 }, origin: 'DAY_RESET' },
+        { logDate: '2024-07-12', counts: { c1: 20 }, origin: 'DAY_RESET' },
+      ];
+      // Goal streak is 0 (way over target every day)...
+      expect(SmokingCalculator.calculateStreak(logs, configs, { c1: 20 }, today)).toBe(0);
+      // ...but the user tracked faithfully for 3 consecutive days.
+      expect(SmokingCalculator.calculateTrackingStreak(logs, { c1: 20 }, today)).toBe(3);
+    });
+
+    it('is 0 when nothing was logged and no session is open', () => {
+      expect(SmokingCalculator.calculateTrackingStreak([], {}, today)).toBe(0);
+    });
+  });
+
+  describe('computeDayCredit (item 2 — self-contained day-doc financials)', () => {
+    it('computes wasted/saved/units/baselineSaved purely from stamped snapshots', () => {
+      const snapshots = {
+        c1: { target: 10, baseline: 20, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true },
+      };
+      const credit = SmokingCalculator.computeDayCredit({ c1: 8 }, snapshots, 0.5);
+      expect(credit).toEqual({ wasted: 8, saved: 2, smokingUnits: 8, baselineSaved: 12 });
+    });
+
+    it('is unaffected by a live config that has since changed — the snapshot is authoritative', () => {
+      const originalSnapshot = { c1: { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true } };
+      const creditNow = SmokingCalculator.computeDayCredit({ c1: 8 }, originalSnapshot, 0.5);
+      // Even if this function were (incorrectly) called again after the live tracker's
+      // target/price changed, the snapshot itself never changes, so results are stable.
+      expect(creditNow.saved).toBe(2);
+      expect(creditNow.wasted).toBe(8);
+    });
+
+    it('excludes non-financially-tracked trackers from money fields but still counts smoking units', () => {
+      const snapshots = { c1: { target: 5, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: false } };
+      const credit = SmokingCalculator.computeDayCredit({ c1: 3 }, snapshots, 0.5);
+      expect(credit).toEqual({ wasted: 0, saved: 0, smokingUnits: 3, baselineSaved: 0 });
+    });
+  });
+
+  describe('mergeDayDocsIntoLogged (dated daily-document overlay)', () => {
+    it('adds day-doc counts additively onto legacy logged counts', () => {
+      const logged = { '2024-07-13': { c1: 2 } };
+      const dayDocs = [{ date: '2024-07-13', counts: { c1: 1, c2: 4 } }, { date: '2024-07-14', counts: { c1: 5 } }];
+      expect(SmokingCalculator.mergeDayDocsIntoLogged(logged, dayDocs)).toEqual({
+        '2024-07-13': { c1: 3, c2: 4 },
+        '2024-07-14': { c1: 5 },
+      });
+    });
   });
 });

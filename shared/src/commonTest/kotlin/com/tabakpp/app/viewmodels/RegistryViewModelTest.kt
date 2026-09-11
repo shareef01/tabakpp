@@ -1,9 +1,11 @@
 package com.tabakpp.app.viewmodels
 
 import com.tabakpp.app.data.AuthRepository
+import com.tabakpp.app.data.DayDocument
 import com.tabakpp.app.data.LocalSettings
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.NetworkObserver
+import com.tabakpp.app.data.ProfileExtra
 import com.tabakpp.app.data.RegistryRepository
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.User
@@ -45,44 +47,65 @@ private class FakeAuthRepository(user: User?) : AuthRepository {
     override suspend fun deleteAccount(password: String?) = Result.success(Unit)
 }
 
+data class LiveCounterCall(val uid: String, val trackerId: String, val delta: Double, val trackingDate: String, val defaultUnitPrice: Double)
+
 private class FakeRegistryRepository : RegistryRepository {
     val profileFlow = MutableStateFlow<UserProfile?>(null)
     val configsFlow = MutableStateFlow<List<TrackerConfig>>(emptyList())
     val logsFlow = MutableStateFlow<List<LogEntry>>(emptyList())
+    /** Today's dated day doc (item 1) — this, not the profile, is where live counts come from. */
+    val dayFlow = MutableStateFlow<DayDocument?>(null)
+    val daysFlow = MutableStateFlow<List<DayDocument>>(emptyList())
+    val avatarFlow = MutableStateFlow<ProfileExtra?>(null)
 
     /** When set, every mutating call throws it (init bootstrap calls do not). */
     var failWith: Exception? = null
-    /** When set, endDay suspends on it — lets a test observe the in-flight state. */
-    var endDayGate: CompletableDeferred<Unit>? = null
+    /** When set, closeDay suspends on it — lets a test observe the in-flight state. */
+    var closeDayGate: CompletableDeferred<Unit>? = null
     /** When set, updateLiveCounter suspends on it — for optimistic-flight tests. */
     var liveCounterGate: CompletableDeferred<Unit>? = null
     /** When set, updateProfileSettings suspends on it — for settings write serialization. */
     var profileSettingsGate: CompletableDeferred<Unit>? = null
 
-    val liveCounterCalls = mutableListOf<Triple<String, String, Double>>()
-    val endDayCalls = mutableListOf<Pair<String, String>>()
+    val liveCounterCalls = mutableListOf<LiveCounterCall>()
+    val closeDayCalls = mutableListOf<Pair<String, String>>()
     val addConfigCalls = mutableListOf<Pair<String, TrackerConfig>>()
     val profileSettingsCalls = mutableListOf<Pair<String, UserProfile>>()
+    val updateAvatarCalls = mutableListOf<Pair<String, String?>>()
+    val deleteConfigCalls = mutableListOf<Triple<String, String, String?>>()
+    val updateHistoricalDayCalls = mutableListOf<Triple<String, String, Map<String, Double>>>()
 
     private fun maybeFail() { failWith?.let { throw it } }
 
     override fun subscribeToUserProfile(uid: String): Flow<UserProfile?> = profileFlow
     override fun subscribeToConfigs(uid: String): Flow<List<TrackerConfig>> = configsFlow
     override fun subscribeToLogs(uid: String): Flow<List<LogEntry>> = logsFlow
+    override fun subscribeToDay(uid: String, date: String): Flow<DayDocument?> = dayFlow
+    override fun subscribeToDays(uid: String): Flow<List<DayDocument>> = daysFlow
+    override fun subscribeToProfileExtra(uid: String): Flow<ProfileExtra?> = avatarFlow
 
-    override suspend fun updateLiveCounter(uid: String, trackerId: String, delta: Double) {
-        liveCounterGate?.await(); maybeFail(); liveCounterCalls.add(Triple(uid, trackerId, delta))
+    override suspend fun updateLiveCounter(uid: String, trackerId: String, delta: Double, trackingDate: String, defaultUnitPrice: Double) {
+        liveCounterGate?.await(); maybeFail(); liveCounterCalls.add(LiveCounterCall(uid, trackerId, delta, trackingDate, defaultUnitPrice))
     }
-    override suspend fun endDay(uid: String, trackingDate: String) {
-        endDayGate?.await(); maybeFail(); endDayCalls.add(uid to trackingDate)
+    override suspend fun closeDay(uid: String, date: String) {
+        closeDayGate?.await(); maybeFail(); closeDayCalls.add(uid to date)
     }
+    override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) { /* no-op */ }
+    override suspend fun updateHistoricalDay(uid: String, date: String, counts: Map<String, Double>) {
+        maybeFail(); updateHistoricalDayCalls.add(Triple(uid, date, counts))
+    }
+    override suspend fun migrateLegacyActiveCounts(uid: String) { /* no-op */ }
+    override suspend fun migrateAvatarToProfileMeta(uid: String) { /* no-op */ }
+    override suspend fun updateAvatar(uid: String, avatar: String?) { maybeFail(); updateAvatarCalls.add(uid to avatar) }
     override suspend fun createManualEntry(uid: String, date: String, counts: Map<String, Double>) { maybeFail() }
     override suspend fun deleteLog(uid: String, logId: String) { maybeFail() }
     override suspend fun restoreLog(uid: String, log: LogEntry) { maybeFail() }
     override suspend fun updateHistoricalLog(uid: String, logId: String, counts: Map<String, Double>) { maybeFail() }
     override suspend fun addConfig(uid: String, config: TrackerConfig) { maybeFail(); addConfigCalls.add(uid to config) }
     override suspend fun updateConfig(uid: String, config: TrackerConfig) { maybeFail() }
-    override suspend fun deleteConfig(uid: String, configId: String) { maybeFail() }
+    override suspend fun deleteConfig(uid: String, configId: String, trackingDate: String?) {
+        maybeFail(); deleteConfigCalls.add(Triple(uid, configId, trackingDate))
+    }
     override suspend fun reorderConfigs(uid: String, configId1: String, order1: Int, configId2: String, order2: Int) { maybeFail() }
     override suspend fun updateProfileSettings(uid: String, profile: UserProfile) {
         profileSettingsGate?.await(); maybeFail(); profileSettingsCalls.add(uid to profile)
@@ -130,7 +153,12 @@ class RegistryViewModelTest {
         val (vm, reg) = build()
         vm.increment("cig")
         scheduler.runCurrent()
-        assertEquals(listOf(Triple("u1", "cig", 1.0)), reg.liveCounterCalls)
+        assertEquals(1, reg.liveCounterCalls.size)
+        val call = reg.liveCounterCalls.first()
+        assertEquals("u1", call.uid)
+        assertEquals("cig", call.trackerId)
+        assertEquals(1.0, call.delta)
+        assertEquals(vm.trackingDay.value, call.trackingDate) // caller decides the date at write time (item 1)
     }
 
     @Test
@@ -144,8 +172,8 @@ class RegistryViewModelTest {
     @Test
     fun decrement_atZero_isNoop() {
         val (vm, reg) = build()
-        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 0.0))
-        scheduler.runCurrent() // accent-sync keeps userProfile subscribed, so .value updates
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
         vm.decrement("cig")
         scheduler.runCurrent()
         assertTrue(reg.liveCounterCalls.isEmpty())
@@ -154,18 +182,19 @@ class RegistryViewModelTest {
     @Test
     fun decrement_aboveZero_decrementsByOne() {
         val (vm, reg) = build()
-        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 3.0))
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 3.0))
         scheduler.runCurrent()
         vm.decrement("cig")
         scheduler.runCurrent()
-        assertEquals(listOf(Triple("u1", "cig", -1.0)), reg.liveCounterCalls)
+        assertEquals(1, reg.liveCounterCalls.size)
+        assertEquals(-1.0, reg.liveCounterCalls.first().delta)
     }
 
     @Test
-    fun endDay_togglesEndingDayAndCallsRepo() {
+    fun endDay_togglesEndingDayAndCallsCloseDay() {
         val (vm, reg) = build()
         val gate = CompletableDeferred<Unit>()
-        reg.endDayGate = gate
+        reg.closeDayGate = gate
 
         assertFalse(vm.endingDay.value)
         vm.endDay()
@@ -175,8 +204,8 @@ class RegistryViewModelTest {
         gate.complete(Unit)
         scheduler.runCurrent()
         assertFalse(vm.endingDay.value) // reset in finally
-        assertEquals(1, reg.endDayCalls.size)
-        assertEquals("u1", reg.endDayCalls.first().first)
+        assertEquals(1, reg.closeDayCalls.size)
+        assertEquals("u1", reg.closeDayCalls.first().first)
     }
 
     @Test
@@ -227,6 +256,14 @@ class RegistryViewModelTest {
     }
 
     @Test
+    fun addTracker_coercesBaselineIntoBounds() {
+        val (vm, reg) = build()
+        vm.addTracker(TrackerConfig(id = "", name = "Cig", limit = 10, order = 0, baseline = 99_999))
+        scheduler.runCurrent()
+        assertEquals(10_000, reg.addConfigCalls.first().second.baseline)
+    }
+
+    @Test
     fun clearError_resetsError() {
         val (vm, reg) = build()
         reg.failWith = RuntimeException("boom")
@@ -240,7 +277,7 @@ class RegistryViewModelTest {
     @Test
     fun increment_bumpsActiveCountsOptimisticallyBeforeWriteSettles() {
         val (vm, reg) = build()
-        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent() // overlay follows the server: cig = 2
         reg.liveCounterGate = CompletableDeferred() // keep the write in flight
 
@@ -252,7 +289,7 @@ class RegistryViewModelTest {
     @Test
     fun increment_rollsBackOptimisticBumpOnFailure() {
         val (vm, reg) = build()
-        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent()
         reg.failWith = RuntimeException("denied")
 
@@ -266,7 +303,7 @@ class RegistryViewModelTest {
     @Test
     fun serverSnapshot_whileWriteInFlight_mergesWithPendingDelta() {
         val (vm, reg) = build()
-        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent()
         reg.liveCounterGate = CompletableDeferred()
 
@@ -275,7 +312,7 @@ class RegistryViewModelTest {
         assertEquals(3.0, vm.activeCounts.value["cig"]) // server 2 + pending 1
 
         // A higher mid-flight snapshot merges with the still-pending tap.
-        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 9.0))
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 9.0))
         scheduler.runCurrent()
         assertEquals(10.0, vm.activeCounts.value["cig"]) // server 9 + pending 1
 
@@ -288,7 +325,7 @@ class RegistryViewModelTest {
     @Test
     fun burstTaps_doNotSnapBackOnStaleServerSnapshot() {
         val (vm, reg) = build()
-        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent()
         reg.liveCounterGate = CompletableDeferred()
 
@@ -297,7 +334,7 @@ class RegistryViewModelTest {
         assertEquals(4.0, vm.activeCounts.value["cig"])
 
         // Stale echo of the pre-burst value must not rewind the overlay.
-        reg.profileFlow.value = UserProfile(activeCounts = mapOf("cig" to 2.0))
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent()
         assertEquals(4.0, vm.activeCounts.value["cig"])
 
@@ -305,6 +342,44 @@ class RegistryViewModelTest {
         scheduler.runCurrent()
         // Both writes folded locally: baseline 4, pending 0.
         assertEquals(4.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun deleteTracker_passesCurrentTrackingDateForLiveCleanup() {
+        val (vm, reg) = build()
+        vm.deleteTracker("cig")
+        scheduler.runCurrent()
+        assertEquals(1, reg.deleteConfigCalls.size)
+        val (uid, id, date) = reg.deleteConfigCalls.first()
+        assertEquals("u1", uid)
+        assertEquals("cig", id)
+        assertEquals(vm.trackingDay.value, date)
+    }
+
+    @Test
+    fun updateAvatar_delegatesToRepository() {
+        val (vm, reg) = build()
+        vm.updateAvatar("data:new")
+        scheduler.runCurrent()
+        assertEquals(listOf<Pair<String, String?>>("u1" to "data:new"), reg.updateAvatarCalls)
+    }
+
+    @Test
+    fun avatar_reflectsProfileExtraFlow_notTheProfileDocument() {
+        val (vm, reg) = build()
+        reg.avatarFlow.value = ProfileExtra(avatar = "data:x")
+        bg.launch { vm.avatar.collect {} }
+        scheduler.runCurrent()
+        assertEquals("data:x", vm.avatar.value)
+    }
+
+    @Test
+    fun updateDayRecord_delegatesToUpdateHistoricalDay() {
+        val (vm, reg) = build()
+        vm.updateDayRecord("2026-07-10", mapOf("cig" to 5.0))
+        scheduler.runCurrent()
+        assertEquals(1, reg.updateHistoricalDayCalls.size)
+        assertEquals(Triple("u1", "2026-07-10", mapOf("cig" to 5.0)), reg.updateHistoricalDayCalls.first())
     }
 
     @Test
