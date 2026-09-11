@@ -43,6 +43,18 @@ class RegistryViewModel(
         else registryRepository.subscribeToLogs(uid)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** Bounded window of `days/{date}` documents (item 1) — chart/streak use. */
+    val dayDocs: StateFlow<List<DayDocument>> = userUid.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else registryRepository.subscribeToDays(uid)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Avatar (item 12) — decoupled from the high-frequency profile document. */
+    val avatar: StateFlow<String?> = userUid.flatMapLatest { uid ->
+        if (uid == null) flowOf(null)
+        else registryRepository.subscribeToProfileExtra(uid).map { it?.avatar }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     val historyIsTruncated: StateFlow<Boolean> = logs
         .map { it.size.toLong() >= LIVE_LOG_QUERY_LIMIT }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
@@ -59,7 +71,9 @@ class RegistryViewModel(
 
     // Optimistic counter overlay: pendingDelta holds in-flight inc/dec not yet
     // folded into latestServerCounts. Display is always server + pending so a
-    // stale mid-flight snapshot cannot rewind burst taps.
+    // stale mid-flight snapshot cannot rewind burst taps. Sourced from
+    // TODAY's dated day doc (item 1), not the profile — there is no shared
+    // mutable "current session" bucket that could outlive a rollover.
     private val _activeCounts = MutableStateFlow<Map<String, Double>>(emptyMap())
     val activeCounts: StateFlow<Map<String, Double>> = _activeCounts.asStateFlow()
     private var latestServerCounts: Map<String, Double> = emptyMap()
@@ -129,6 +143,11 @@ class RegistryViewModel(
                 try {
                     registryRepository.ensureUserDocument(user.uid, user.displayName)
                     registryRepository.migrateSmokingUnitsIfNeeded(user.uid)
+                    // One-time, idempotent, self-healing migrations (item 1/12 —
+                    // see AUDIT.md "Migration"). Safe every session: each is a
+                    // no-op once already applied.
+                    registryRepository.migrateLegacyActiveCounts(user.uid)
+                    registryRepository.migrateAvatarToProfileMeta(user.uid)
                 } catch (e: Exception) {
                     setError(e, "Could not prepare your profile. Try again.")
                 }
@@ -158,12 +177,39 @@ class RegistryViewModel(
             }
         }
 
-        // Feed the optimistic overlay from the server profile; pendingDelta
-        // keeps burst taps visible even when a stale snapshot arrives mid-flight.
+        // Live "today" bucket (item 1's actual fix): re-subscribe to
+        // `days/{trackingDay}` whenever the tracking date changes (computed
+        // above from wall-clock time), and opportunistically fold any day
+        // the date has already moved past — a convenience rollup, never what
+        // decides which date a count belongs to (that already happened, at
+        // write time, in increment/decrement below).
         viewModelScope.launch {
-            userProfile.collect { profile ->
-                latestServerCounts = profile?.activeCounts ?: emptyMap()
-                publishCounterOverlay()
+            combine(userUid, _trackingDay) { uid, day -> uid to day }
+                .distinctUntilChanged()
+                .flatMapLatest { (uid, day) ->
+                    // Reset the overlay exactly once per (uid, trackingDay) change —
+                    // a genuinely new subscription, not every snapshot the SAME
+                    // subscription emits (a mid-flight server echo must still merge
+                    // with any still-pending optimistic delta, never clear it).
+                    pendingDelta.clear()
+                    latestServerCounts = emptyMap()
+                    publishCounterOverlay()
+                    if (uid == null) flowOf(null) else registryRepository.subscribeToDay(uid, day)
+                }
+                .collect { day ->
+                    latestServerCounts = day?.counts ?: emptyMap()
+                    publishCounterOverlay()
+                }
+        }
+        viewModelScope.launch {
+            combine(userUid, _trackingDay) { uid, day -> uid to day }.collect { (uid, day) ->
+                if (uid != null) {
+                    try {
+                        registryRepository.reconcileStaleDays(uid, day)
+                    } catch (_: Exception) {
+                        // Best-effort — self-heals on the next tick/app start.
+                    }
+                }
             }
         }
 
@@ -188,27 +234,40 @@ class RegistryViewModel(
         }
     }
 
+    private data class MetricsInputs(
+        val logs: List<LogEntry>,
+        val configs: List<TrackerConfig>,
+        val activeCounts: Map<String, Double>,
+        val profile: UserProfile?,
+        val trackingDay: String
+    )
+
     val metrics: StateFlow<SmokingCalculator.GlobalMetrics?> = combine(
-        logs, configs, _activeCounts, userProfile, trackingDay
-    ) { l, c, ac, p, td ->
-        if (p == null || td.isEmpty()) null
+        combine(logs, configs, _activeCounts, userProfile, trackingDay, ::MetricsInputs),
+        dayDocs
+    ) { inputs, dd ->
+        val p = inputs.profile
+        if (p == null || inputs.trackingDay.isEmpty()) null
         else SmokingCalculator.getGlobalMetrics(
-            logs = l,
-            configs = c,
-            activeCounts = ac,
-            trackingDay = td,
+            logs = inputs.logs,
+            configs = inputs.configs,
+            activeCounts = inputs.activeCounts,
+            trackingDay = inputs.trackingDay,
             userPrice = p.unitPrice,
-            lifetimeAggregates = p.lifetimeAggregates
+            lifetimeAggregates = p.lifetimeAggregates,
+            dayDocs = dd
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
         val uid = authUser.value?.uid ?: return
+        val trackingDate = trackingDay.value
+        val price = userProfile.value?.unitPrice ?: 0.5
         adjustPending(trackerId, 1.0)
         publishCounterOverlay()
         viewModelScope.launch {
             try {
-                registryRepository.updateLiveCounter(uid, trackerId, 1.0)
+                registryRepository.updateLiveCounter(uid, trackerId, 1.0, trackingDate, price)
                 // Fold this write into the local baseline so a delayed listener
                 // cannot double-count against pendingDelta.
                 latestServerCounts = latestServerCounts + (
@@ -232,12 +291,14 @@ class RegistryViewModel(
     fun decrement(trackerId: String) {
         val uid = authUser.value?.uid ?: return
         if ((_activeCounts.value[trackerId] ?: 0.0) <= 0.0) return // Prevent negative counts
+        val trackingDate = trackingDay.value
+        val price = userProfile.value?.unitPrice ?: 0.5
 
         adjustPending(trackerId, -1.0)
         publishCounterOverlay()
         viewModelScope.launch {
             try {
-                registryRepository.updateLiveCounter(uid, trackerId, -1.0)
+                registryRepository.updateLiveCounter(uid, trackerId, -1.0, trackingDate, price)
                 latestServerCounts = latestServerCounts + (
                     trackerId to maxOf(0.0, (latestServerCounts[trackerId] ?: 0.0) - 1.0)
                 )
@@ -251,15 +312,21 @@ class RegistryViewModel(
         }
     }
 
+    /**
+     * Close the tracking day — a UX affordance only (see
+     * RegistryRepository.closeDay). It never decides which date a count
+     * belongs to; that already happened, at write time, in
+     * increment/decrement above.
+     */
     fun endDay() {
         val uid = authUser.value?.uid ?: return
         val td = trackingDay.value
         viewModelScope.launch {
             _endingDay.value = true
             try {
-                registryRepository.endDay(uid, td)
+                registryRepository.closeDay(uid, td)
             } catch (e: Exception) {
-                setError(e, "Could not archive the tracking day. Try again.")
+                setError(e, "Could not close the tracking day. Try again.")
             } finally {
                 _endingDay.value = false
             }
@@ -314,10 +381,11 @@ class RegistryViewModel(
         val sanitized = config.copy(
             name = InputSanitizer.trackerName(config.name),
             limit = config.limit.coerceIn(0, 10_000),
-            pricePerUnit = config.pricePerUnit?.takeIf { it.isFinite() }?.coerceIn(0.0, 1_000.0)
+            pricePerUnit = config.pricePerUnit?.takeIf { it.isFinite() }?.coerceIn(0.0, 1_000.0),
+            baseline = config.baseline?.coerceIn(0, 10_000)
         )
         if (sanitized.name.isBlank()) return
-        
+
         viewModelScope.launch {
             try {
                 registryRepository.addConfig(uid, sanitized.copy(order = nextOrder))
@@ -332,7 +400,8 @@ class RegistryViewModel(
         val sanitized = config.copy(
             name = InputSanitizer.trackerName(config.name),
             limit = config.limit.coerceIn(0, 10_000),
-            pricePerUnit = config.pricePerUnit?.takeIf { it.isFinite() }?.coerceIn(0.0, 1_000.0)
+            pricePerUnit = config.pricePerUnit?.takeIf { it.isFinite() }?.coerceIn(0.0, 1_000.0),
+            baseline = config.baseline?.coerceIn(0, 10_000)
         )
         if (sanitized.name.isBlank()) return
         viewModelScope.launch {
@@ -346,9 +415,10 @@ class RegistryViewModel(
 
     fun deleteTracker(configId: String) {
         val uid = authUser.value?.uid ?: return
+        val trackingDate = trackingDay.value
         viewModelScope.launch {
             try {
-                registryRepository.deleteConfig(uid, configId)
+                registryRepository.deleteConfig(uid, configId, trackingDate)
             } catch (e: Exception) {
                 setError(e, "Could not delete the tracker. Try again.")
             }
@@ -390,6 +460,29 @@ class RegistryViewModel(
         }
     }
 
+    /** Edit a closed `days/{date}` record — the dated-model equivalent of [updateLog]. */
+    fun updateDayRecord(date: String, counts: Map<String, Double>) {
+        val uid = authUser.value?.uid ?: return
+        viewModelScope.launch {
+            try {
+                registryRepository.updateHistoricalDay(uid, date, counts)
+            } catch (e: Exception) {
+                setError(e, "Could not update the history entry. Try again.")
+            }
+        }
+    }
+
+    fun updateAvatar(avatar: String?) {
+        val uid = authUser.value?.uid ?: return
+        viewModelScope.launch {
+            try {
+                registryRepository.updateAvatar(uid, avatar)
+            } catch (e: Exception) {
+                setError(e, "Could not update your avatar. Try again.")
+            }
+        }
+    }
+
     fun updateProfile(updater: (UserProfile) -> UserProfile) {
         val uid = authUser.value?.uid ?: return
         viewModelScope.launch {
@@ -416,8 +509,7 @@ class RegistryViewModel(
             a.unitPrice == b.unitPrice &&
             a.pouchPrice == b.pouchPrice &&
             a.estimatedYield == b.estimatedYield &&
-            a.dayStartHour == b.dayStartHour &&
-            a.avatar == b.avatar
+            a.dayStartHour == b.dayStartHour
 
     fun updateDisplayName(name: String) {
         viewModelScope.launch {
