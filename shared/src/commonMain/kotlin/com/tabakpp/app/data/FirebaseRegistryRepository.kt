@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock
 
-/** Schema version marking the dated-daily-document migration (see AUDIT.md). */
+/** Schema version marking the dated-daily-document migration. */
 private const val CURRENT_SCHEMA_VERSION = 2
 
 private fun nowTimestamp(): Timestamp {
@@ -16,7 +16,7 @@ private fun nowTimestamp(): Timestamp {
 }
 
 /**
- * ## Data model (see AUDIT.md "Schema changes" for the full write-up)
+ * ## Data model
  *
  * `users/{uid}/days/{YYYY-MM-DD}` is the dated daily-document model (item 1):
  * every count always belongs to an explicit tracking date decided AT WRITE
@@ -376,14 +376,14 @@ class FirebaseRegistryRepository(
         val avatar = snap.data<UserProfile>().avatar ?: return
 
         val metaRef = userRef.collection("meta").document("profile")
-        val metaSnap = metaRef.get()
-        if (!metaSnap.exists || metaSnap.data<ProfileExtra>().avatar == null) {
-            metaRef.set(ProfileExtra(avatar = avatar), merge = true)
-        }
         try {
+            val metaSnap = metaRef.get()
+            if (!metaSnap.exists || metaSnap.data<ProfileExtra>().avatar == null) {
+                metaRef.set(ProfileExtra(avatar = avatar), merge = true)
+            }
             userRef.updateFields { "avatar" to FieldValue.delete }
         } catch (_: Exception) {
-            // Already gone.
+            // Decorative metadata migration — safe to catch and ignore
         }
     }
 
@@ -674,8 +674,9 @@ class FirebaseRegistryRepository(
             if (!live.exists) return@runTransaction
             val liveProfile = live.data<UserProfile>()
             if (liveProfile.smokingUnitsMigrated) return@runTransaction
+            val currentAggs = liveProfile.lifetimeAggregates
             updateFields(userRef) {
-                "lifetimeAggregates.smokingUnits" to units
+                "lifetimeAggregates" to currentAggs.copy(smokingUnits = units)
                 "smokingUnitsMigrated" to true
             }
         }

@@ -45,8 +45,7 @@ export const appCheckReady = (async () => {
     if (import.meta.env.PROD) {
       console.error(
         '[firebase] App Check site key missing in production. ' +
-        'Set VITE_FIREBASE_APPCHECK_SITE_KEY, then enforce Firestore + Authentication ' +
-        'in Firebase Console → App Check → APIs (see SETUP_GUIDE.md).'
+        'Configure the site key and follow SETUP_GUIDE.md before enabling enforcement.'
       );
     }
     return null;
