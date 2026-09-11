@@ -376,14 +376,14 @@ class FirebaseRegistryRepository(
         val avatar = snap.data<UserProfile>().avatar ?: return
 
         val metaRef = userRef.collection("meta").document("profile")
-        val metaSnap = metaRef.get()
-        if (!metaSnap.exists || metaSnap.data<ProfileExtra>().avatar == null) {
-            metaRef.set(ProfileExtra(avatar = avatar), merge = true)
-        }
         try {
+            val metaSnap = metaRef.get()
+            if (!metaSnap.exists || metaSnap.data<ProfileExtra>().avatar == null) {
+                metaRef.set(ProfileExtra(avatar = avatar), merge = true)
+            }
             userRef.updateFields { "avatar" to FieldValue.delete }
         } catch (_: Exception) {
-            // Already gone.
+            // Decorative metadata migration — safe to catch and ignore
         }
     }
 
@@ -674,8 +674,9 @@ class FirebaseRegistryRepository(
             if (!live.exists) return@runTransaction
             val liveProfile = live.data<UserProfile>()
             if (liveProfile.smokingUnitsMigrated) return@runTransaction
+            val currentAggs = liveProfile.lifetimeAggregates
             updateFields(userRef) {
-                "lifetimeAggregates.smokingUnits" to units
+                "lifetimeAggregates" to currentAggs.copy(smokingUnits = units)
                 "smokingUnitsMigrated" to true
             }
         }
