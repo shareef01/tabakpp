@@ -7,6 +7,7 @@ import { auth } from './firebase';
 // --- CONSTANTS & UTILS ---
 import { hexToRgbValues } from './utils/formatters';
 import { SmokingCalculator } from './utils/smokingCalculator';
+import { pathForTab, tabForPath } from './utils/routing';
 const cn = (...classes) => classes.filter(Boolean).join(' ');
 
 const FIRESTORE_ACCENT_DEFAULT = '#FF5F5F';
@@ -71,8 +72,8 @@ const SettingsScreen = lazyWithRetry(() => import('./components/settings/Setting
 const LoadingView = React.memo(() => (
   <div role="status" aria-live="polite" className="flex flex-col items-center justify-center min-h-screen min-h-dvh w-full space-y-12 bg-black text-white font-inter antialiased">
     <Loader2 className="animate-spin text-accent" size={64} strokeWidth={3} aria-hidden />
-    <span className="text-[11px] font-black uppercase tracking-[0.35em] text-white/55 animate-pulse">Synchronizing</span>
-    <span className="sr-only">Loading registry</span>
+    <span className="text-[11px] font-black uppercase tracking-[0.35em] text-white/55 animate-pulse">Syncing</span>
+    <span className="sr-only">Loading your data</span>
   </div>
 ));
 
@@ -105,9 +106,9 @@ class GlobalErrorBoundary extends React.Component {
       return (
         <div className="flex flex-col items-center justify-center min-h-screen min-h-dvh w-full p-12 text-center bg-black text-white font-inter antialiased">
           <div className="p-8 mb-8 bg-red-600/10 rounded-[32px] text-red-500 border border-red-600/20 shadow-2xl"><AlertCircle size={48} /></div>
-          <h2 className="mb-4 text-3xl font-black uppercase tracking-tighter leading-none">System Fault</h2>
-          <p className="max-w-md mb-10 text-sm font-bold leading-relaxed text-white/60">{this.state.error?.toString() || "Registry sync error."}</p>
-          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } localStorage.clear(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reset Engine</button>
+          <h2 className="mb-4 text-3xl font-black uppercase tracking-tighter leading-none">Something went wrong</h2>
+          <p className="max-w-md mb-10 text-sm font-bold leading-relaxed text-white/60">{this.state.error?.toString() || "Sync error."}</p>
+          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } localStorage.clear(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reset app</button>
         </div>
       );
     }
@@ -137,10 +138,33 @@ const AppContent = () => {
   // 2. STATE MANAGEMENT
   const [settings, setSettings] = useState(defaultSettings);
   const [isHydrated, setIsHydrated] = useState(false);
-  const [activeTab, setActiveTab] = useState('track');
+  // Tab state is seeded from the URL (item 8) so a direct load, refresh, or
+  // bookmark of /history or /settings lands on the right screen.
+  const [activeTab, setActiveTab] = useState(() => tabForPath(window.location.pathname));
   const scrollPositions = useRef({ track: 0 });
   const activeTabRef = useRef(activeTab);
   const [incrementUndo, setIncrementUndo] = useState(null);
+
+  // Keep the URL in sync with the active tab: canonicalize an unrecognized
+  // path on load (without adding a history entry), and follow browser
+  // back/forward via popstate. handleTabChange (below) is the only other
+  // place that changes `activeTab`, and it pushes a matching history entry.
+  useEffect(() => {
+    const canonicalPath = pathForTab(activeTabRef.current);
+    if (window.location.pathname !== canonicalPath) {
+      window.history.replaceState({ tab: activeTabRef.current }, '', canonicalPath);
+    }
+    const onPopState = () => {
+      const tab = tabForPath(window.location.pathname);
+      if (tab === activeTabRef.current) return;
+      scrollPositions.current[activeTabRef.current] = window.scrollY;
+      activeTabRef.current = tab;
+      setActiveTab(tab);
+      window.requestAnimationFrame(() => window.scrollTo({ top: scrollPositions.current[tab] ?? 0, behavior: 'auto' }));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   // Drop prior-user settings before the new profile listener hydrates.
   useEffect(() => {
@@ -175,11 +199,11 @@ const AppContent = () => {
   const registry = useRegistry(user, today, settings.unitPrice);
 
   const {
-    configs, logs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings,
-    registryError, clearRegistryError,
+    configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings,
+    avatar, registryError, clearRegistryError,
     increment, decrement, endDay, reorder, addProtocol, updateProtocol, deleteProtocol,
-    createManualEntry, deleteLog, restoreLog, updateHistoricalLog
-  } = registry || { configs: [], logs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null };
+    createManualEntry, deleteLog, restoreLog, updateHistoricalLog, updateHistoricalDay, updateAvatar
+  } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, avatar: null };
 
   // Bootstrap profile once per session (create-if-missing + smokingUnits migration).
   // Settings hydration comes from useRegistry's single profile listener.
@@ -193,6 +217,11 @@ const AppContent = () => {
           accent: '#FF5F5F'
         });
         if (!cancelled) await RegistryService.migrateSmokingUnitsIfNeeded(user.uid);
+        // One-time, idempotent, self-healing migrations (item 1/12 — see
+        // AUDIT.md "Migration"). Safe to run every session: each is a no-op
+        // once already applied.
+        if (!cancelled) await RegistryService.migrateLegacyActiveCounts(user.uid);
+        if (!cancelled) await RegistryService.migrateAvatarToProfileMeta(user.uid);
       } catch (e) {
         console.error('[SYS] Profile bootstrap failed', e);
       }
@@ -207,7 +236,6 @@ const AppContent = () => {
       name: profileSettings.name ?? prev.name,
       accent: profileSettings.accent || prev.accent,
       widgetSize: profileSettings.widgetSize || prev.widgetSize,
-      avatar: profileSettings.avatar || null,
       unitPrice: profileSettings.unitPrice ?? 0.5,
       unitsPerPack: profileSettings.unitsPerPack ?? 20,
       dayStartHour: profileSettings.dayStartHour ?? 6,
@@ -220,6 +248,12 @@ const AppContent = () => {
     }
     setIsHydrated(true);
   }, [profileSettings]);
+
+  // Avatar lives in its own low-frequency doc (item 12) — synced separately
+  // from the settings-only profile fields above.
+  useEffect(() => {
+    setSettings(prev => (prev.avatar === avatar ? prev : { ...prev, avatar }));
+  }, [avatar]);
 
   // 4. ACTION HANDLERS — allowlisted settings only (Android updateProfileSettings parity)
   const [settingsError, setSettingsError] = useState(null);
@@ -261,6 +295,7 @@ const AppContent = () => {
     scrollPositions.current[current] = window.scrollY;
     activeTabRef.current = nextTab;
     setActiveTab(nextTab);
+    window.history.pushState({ tab: nextTab }, '', pathForTab(nextTab));
     window.requestAnimationFrame(() => window.scrollTo({ top: scrollPositions.current[nextTab] ?? 0, behavior: 'auto' }));
   }, []);
 
@@ -365,6 +400,8 @@ const AppContent = () => {
                       <h1 className="sr-only">History</h1>
                       {!isHydrated || isRegistryLoading ? <DashboardSkeleton widgetSize={settings.widgetSize} /> : <HistoryScreen
                         logs={logs}
+                        dayDocs={dayDocs}
+                        configs={configs}
                         m={metrics}
                         onEdit={setEditTarget}
                         onAddEntry={() => setIsManualEntryOpen(true)}
@@ -387,6 +424,7 @@ const AppContent = () => {
                         onReo={reorder}
                         onEditP={setEditProtocol}
                         onUpd={handleUpdateSettings}
+                        onUpdAvatar={updateAvatar}
                         onDel={(id) => setProtocolToDelete(id)}
                       />}
                     </motion.div>
@@ -428,7 +466,9 @@ const AppContent = () => {
                 log={editTarget}
                 configs={configs}
                 onClose={() => setEditTarget(null)}
-                onSave={updateHistoricalLog}
+                onSave={editTarget.__dayDoc
+                  ? (_id, counts) => updateHistoricalDay(editTarget.logDate, counts)
+                  : updateHistoricalLog}
               />
             )}
             {isManualEntryOpen && (
@@ -449,9 +489,9 @@ const AppContent = () => {
                   await endDay();
                 } catch { /* registryError set in hook */ }
               }}
-              title="End tracking day?"
-              message="Today’s counts will be archived and counters reset. Archived entries can be edited in History."
-              confirmText="End Day"
+              title="Close tracking day?"
+              message="Your counts are already saved — closing just marks today complete and locks it in History. You can still edit it there afterward."
+              confirmText="Close Day"
             />
             <ConfirmModal
               isOpen={!!protocolToDelete}

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { TrendingUp, TrendingDown, Minus, Wallet, Edit2, Trash2, Plus, PiggyBank, HeartPulse } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Wallet, Edit2, Trash2, Plus, PiggyBank, HeartPulse, Info } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from 'recharts';
@@ -54,15 +54,18 @@ const sumCounts = (counts = {}) =>
  * Velocity series for the trend chart: one point per calendar day ending on the
  * tracking day.
  *
- * The final point must count what is already archived or manually logged for
- * today *plus* the still-open session. Reading only the live session dropped the
- * day's archive the moment "End tracking day" ran, so the chart snapped to zero
- * for a day whose counts were sitting right there in the session log. Archive
- * and activeCounts are disjoint — end-day clears activeCounts as it writes the
- * archive — so adding them is the same merge aggregateLoggedCounts/streaks use.
+ * The final point must count what is already archived/dated or manually
+ * logged for today *plus* the still-open session. Reading only the live
+ * session dropped the day's record the moment "Close tracking day" ran (or,
+ * pre-item-1, the moment the date rolled over), so the chart snapped to zero
+ * for a day whose counts were sitting right there in the session log.
+ * `dayDocs` (optional — the dated daily-document model, item 1) is merged in
+ * additively alongside legacy `logs`; the two never cover the same date.
  */
-export const buildVelocitySeries = (logs, today, days, activeCounts) => {
-  const logged = SmokingCalculator.aggregateLoggedCounts(logs);
+export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = []) => {
+  const logged = SmokingCalculator.mergeDayDocsIntoLogged(
+    SmokingCalculator.aggregateLoggedCounts(logs), dayDocs
+  );
   const series = [];
   for (let i = days - 1; i >= 1; i -= 1) {
     const date = shiftDateStr(today, -i);
@@ -103,6 +106,7 @@ const VelocityTooltip = ({ active, payload }) => {
 const originMeta = (origin) => {
   if (origin === 'DAY_RESET') return { label: 'Archived', tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
   if (origin === 'MANUAL_ENTRY') return { label: 'Manual', tone: 'text-accent bg-accent/10 ring-accent/20' };
+  if (origin === 'DAY_RECORD') return { label: 'Tracked', tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
   return { label: 'Entry', tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
 };
 
@@ -137,8 +141,17 @@ const StatTile = ({ icon: Icon, value, label, hint, tone = 'neutral' }) => (
   </div>
 );
 
+/** Normalize a closed `days/{date}` document into the shape the session-log row and EditOverlay expect. */
+const dayRecordAsLogLike = (day) => ({
+  id: `day:${day.date}`,
+  logDate: day.date,
+  counts: day.counts || {},
+  origin: 'DAY_RECORD',
+  __dayDoc: true,
+});
+
 export const HistoryScreen = React.memo(({
-  logs, m, onEdit, onAddEntry, userId, today, unitPrice = 0.5,
+  logs, dayDocs = [], configs = [], m, onEdit, onAddEntry, userId, today, unitPrice = 0.5,
   onDeleteLog, onRestoreLog, historyIsTruncated = false
 }) => {
   const [undo, setUndo] = useState(null); // { log, key } after successful purge
@@ -146,8 +159,13 @@ export const HistoryScreen = React.memo(({
   const [hiddenLogIds, setHiddenLogIds] = useState(() => new Set());
   const [actionError, setActionError] = useState(null);
   const [velocityDays, setVelocityDays] = useState(7);
+  const [olderLogs, setOlderLogs] = useState([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderCursor, setOlderCursor] = useState(null);
+  const [olderExhausted, setOlderExhausted] = useState(false);
 
   const velocityPeriod = VELOCITY_PERIODS.find((p) => p.days === velocityDays) || VELOCITY_PERIODS[0];
+  const hasAnyBaseline = (configs || []).some((c) => c.baseline != null);
 
   const handleDelete = async (snapshot) => {
     if (!snapshot || !userId) return;
@@ -195,10 +213,32 @@ export const HistoryScreen = React.memo(({
     }
   }, [undo, userId, unitPrice, onRestoreLog]);
 
-  // Aggregate by date (archives + manual entries) — Android chart parity.
+  const handleLoadOlder = useCallback(async () => {
+    if (!userId || loadingOlder || olderExhausted) return;
+    setLoadingOlder(true);
+    setActionError(null);
+    try {
+      const { items, hasMore, nextCursor } = await RegistryService.fetchOlderLogs(userId, {
+        cursorLogDate: olderCursor || (logs[logs.length - 1]?.logDate ?? undefined),
+      });
+      setOlderLogs((prev) => {
+        const seen = new Set(prev.map((l) => l.id));
+        return [...prev, ...items.filter((l) => !seen.has(l.id))];
+      });
+      setOlderCursor(nextCursor);
+      if (!hasMore) setOlderExhausted(true);
+    } catch (err) {
+      console.error(err);
+      setActionError(mapFirestoreError(err, 'Could not load older entries.'));
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [userId, loadingOlder, olderExhausted, olderCursor, logs]);
+
+  // Aggregate by date (dated day docs + legacy archives/manual entries) — Android chart parity.
   const chartData = useMemo(
-    () => buildVelocitySeries(logs, today, velocityPeriod.days, m.activeCounts),
-    [logs, m.activeCounts, today, velocityPeriod.days]
+    () => buildVelocitySeries(logs, today, velocityPeriod.days, m.activeCounts, dayDocs),
+    [logs, m.activeCounts, today, velocityPeriod.days, dayDocs]
   );
 
   const velocityStats = useMemo(() => {
@@ -209,7 +249,21 @@ export const HistoryScreen = React.memo(({
     const delta = prevVal == null ? null : nowVal - prevVal;
     return { nowVal, prevVal, peak, delta };
   }, [chartData]);
-  const visibleLogs = useMemo(() => (logs ?? []).filter((log) => !hiddenLogIds.has(log.id)), [logs, hiddenLogIds]);
+
+  // Session log: legacy `logs` (manual entries + pre-migration archives) plus
+  // CLOSED `days` records (item 1's model going forward). Today's still-open
+  // day is intentionally excluded here — it belongs on the Track screen,
+  // never as a second, confusing "editable" surface for the same live count.
+  const closedDayRows = useMemo(
+    () => (dayDocs || []).filter((d) => d.status === 'closed').map(dayRecordAsLogLike),
+    [dayDocs]
+  );
+  const allRows = useMemo(() => {
+    const combined = [...(logs ?? []), ...olderLogs, ...closedDayRows];
+    combined.sort((a, b) => (a.logDate < b.logDate ? 1 : a.logDate > b.logDate ? -1 : 0));
+    return combined;
+  }, [logs, olderLogs, closedDayRows]);
+  const visibleLogs = useMemo(() => allRows.filter((log) => !hiddenLogIds.has(log.id)), [allRows, hiddenLogIds]);
 
   const TrendIcon = velocityStats.delta == null || velocityStats.delta === 0
     ? Minus
@@ -219,11 +273,11 @@ export const HistoryScreen = React.memo(({
 
   return (
     <div className="space-y-5 md:space-y-7">
-      {/* Top: Daily Velocity Chart */}
+      {/* Top: Daily Usage Trend Chart */}
       <Card className="p-5 md:p-8 overflow-hidden bg-bg-card">
         <div className="flex items-end justify-between gap-4 md:gap-6 mb-3 md:mb-4">
           <div className="flex flex-col gap-1 min-w-0">
-            <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Usage velocity</span>
+            <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Usage trend</span>
             <h2 className="text-2xl md:text-3xl font-black tracking-tight text-white leading-none">
               {velocityPeriod.title}
             </h2>
@@ -255,7 +309,7 @@ export const HistoryScreen = React.memo(({
 
         <div
           role="group"
-          aria-label="Velocity period"
+          aria-label="Usage trend period"
           className="mb-4 md:mb-5 inline-flex p-1 rounded-full bg-white/[0.03] border border-white/[0.06] gap-0.5"
         >
           {VELOCITY_PERIODS.map((period) => {
@@ -287,7 +341,7 @@ export const HistoryScreen = React.memo(({
           {chartData.every((p) => (p.val || 0) === 0) ? (
             <div className="h-full flex items-center justify-center rounded-2xl border border-dashed border-white/[0.06]">
               <span className="text-[11px] font-black uppercase tracking-[0.18em] text-neutral-400">
-                No velocity yet — log a session
+                No usage yet — log a session
               </span>
             </div>
           ) : (
@@ -367,7 +421,7 @@ export const HistoryScreen = React.memo(({
 
       {historyIsTruncated && (
         <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-950/40 px-4 py-3 text-[11px] font-bold text-amber-200">
-          Showing the most recent 1,200 entries. Trend and streak views exclude older entries; lifetime totals remain authoritative.
+          Showing the most recent 1,200 live-synced entries. Use "Load older entries" below for anything further back — trend and streak views may not reflect entries beyond that window; lifetime totals remain authoritative.
         </div>
       )}
 
@@ -385,8 +439,8 @@ export const HistoryScreen = React.memo(({
             <StatTile
               icon={TrendingUp}
               value={m.streak || 0}
-              label="Streak"
-              hint="Active days"
+              label="Goal Streak"
+              hint="Within target"
               tone="accent"
             />
             <StatTile
@@ -396,21 +450,39 @@ export const HistoryScreen = React.memo(({
               hint="Today"
               tone="rose"
             />
-            <StatTile
-              icon={PiggyBank}
-              value={SmokingCalculator.formatCurrency(m.savedLifetime ?? 0)}
-              label="Saved"
-              hint="Lifetime"
-              tone="accent"
-            />
+            {hasAnyBaseline || m.hasBaseline ? (
+              <StatTile
+                icon={PiggyBank}
+                value={SmokingCalculator.formatCurrency(m.baselineSavedLifetime ?? 0)}
+                label="Saved"
+                hint="vs. baseline"
+                tone="accent"
+              />
+            ) : (
+              <div className="group relative flex flex-col justify-between gap-2 min-h-0 p-3.5 md:p-4 rounded-2xl bg-white/[0.02] ring-1 ring-inset ring-white/[0.06]">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400 leading-none pt-0.5">Saved</span>
+                  <PiggyBank size={15} strokeWidth={2.25} className="shrink-0 text-neutral-500" />
+                </div>
+                <span className="text-[11px] font-semibold text-neutral-400 leading-snug">
+                  Set a baseline on a tracker to calculate reduction.
+                </span>
+              </div>
+            )}
             <StatTile
               icon={HeartPulse}
               value={SmokingCalculator.formatLifeMinutes(m.recovered ?? 0)}
-              label="Recovered"
-              hint={`Lost ${SmokingCalculator.formatLifeMinutes(m.lifeLost ?? 0)}`}
+              label="Est. Recovered"
+              hint={`Pop. est. · lost ${SmokingCalculator.formatLifeMinutes(m.lifeLost ?? 0)}`}
               tone="neutral"
             />
           </div>
+          <p className="flex items-start gap-1.5 px-1 pt-1 text-[10px] leading-relaxed text-neutral-500">
+            <Info size={12} className="shrink-0 mt-0.5" strokeWidth={2} />
+            "Est. Recovered"/"lost" are population-level life-expectancy
+            estimates (≈11 min per unit, from published smoking-mortality
+            research), not a measurement of you personally.
+          </p>
         </section>
 
         {/* Right: Session history */}
@@ -441,6 +513,7 @@ export const HistoryScreen = React.memo(({
               const units = Object.values(log.counts ?? {}).reduce((a, b) => a + (b || 0), 0);
               const isToday = log.logDate === today;
               const origin = originMeta(log.origin);
+              const isDayDoc = !!log.__dayDoc;
               return (
                 <div
                   key={log.id}
@@ -480,14 +553,19 @@ export const HistoryScreen = React.memo(({
                     >
                       <Edit2 size={15} strokeWidth={2.5} />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => requestDelete(log)}
-                      aria-label="Delete entry"
-                      className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
-                    >
-                      <Trash2 size={15} strokeWidth={2.5} />
-                    </button>
+                    {/* Delete/restore for dated day records is not yet implemented
+                        (deliberately deferred — see AUDIT.md); legacy log rows
+                        keep full delete/restore/undo. */}
+                    {!isDayDoc && (
+                      <button
+                        type="button"
+                        onClick={() => requestDelete(log)}
+                        aria-label="Delete entry"
+                        className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
+                      >
+                        <Trash2 size={15} strokeWidth={2.5} />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -495,7 +573,7 @@ export const HistoryScreen = React.memo(({
               <div className="py-14 px-6 text-center">
                 <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">No sessions yet</p>
                 <p className="mt-2 text-xs text-neutral-400">
-                  End a tracking day or add a manual entry.
+                  Track a day or add a manual entry.
                 </p>
                 {onAddEntry && (
                   <button
@@ -510,6 +588,19 @@ export const HistoryScreen = React.memo(({
               </div>
             )}
           </div>
+
+          {userId && !olderExhausted && (
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={handleLoadOlder}
+                disabled={loadingOlder}
+                className="inline-flex items-center gap-2 min-h-11 h-11 px-5 rounded-full bg-white/[0.04] text-neutral-300 text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.08] hover:text-white transition-colors disabled:opacity-50 touch-manipulation"
+              >
+                {loadingOlder ? 'Loading…' : 'Load older entries'}
+              </button>
+            </div>
+          )}
         </Card>
       </div>
 

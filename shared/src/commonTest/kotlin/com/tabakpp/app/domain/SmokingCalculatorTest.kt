@@ -252,6 +252,99 @@ class SmokingCalculatorTest {
     }
 
     @Test
+    fun testGetLimitStatus_zeroTargetSemantics() {
+        // target=0, actual=0 -> on target ("at"), not a meaningless 0%.
+        assertEquals(SmokingCalculator.LimitStatus("at", 0.0, 0.0), SmokingCalculator.getLimitStatus(0.0, 0.0))
+        // target=0, actual=1 -> 1 above target.
+        assertEquals(SmokingCalculator.LimitStatus("over", 1.0, 0.0), SmokingCalculator.getLimitStatus(1.0, 0.0))
+        // target=0, actual=5 -> 5 above target.
+        assertEquals(SmokingCalculator.LimitStatus("over", 5.0, 0.0), SmokingCalculator.getLimitStatus(5.0, 0.0))
+        // Three-state visual semantics (item 5): under / at / over are distinct.
+        assertEquals(SmokingCalculator.LimitStatus("under", 0.0, 7.0), SmokingCalculator.getLimitStatus(3.0, 10.0))
+        assertEquals(SmokingCalculator.LimitStatus("at", 0.0, 0.0), SmokingCalculator.getLimitStatus(10.0, 10.0))
+        assertEquals(SmokingCalculator.LimitStatus("over", 2.0, 0.0), SmokingCalculator.getLimitStatus(12.0, 10.0))
+    }
+
+    @Test
+    fun testGetReduction_andBaselineSavings_neverFromTarget() {
+        // No baseline -> never fabricate a reduction claim.
+        assertEquals(null, SmokingCalculator.getReduction(8.0, null))
+
+        // baseline=20, target=10, actual=8: 12 below baseline, reduction 60%.
+        val reduction = SmokingCalculator.getReduction(8.0, 20)
+        assertEquals(SmokingCalculator.Reduction(20.0, 8.0, 12.0, 0.6), reduction)
+        // Independently, goal adherence vs. target is a different, unrelated number.
+        assertEquals(SmokingCalculator.LimitStatus("under", 0.0, 2.0), SmokingCalculator.getLimitStatus(8.0, 10.0))
+
+        // Money saved comes from baseline vs. actual, never target vs. actual:
+        // 12 units avoided at 1.0 = 12.0 -- NOT (target 10 - actual 8) * 1.0 = 2.0.
+        val configs = listOf(TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE, pricePerUnit = 1.0, baseline = 20))
+        val savings = SmokingCalculator.calculateBaselineSavings(mapOf("c1" to 8.0), configs, 1.0)
+        assertEquals(SmokingCalculator.BaselineSavings(12.0, 12.0, true), savings)
+
+        // No baseline on the tracker -> contributes nothing, flagged honestly.
+        val noBaselineConfigs = listOf(TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE, pricePerUnit = 1.0))
+        assertEquals(
+            SmokingCalculator.BaselineSavings(0.0, 0.0, false),
+            SmokingCalculator.calculateBaselineSavings(mapOf("c1" to 3.0), noBaselineConfigs, 1.0)
+        )
+    }
+
+    @Test
+    fun testBuildTrackerSnapshot_andComputeDayCredit_selfContained() {
+        val config = TrackerConfig("c1", "Cigarettes", 10, 1, TrackerType.CIGARETTE, pricePerUnit = 0.5, baseline = 20)
+        val snapshot = SmokingCalculator.buildTrackerSnapshot(config)
+        assertEquals(TrackerSnapshot("Cigarettes", TrackerType.CIGARETTE, 10, 20, 0.5, true, true), snapshot)
+
+        // Day credit is computed ENTIRELY from the stamped snapshot -- a live
+        // config change afterward must not affect it (item 2).
+        val credit = SmokingCalculator.computeDayCredit(mapOf("c1" to 8.0), mapOf("c1" to snapshot), 0.5)
+        assertEquals(4.0, credit.wasted, 1e-9) // 8 * 0.5
+        assertEquals(1.0, credit.saved, 1e-9) // (10 - 8) * 0.5
+        assertEquals(8.0, credit.smokingUnits, 1e-9)
+        assertEquals(6.0, credit.baselineSaved, 1e-9) // (20 - 8) * 0.5
+    }
+
+    @Test
+    fun testCalculateStreak_usesSnapshotTarget_notLiveConfig() {
+        // Live target is now 5.
+        val liveConfigs = listOf(TrackerConfig("c1", "Cig", 5, 1, TrackerType.CIGARETTE))
+        val today = "2024-07-14"
+        // Yesterday the target was 10 and the user smoked 8 -- a legitimate success at the time.
+        val dayDocs = listOf(
+            DayDocument(
+                date = "2024-07-13",
+                counts = mapOf("c1" to 8.0),
+                trackerSnapshots = mapOf("c1" to TrackerSnapshot(target = 10))
+            )
+        )
+        // Without the snapshot, 8 > today's live limit of 5 would break the streak.
+        assertEquals(2, SmokingCalculator.calculateStreak(emptyList(), liveConfigs, mapOf("c1" to 1.0), today, dayDocs))
+
+        // Changing today's live target does not change the outcome for the snapshotted day.
+        val higherLiveConfigs = listOf(TrackerConfig("c1", "Cig", 100, 1, TrackerType.CIGARETTE))
+        assertEquals(2, SmokingCalculator.calculateStreak(emptyList(), higherLiveConfigs, mapOf("c1" to 1.0), today, dayDocs))
+
+        // No snapshot for a legacy log -> falls back to the live limit (documented fallback).
+        val logs = listOf(LogEntry("d1", "2024-07-13", mapOf("c1" to 8.0), origin = "DAY_RESET"))
+        assertEquals(1, SmokingCalculator.calculateStreak(logs, liveConfigs, mapOf("c1" to 1.0), today, emptyList()))
+    }
+
+    @Test
+    fun testCalculateTrackingStreak_separateFromGoalStreak() {
+        val configs = listOf(TrackerConfig("c1", "Cig", 1, 1, TrackerType.CIGARETTE))
+        val today = "2024-07-14"
+        val logs = listOf(
+            LogEntry("d1", "2024-07-13", mapOf("c1" to 20.0), origin = "DAY_RESET"),
+            LogEntry("d2", "2024-07-12", mapOf("c1" to 20.0), origin = "DAY_RESET")
+        )
+        // Goal streak is 0 (way over target every day)...
+        assertEquals(0, SmokingCalculator.calculateStreak(logs, configs, mapOf("c1" to 20.0), today))
+        // ...but the user tracked faithfully for 3 consecutive days.
+        assertEquals(3, SmokingCalculator.calculateTrackingStreak(logs, mapOf("c1" to 20.0), today))
+    }
+
+    @Test
     fun futureDatedLogWouldReviveADeadStreak() {
         // Why the bound exists: calculateStreak only bails early when the most
         // recent logged date is older than yesterday, and a future date is not,
