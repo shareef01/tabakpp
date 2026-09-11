@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:contract": "vitest run src/utils/domainFixtures.contract.test.js",
     "coverage": "vitest run --coverage",
     "lint": "eslint .",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
