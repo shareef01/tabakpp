@@ -200,8 +200,7 @@ data class TrackerSnapshot(
  * `users/{uid}/days/{YYYY-MM-DD}` — the dated daily-document model (item 1,
  * the P0 rollover fix). Every count always belongs to an explicit tracking
  * date decided by the caller at write time; there is no separate "current
- * session" bucket that can carry counts across a rollover boundary. See
- * AUDIT.md "Schema changes" for the full write-up.
+ * session" bucket that can carry counts across a rollover boundary.
  */
 @Serializable
 data class DayDocument(

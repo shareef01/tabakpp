@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.datetime.Clock
 
-/** Schema version marking the dated-daily-document migration (see AUDIT.md). */
+/** Schema version marking the dated-daily-document migration. */
 private const val CURRENT_SCHEMA_VERSION = 2
 
 private fun nowTimestamp(): Timestamp {
@@ -16,7 +16,7 @@ private fun nowTimestamp(): Timestamp {
 }
 
 /**
- * ## Data model (see AUDIT.md "Schema changes" for the full write-up)
+ * ## Data model
  *
  * `users/{uid}/days/{YYYY-MM-DD}` is the dated daily-document model (item 1):
  * every count always belongs to an explicit tracking date decided AT WRITE

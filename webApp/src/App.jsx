@@ -205,10 +205,15 @@ const AppContent = () => {
     createManualEntry, deleteLog, restoreLog, updateHistoricalLog, updateHistoricalDay, updateAvatar
   } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, avatar: null };
 
+  const [bootstrapError, setBootstrapError] = useState(null);
+
   // Bootstrap profile once per session (create-if-missing + smokingUnits migration).
   // Settings hydration comes from useRegistry's single profile listener.
   useEffect(() => {
-    if (!user) return undefined;
+    if (!user) {
+      setBootstrapError(null);
+      return undefined;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -217,13 +222,17 @@ const AppContent = () => {
           accent: '#FF5F5F'
         });
         if (!cancelled) await RegistryService.migrateSmokingUnitsIfNeeded(user.uid);
-        // One-time, idempotent, self-healing migrations (item 1/12 — see
-        // AUDIT.md "Migration"). Safe to run every session: each is a no-op
+        // One-time, idempotent, self-healing migrations (activeCounts -> days,
+        // avatar -> meta/profile). Safe to run every session: each is a no-op
         // once already applied.
         if (!cancelled) await RegistryService.migrateLegacyActiveCounts(user.uid);
         if (!cancelled) await RegistryService.migrateAvatarToProfileMeta(user.uid);
+        if (!cancelled) setBootstrapError(null);
       } catch (e) {
         console.error('[SYS] Profile bootstrap failed', e);
+        if (!cancelled) {
+          setBootstrapError('Could not prepare your profile. Check your connection and try again.');
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -330,12 +339,12 @@ const AppContent = () => {
         <>
           <div className="sticky top-0 z-[300] w-full bg-bg-panel pt-[env(safe-area-inset-top)]">
             <OfflineBanner isOffline={!isOnline} />
-            {(registryError || settingsError || deleteError) && (
+            {(bootstrapError || registryError || settingsError || deleteError) && (
               <div className="w-full bg-red-500/10 border-b border-red-500/20">
                 <div className="flex items-center justify-center gap-3 py-2 px-4 text-red-400">
                   <AlertCircle size={14} strokeWidth={3} />
-                  <span role="alert" className="text-xs font-black uppercase tracking-[0.14em]">{registryError || settingsError || deleteError?.message || deleteError?.title || deleteError}</span>
-                  <button type="button" aria-label="Dismiss error" onClick={() => { clearRegistryError(); setSettingsError(null); clearDeleteError(); }} className="min-h-11 px-2 text-xs font-black uppercase tracking-widest underline">
+                  <span role="alert" className="text-xs font-black uppercase tracking-[0.14em]">{bootstrapError || registryError || settingsError || deleteError?.message || deleteError?.title || deleteError}</span>
+                  <button type="button" aria-label="Dismiss error" onClick={() => { setBootstrapError(null); clearRegistryError(); setSettingsError(null); clearDeleteError(); }} className="min-h-11 px-2 text-xs font-black uppercase tracking-widest underline">
                     Dismiss
                   </button>
                 </div>
