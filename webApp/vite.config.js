@@ -2,7 +2,20 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-const BUILD_ID = Date.now();
+/**
+ * Build identity (item 17): a stable identifier for THIS commit/release, not
+ * a fresh value on every invocation. `Date.now()` here previously meant an
+ * identical source tree produced completely different asset names on every
+ * build — defeating long-term browser/CDN caching between deploys of
+ * unchanged code, and forcing every open tab's one-shot reload check
+ * (`__BUILD_TIME__` in App.jsx) to fire on a no-op redeploy. CI sets
+ * `VITE_BUILD_ID` (or `GITHUB_SHA` is picked up automatically) to the git
+ * commit SHA; local dev falls back to a fixed string so repeated `npm run
+ * build`/`dev` runs of the same tree are byte-for-byte stable. Per-file
+ * cache-busting is still primarily content hashes (`[hash]` below) — this ID
+ * is only an extra, human-readable build marker, not the caching mechanism.
+ */
+const BUILD_ID = process.env.VITE_BUILD_ID || process.env.GITHUB_SHA || 'dev';
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -67,8 +80,12 @@ export default defineConfig({
     cssCodeSplit: true,
     rollupOptions: {
       output: {
-        // Enforce unique names for all assets to bust CDN and Browser caches
-        entryFileNames: `assets/[name].${BUILD_ID}.js`,
+        // Content hashes (`[hash]`) do the actual cache-busting — identical
+        // code always produces the same hash, so an unrelated deploy of
+        // unchanged files doesn't invalidate them. BUILD_ID is appended only
+        // as a stable, human-readable marker of which commit produced these
+        // files; unlike before, it no longer changes on its own.
+        entryFileNames: `assets/[name].[hash].${BUILD_ID}.js`,
         chunkFileNames: `assets/[name].[hash].${BUILD_ID}.js`,
         assetFileNames: `assets/[name].[hash].${BUILD_ID}.[ext]`,
         // Split heavy third-party libs out of the main entry chunk so they

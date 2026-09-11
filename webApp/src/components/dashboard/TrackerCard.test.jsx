@@ -31,17 +31,13 @@ describe('TrackerCard activation', () => {
   it('counts a real tap once, not twice', () => {
     const { onInc } = setup();
     const btn = screen.getByRole('button', { name: /increase cigarettes/i });
-    // A genuine tap emits pointerdown and then a trailing click; cancelling
-    // pointerdown suppresses compatibility mouse events but not click.
+    // A genuine tap emits pointerdown and then a trailing click. Since
+    // increment/decrement bind only onClick (item 9), the leading
+    // pointerdown does nothing and the tap counts exactly once.
     fireEvent.pointerDown(btn, { pointerType: 'touch' });
     fireEvent.click(btn);
     expect(onInc).toHaveBeenCalledTimes(1);
   });
-
-  // Not covered: the right-click guard (`pointerType === 'mouse' && button !== 0`).
-  // jsdom's fireEvent drops both properties — the handler observes `{}` — so a
-  // test here would assert jsdom's PointerEvent fidelity, not our logic. Verify
-  // that path in a real browser if it ever changes.
 });
 
 describe('TrackerCard screen-reader output', () => {
@@ -54,17 +50,39 @@ describe('TrackerCard screen-reader output', () => {
     expect(live.textContent).toContain('7 left');
   });
 
-  it('reports the overage once past the limit', () => {
+  it('reports the overage once past the limit, as "N above target"', () => {
     setup({ count: 13 });
     const live = document.querySelector('[aria-live="polite"]');
-    expect(live.textContent).toContain('3 over limit');
+    expect(live.textContent).toContain('3 above target');
   });
 
-  it('does not mark a zero daily quota as limit reached at count zero', () => {
-    setup({ config: { ...config, limit: 0 }, count: 0 });
+  it('reports "Limit reached" exactly at the limit — distinct from over', () => {
+    setup({ count: 10 });
     const live = document.querySelector('[aria-live="polite"]');
-    expect(live.textContent).toContain('0 of 0');
-    expect(screen.getByRole('button', { name: /increase cigarettes/i }).className).toMatch(/bg-accent/);
+    expect(live.textContent).toContain('Limit reached');
+    // "at" gets the amber warning tone, never the same red as "over" (item 5).
+    expect(screen.getByRole('button', { name: /increase cigarettes/i }).className).toMatch(/bg-amber-500\b/);
+  });
+
+  describe('zero-target semantics (item 4)', () => {
+    it('target=0, actual=0 -> reports "Limit reached", not a meaningless 0%', () => {
+      setup({ config: { ...config, limit: 0 }, count: 0 });
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live.textContent).toContain('0 of 0');
+      expect(live.textContent).toContain('Limit reached');
+    });
+
+    it('target=0, actual=1 -> "1 above target"', () => {
+      setup({ config: { ...config, limit: 0 }, count: 1 });
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live.textContent).toContain('1 above target');
+    });
+
+    it('target=0, actual=5 -> "5 above target"', () => {
+      setup({ config: { ...config, limit: 0 }, count: 5 });
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live.textContent).toContain('5 above target');
+    });
   });
 
   it('hides the decorative gauge from assistive tech', () => {
