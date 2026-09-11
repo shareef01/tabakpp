@@ -68,4 +68,23 @@ describe('buildVelocitySeries', () => {
     expect(series).toHaveLength(90);
     expect(series.find((p) => p.date === '2026-03-09').val).toBe(3);
   });
+
+  describe('dayDocs (item 1 — dated daily-document model)', () => {
+    it('reads a historical day from a dayDoc, same as a legacy archive', () => {
+      const dayDocs = [{ date: '2026-03-09', counts: { cig: 12 } }];
+      const series = buildVelocitySeries([], TODAY, 7, {}, dayDocs);
+      expect(series.find((p) => p.date === '2026-03-09').val).toBe(12);
+    });
+
+    it('keeps today visible from a still-open dayDoc, merged with the live session', () => {
+      const dayDocs = [{ date: TODAY, counts: { cig: 5 } }];
+      const series = buildVelocitySeries([], TODAY, 7, { cig: 2 }, dayDocs);
+      expect(last(series).val).toBe(7);
+    });
+
+    it('is backward compatible when dayDocs is omitted (existing callers)', () => {
+      const series = buildVelocitySeries([], TODAY, 7, {});
+      expect(series).toHaveLength(7);
+    });
+  });
 });

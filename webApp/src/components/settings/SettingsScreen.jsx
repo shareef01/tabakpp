@@ -108,7 +108,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
   );
 });
 
-export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP, onUpd, onDel }) => {
+export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP, onUpd, onDel, onUpdAvatar }) => {
   const keyboardInset = useKeyboardInset();
   const [displayName, setDisplayName] = useState(user?.displayName || settings.name || '');
   const [isUploading, setIsUploading] = useState(false);
@@ -277,7 +277,10 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
     try {
       const dataUrl = await compressAvatarFile(file);
       setPreviewUrl(dataUrl);
-      await onUpd({ avatar: dataUrl });
+      // Avatar lives in users/{uid}/meta/profile (item 12), not the settings
+      // write path — a large, rarely-changing blob has no business riding
+      // along on the profile document every time settings save.
+      await onUpdAvatar(dataUrl);
       // Do not write data URLs to Auth photoURL (size limits); Firestore holds the avatar.
       if (auth.currentUser?.photoURL?.startsWith('data:')) {
         try { await updateProfile(auth.currentUser, { photoURL: null }); } catch { /* ignore */ }
@@ -799,7 +802,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
 
       <ConfirmModal isOpen={showRemoveConfirm} onClose={() => setShowRemoveConfirm(false)} onConfirm={async () => {
         try {
-          await onUpd({ avatar: null });
+          await onUpdAvatar(null);
           if (auth.currentUser?.photoURL) {
             try { await updateProfile(auth.currentUser, { photoURL: null }); } catch { /* ignore */ }
           }

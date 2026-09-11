@@ -25,6 +25,13 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
   const [pricePerUnit, setPricePerUnit] = useState(
     initialData?.pricePerUnit != null ? String(initialData.pricePerUnit) : '0.5'
   );
+  // Baseline (item 3): optional reference consumption used only for
+  // reduction/savings math — never conflated with the target above. Blank by
+  // default ("just track for now"); onboarding is not blocked on it.
+  const [hasBaseline, setHasBaseline] = useState(initialData?.baseline != null);
+  const [baseline, setBaseline] = useState(
+    initialData?.baseline != null ? String(initialData.baseline) : ''
+  );
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const dialogRef = useDialogA11y(isOpen, onClose, { disabled: saving });
@@ -37,6 +44,8 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
     setIsPrimary(initialData?.isPrimaryTracked ?? true);
     setIsFinancial(initialData?.isFinanciallyTracked ?? true);
     setPricePerUnit(initialData?.pricePerUnit != null ? String(initialData.pricePerUnit) : '0.5');
+    setHasBaseline(initialData?.baseline != null);
+    setBaseline(initialData?.baseline != null ? String(initialData.baseline) : '');
     setError('');
   }, [isOpen, initialData]);
 
@@ -53,6 +62,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
     // falsy. Fall back only when the field is genuinely unparseable.
     const parsedLimit = parseInt(limit, 10);
     const parsedPrice = parseFloat(String(pricePerUnit).replace(',', '.'));
+    const parsedBaseline = hasBaseline ? parseInt(baseline, 10) : null;
     setSaving(true);
     setError('');
     try {
@@ -62,7 +72,8 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
         type,
         isPrimaryTracked: isPrimary,
         isFinanciallyTracked: isFinancial,
-        pricePerUnit: Number.isFinite(parsedPrice) ? parsedPrice : 0.5
+        pricePerUnit: Number.isFinite(parsedPrice) ? parsedPrice : 0.5,
+        baseline: hasBaseline && Number.isFinite(parsedBaseline) ? parsedBaseline : null
       });
     } catch {
       setError('Could not save counter. Check your connection and try again.');
@@ -124,6 +135,41 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
               inputMode="numeric"
               enterKeyHint="next"
             />
+          </div>
+
+          <div className="space-y-3 rounded-2xl border border-white/5 bg-black/40 p-5">
+            <label className="flex items-center justify-between gap-4 cursor-pointer">
+              <span className="flex flex-col gap-0.5">
+                <span className="text-xs font-black uppercase tracking-widest text-neutral-300">Track reduction</span>
+                <span className="text-[10px] font-medium normal-case tracking-normal text-neutral-500">
+                  Optional — your previous daily average, used only to show how much you've cut back.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={hasBaseline}
+                onChange={(e) => setHasBaseline(e.target.checked)}
+                aria-label="Set a baseline to track reduction"
+                className="h-5 w-5 shrink-0 accent-[var(--accent)]"
+              />
+            </label>
+            {hasBaseline && (
+              <div className="flex flex-col gap-2 pt-1">
+                <label htmlFor="counter-baseline" className={UI.LABEL}>Baseline (before you started cutting back)</label>
+                <input
+                  id="counter-baseline"
+                  type="number"
+                  min="0"
+                  max="10000"
+                  value={baseline}
+                  onChange={(e) => setBaseline(e.target.value)}
+                  placeholder="e.g. 20"
+                  className={UI.INPUT}
+                  inputMode="numeric"
+                  enterKeyHint="next"
+                />
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-5">
