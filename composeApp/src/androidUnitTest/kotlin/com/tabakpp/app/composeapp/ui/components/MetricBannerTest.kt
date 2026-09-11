@@ -48,33 +48,39 @@ class MetricBannerTest {
         setBanner(metrics(count = 7, limit = 20, streak = 8, progress = 0.35))
         rule.onNodeWithText("REMAINING").assertIsDisplayed()
         rule.onNodeWithText("13").assertIsDisplayed()          // limit - count
-        rule.onNodeWithText("STREAK").assertIsDisplayed()
+        rule.onNodeWithText("GOAL STREAK").assertIsDisplayed()
         rule.onNodeWithText("8").assertIsDisplayed()
-        rule.onNodeWithText("RANK").assertIsDisplayed()
-        rule.onNodeWithText("DAILY QUOTA").assertIsDisplayed()
+        rule.onNodeWithText("ENGAGEMENT").assertIsDisplayed()
+        rule.onNodeWithText("DAILY USE").assertIsDisplayed()
         rule.onNodeWithText("35%").assertIsDisplayed()          // progress * 100
         rule.onNodeWithText("SPENT TODAY").assertIsDisplayed()
     }
 
     @Test
-    fun overLimit_showsOverLimit_andZeroRemaining() {
+    fun overTarget_showsOverTarget_andZeroRemaining() {
         setBanner(metrics(count = 22, limit = 20, streak = 3, progress = 1.1, spent = 5.0))
-        rule.onNodeWithText("OVER LIMIT").assertIsDisplayed()
+        rule.onNodeWithText("2 OVER TARGET").assertIsDisplayed()
         rule.onNodeWithText("0").assertIsDisplayed()            // remaining floored at 0
+    }
+
+    @Test
+    fun atTarget_isDistinctFromOverTarget() {
+        setBanner(metrics(count = 20, limit = 20, streak = 3, progress = 1.0, spent = 5.0))
+        rule.onNodeWithText("AT TARGET").assertIsDisplayed()
     }
 
     @Test
     fun endDay_shownWhenOpenSession_firesCallback() {
         var ended = 0
         setBanner(metrics(hasOpen = true), onEndDay = { ended++ })
-        rule.onNodeWithText("END TRACKING DAY").assertIsDisplayed()
-        rule.onNodeWithText("END TRACKING DAY").performClick()
+        rule.onNodeWithText("CLOSE TRACKING DAY").assertIsDisplayed()
+        rule.onNodeWithText("CLOSE TRACKING DAY").performClick()
         assertEquals(1, ended)
     }
 
     @Test
     fun endDay_hiddenWhenNoOpenSession() {
         setBanner(metrics(hasOpen = false))
-        rule.onNodeWithText("END TRACKING DAY").assertDoesNotExist()
+        rule.onNodeWithText("CLOSE TRACKING DAY").assertDoesNotExist()
     }
 }
