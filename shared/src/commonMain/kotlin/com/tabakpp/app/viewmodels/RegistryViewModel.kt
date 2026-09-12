@@ -83,32 +83,84 @@ class RegistryViewModel(
     private val _endingDay = MutableStateFlow(false)
     val endingDay = _endingDay.asStateFlow()
 
-    // Optimistic counter overlay: pendingDelta holds in-flight inc/dec not yet
-    // folded into latestServerCounts. Display is always server + pending so a
-    // stale mid-flight snapshot cannot rewind burst taps. Sourced from
-    // TODAY's dated day doc (item 1), not the profile — there is no shared
-    // mutable "current session" bucket that could outlive a rollover.
+    // IN-FLIGHT MUTATION LEDGER (H-01 fix: parity with Web useRegistry.js)
+    // Tracks in-flight mutations explicitly by trackingDate and trackerId.
+    // Authoritative baseline is exclusively from realtime Firestore listener snapshots.
+    private data class PendingOp(
+        val id: String,
+        val trackerId: String,
+        val delta: Double,
+        val trackingDate: String,
+        var targetCount: Double,
+        var settled: Boolean = false,
+        var acknowledged: Boolean = false
+    )
+
     private val _activeCounts = MutableStateFlow<Map<String, Double>>(emptyMap())
     val activeCounts: StateFlow<Map<String, Double>> = _activeCounts.asStateFlow()
     private var latestServerCounts: Map<String, Double> = emptyMap()
-    private val pendingDelta = mutableMapOf<String, Double>()
+    private val pendingOps = mutableListOf<PendingOp>()
+    private var opSequence: Long = 0L
+
+    private fun nextOpId(): String =
+        "${Clock.System.now().toEpochMilliseconds()}_${++opSequence}"
 
     private fun publishCounterOverlay() {
-        val pending = pendingDelta.toMap()
-        if (pending.isEmpty()) {
-            _activeCounts.value = latestServerCounts
+        val server = latestServerCounts
+        val currentDay = trackingDay.value
+        val pendingByTracker = mutableMapOf<String, Double>()
+
+        for (op in pendingOps) {
+            if (op.trackingDate == currentDay && !op.acknowledged) {
+                pendingByTracker[op.trackerId] = (pendingByTracker[op.trackerId] ?: 0.0) + op.delta
+            }
+        }
+
+        val keys = server.keys + pendingByTracker.keys
+        if (keys.isEmpty()) {
+            _activeCounts.value = emptyMap()
             return
         }
-        val keys = latestServerCounts.keys + pending.keys
         _activeCounts.value = keys.associateWith { id ->
-            maxOf(0.0, (latestServerCounts[id] ?: 0.0) + (pending[id] ?: 0.0))
+            maxOf(0.0, (server[id] ?: 0.0) + (pendingByTracker[id] ?: 0.0))
         }
     }
 
-    private fun adjustPending(trackerId: String, delta: Double) {
-        val next = (pendingDelta[trackerId] ?: 0.0) + delta
-        if (kotlin.math.abs(next) < 1e-9) pendingDelta.remove(trackerId)
-        else pendingDelta[trackerId] = next
+    private fun purgeAcknowledgedOrCanceledOps() {
+        val byTracker = pendingOps.groupBy { it.trackerId }
+        val remaining = mutableListOf<PendingOp>()
+
+        for ((trackerId, list) in byTracker) {
+            val server = latestServerCounts[trackerId] ?: 0.0
+            val settledIncrements = list.filter { it.settled && it.delta > 0 && !it.acknowledged }.toMutableList()
+            val settledDecrements = list.filter { it.settled && it.delta < 0 && !it.acknowledged }.toMutableList()
+            val unacknowledgedInFlight = list.filter { !it.settled && !it.acknowledged }
+
+            // Cancel matching pairs of settled increments and decrements (net delta = 0)
+            while (settledIncrements.isNotEmpty() && settledDecrements.isNotEmpty()) {
+                settledIncrements.removeAt(settledIncrements.lastIndex)
+                settledDecrements.removeAt(settledDecrements.lastIndex)
+            }
+
+            for (op in settledIncrements) {
+                if (server >= op.targetCount) {
+                    op.acknowledged = true
+                } else {
+                    remaining.add(op)
+                }
+            }
+            for (op in settledDecrements) {
+                if (server <= op.targetCount) {
+                    op.acknowledged = true
+                } else {
+                    remaining.add(op)
+                }
+            }
+            remaining.addAll(unacknowledgedInFlight)
+        }
+
+        pendingOps.clear()
+        pendingOps.addAll(remaining)
     }
 
     // Serialize settings writes and chain off the last submitted snapshot so
@@ -146,7 +198,7 @@ class RegistryViewModel(
             authUser.collectLatest { user ->
                 if (user == null) {
                     lastSubmittedProfile = null
-                    pendingDelta.clear()
+                    pendingOps.clear()
                     latestServerCounts = emptyMap()
                     publishCounterOverlay()
                     _loading.value = false
@@ -201,11 +253,6 @@ class RegistryViewModel(
             combine(userUid, _trackingDay) { uid, day -> uid to day }
                 .distinctUntilChanged()
                 .flatMapLatest { (uid, day) ->
-                    // Reset the overlay exactly once per (uid, trackingDay) change —
-                    // a genuinely new subscription, not every snapshot the SAME
-                    // subscription emits (a mid-flight server echo must still merge
-                    // with any still-pending optimistic delta, never clear it).
-                    pendingDelta.clear()
                     latestServerCounts = emptyMap()
                     publishCounterOverlay()
                     if (uid == null) flowOf(null)
@@ -218,7 +265,30 @@ class RegistryViewModel(
                     setError(e, "Could not sync today's counts. Check your connection and try again.")
                 }
                 .collect { day ->
-                    latestServerCounts = day?.counts ?: emptyMap()
+                    val newCounts = day?.counts ?: emptyMap()
+                    latestServerCounts = newCounts
+                    val currentDay = trackingDay.value
+
+                    for (op in pendingOps) {
+                        if (op.trackingDate == currentDay && !op.acknowledged) {
+                            val currentServer = newCounts[op.trackerId] ?: 0.0
+                            if (op.delta > 0) {
+                                if (currentServer == op.targetCount) {
+                                    op.acknowledged = true
+                                } else if (currentServer > op.targetCount) {
+                                    op.targetCount = currentServer + op.delta
+                                }
+                            } else if (op.delta < 0) {
+                                if (currentServer == op.targetCount) {
+                                    op.acknowledged = true
+                                } else if (currentServer < op.targetCount) {
+                                    op.targetCount = maxOf(0.0, currentServer + op.delta)
+                                }
+                            }
+                        }
+                    }
+
+                    purgeAcknowledgedOrCanceledOps()
                     publishCounterOverlay()
                 }
         }
@@ -236,15 +306,6 @@ class RegistryViewModel(
 
         // Release the settings write-chain baseline as soon as the server echoes
         // back exactly what we last submitted.
-        //
-        // lastSubmittedProfile exists so a burst of local edits chains off the
-        // in-flight value instead of a not-yet-updated snapshot. But it was never
-        // cleared, so it pinned this device's local view forever: a settings
-        // change made on another device got silently reverted by the next edit
-        // here. Clearing it on *any* snapshot would reintroduce the burst bug (a
-        // stale snapshot could land between two rapid edits), so clear it only on
-        // a snapshot that matches our own write — that is the confirmation our
-        // value landed, after which server state is the better baseline.
         viewModelScope.launch {
             userProfile.collect { profile ->
                 val submitted = lastSubmittedProfile
@@ -284,21 +345,34 @@ class RegistryViewModel(
         val uid = authUser.value?.uid ?: return
         val trackingDate = trackingDay.value
         val price = userProfile.value?.unitPrice ?: 0.5
-        adjustPending(trackerId, 1.0)
+        val currentServer = latestServerCounts[trackerId] ?: 0.0
+
+        var expectedBase = currentServer
+        for (o in pendingOps) {
+            if (o.trackingDate == trackingDate && o.trackerId == trackerId && !o.acknowledged) {
+                expectedBase += o.delta
+            }
+        }
+
+        val op = PendingOp(
+            id = nextOpId(),
+            trackerId = trackerId,
+            delta = 1.0,
+            trackingDate = trackingDate,
+            targetCount = maxOf(0.0, expectedBase + 1.0)
+        )
+        pendingOps.add(op)
         publishCounterOverlay()
+
         viewModelScope.launch {
             try {
                 registryRepository.updateLiveCounter(uid, trackerId, 1.0, trackingDate, price)
-                // Fold this write into the local baseline so a delayed listener
-                // cannot double-count against pendingDelta.
-                latestServerCounts = latestServerCounts + (
-                    trackerId to maxOf(0.0, (latestServerCounts[trackerId] ?: 0.0) + 1.0)
-                )
-                adjustPending(trackerId, -1.0)
+                op.settled = true
+                purgeAcknowledgedOrCanceledOps()
                 publishCounterOverlay()
                 onSuccess()
             } catch (e: Exception) {
-                adjustPending(trackerId, -1.0)
+                pendingOps.removeAll { it.id == op.id }
                 publishCounterOverlay()
                 setError(e, "Could not update the counter. Try again.")
             }
@@ -314,19 +388,33 @@ class RegistryViewModel(
         if ((_activeCounts.value[trackerId] ?: 0.0) <= 0.0) return // Prevent negative counts
         val trackingDate = trackingDay.value
         val price = userProfile.value?.unitPrice ?: 0.5
+        val currentServer = latestServerCounts[trackerId] ?: 0.0
 
-        adjustPending(trackerId, -1.0)
+        var expectedBase = currentServer
+        for (o in pendingOps) {
+            if (o.trackingDate == trackingDate && o.trackerId == trackerId && !o.acknowledged) {
+                expectedBase += o.delta
+            }
+        }
+
+        val op = PendingOp(
+            id = nextOpId(),
+            trackerId = trackerId,
+            delta = -1.0,
+            trackingDate = trackingDate,
+            targetCount = maxOf(0.0, expectedBase - 1.0)
+        )
+        pendingOps.add(op)
         publishCounterOverlay()
+
         viewModelScope.launch {
             try {
                 registryRepository.updateLiveCounter(uid, trackerId, -1.0, trackingDate, price)
-                latestServerCounts = latestServerCounts + (
-                    trackerId to maxOf(0.0, (latestServerCounts[trackerId] ?: 0.0) - 1.0)
-                )
-                adjustPending(trackerId, 1.0)
+                op.settled = true
+                purgeAcknowledgedOrCanceledOps()
                 publishCounterOverlay()
             } catch (e: Exception) {
-                adjustPending(trackerId, 1.0)
+                pendingOps.removeAll { it.id == op.id }
                 publishCounterOverlay()
                 setError(e, "Could not update the counter. Try again.")
             }

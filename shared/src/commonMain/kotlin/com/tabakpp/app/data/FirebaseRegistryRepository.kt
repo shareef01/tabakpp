@@ -415,7 +415,7 @@ class FirebaseRegistryRepository(
             val credit = RegistryMutations.contribution(normalized, configs, profile.unitPrice)
             val agg = RegistryMutations.applyCredit(profile.lifetimeAggregates, credit)
             val now = Clock.System.now().toEpochMilliseconds()
-            val entropy = (0..999).random().toString().padStart(3, '0')
+            val entropy = kotlin.random.Random.nextBytes(4).joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
             val logId = "${date}_M${now}_$entropy"
 
             val logEntry = LogEntry(
@@ -604,11 +604,18 @@ class FirebaseRegistryRepository(
     override suspend fun reorderConfigs(uid: String, configId1: String, order1: Int, configId2: String, order2: Int) {
         val configsRef = firestore.collection("users").document(uid).collection("configs")
         firestore.runTransaction {
-            updateFields(configsRef.document(configId1)) {
-                "order" to order1
+            val doc1 = configsRef.document(configId1)
+            val doc2 = configsRef.document(configId2)
+            val snap1 = get(doc1)
+            val snap2 = get(doc2)
+            if (!snap1.exists || !snap2.exists) return@runTransaction
+            val o1 = snap1.data<TrackerConfig>().order
+            val o2 = snap2.data<TrackerConfig>().order
+            updateFields(doc1) {
+                "order" to o2
             }
-            updateFields(configsRef.document(configId2)) {
-                "order" to order2
+            updateFields(doc2) {
+                "order" to o1
             }
         }
     }
@@ -639,46 +646,63 @@ class FirebaseRegistryRepository(
 
     override suspend fun ensureUserDocument(uid: String, displayName: String?) {
         val ref = firestore.collection("users").document(uid)
-        val snap = ref.get()
-        if (snap.exists) return
-        ref.set(
-            UserProfile(
-                name = displayName.orEmpty(),
-                accent = "#FF5F5F",
-                widgetSize = WidgetSize.MEDIUM,
-                purchaseType = "PACK",
-                unitPrice = 0.5,
-                pouchPrice = 0.0,
-                estimatedYield = 0,
-                dayStartHour = 6,
-                lifetimeAggregates = LifetimeAggregates(),
-                smokingUnitsMigrated = true,
-                schemaVersion = CURRENT_SCHEMA_VERSION
+        firestore.runTransaction {
+            val snap = get(ref)
+            if (snap.exists) return@runTransaction
+            set(
+                ref,
+                UserProfile(
+                    name = displayName.orEmpty(),
+                    accent = "#FF5F5F",
+                    widgetSize = WidgetSize.MEDIUM,
+                    purchaseType = "PACK",
+                    unitPrice = 0.5,
+                    pouchPrice = 0.0,
+                    estimatedYield = 0,
+                    dayStartHour = 6,
+                    lifetimeAggregates = LifetimeAggregates(),
+                    smokingUnitsMigrated = true,
+                    schemaVersion = CURRENT_SCHEMA_VERSION
+                )
             )
-        )
+        }
     }
 
     override suspend fun migrateSmokingUnitsIfNeeded(uid: String) {
         val userRef = firestore.collection("users").document(uid)
-        val snap = userRef.get()
-        if (!snap.exists) return
-        val profile = snap.data<UserProfile>()
-        if (profile.smokingUnitsMigrated) return
+        var maxRetries = 2
+        while (maxRetries-- >= 0) {
+            val snap = userRef.get()
+            if (!snap.exists) return
+            val profile = snap.data<UserProfile>()
+            if (profile.smokingUnitsMigrated) return
+            val initialAggs = profile.lifetimeAggregates
 
-        val configs = getConfigsOnce(uid)
-        val logs = getAllLogsOnce(uid)
-        val units = SmokingCalculator.sumSmokingUnitsFromLogs(logs, configs)
+            val configs = getConfigsOnce(uid)
+            val logs = getAllLogsOnce(uid)
+            val units = SmokingCalculator.sumSmokingUnitsFromLogs(logs, configs)
 
-        firestore.runTransaction {
-            val live = get(userRef)
-            if (!live.exists) return@runTransaction
-            val liveProfile = live.data<UserProfile>()
-            if (liveProfile.smokingUnitsMigrated) return@runTransaction
-            val currentAggs = liveProfile.lifetimeAggregates
-            updateFields(userRef) {
-                "lifetimeAggregates" to currentAggs.copy(smokingUnits = units)
-                "smokingUnitsMigrated" to true
+            var retryNeeded = false
+            firestore.runTransaction {
+                val live = get(userRef)
+                if (!live.exists) return@runTransaction
+                val liveProfile = live.data<UserProfile>()
+                if (liveProfile.smokingUnitsMigrated) return@runTransaction
+                val currentAggs = liveProfile.lifetimeAggregates
+
+                if (currentAggs.saved != initialAggs.saved ||
+                    currentAggs.wasted != initialAggs.wasted ||
+                    currentAggs.baselineSaved != initialAggs.baselineSaved) {
+                    retryNeeded = true
+                    return@runTransaction
+                }
+
+                updateFields(userRef) {
+                    "lifetimeAggregates" to currentAggs.copy(smokingUnits = units)
+                    "smokingUnitsMigrated" to true
+                }
             }
+            if (!retryNeeded) break
         }
     }
 
@@ -700,6 +724,12 @@ class FirebaseRegistryRepository(
             }
             batch.commit()
             if (docs.size < BATCH_LIMIT) break
+        }
+    }
+
+    override suspend fun clearLocalCache() {
+        runCatching {
+            firestore.clearPersistence()
         }
     }
 }

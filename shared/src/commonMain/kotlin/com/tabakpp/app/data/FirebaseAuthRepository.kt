@@ -95,6 +95,7 @@ class FirebaseAuthRepository(
         }
 
         registryRepository.deleteAllUserData(user.uid)
+        runCatching { registryRepository.clearLocalCache() }
         var lastError: Exception? = null
         repeat(3) { attempt ->
             try {

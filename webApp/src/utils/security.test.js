@@ -4,6 +4,9 @@ import {
   sanitizeTrackerName,
   MAX_DISPLAY_NAME,
   MAX_TRACKER_NAME,
+  MAX_AVATAR_INPUT_BYTES,
+  looksLikeImage,
+  compressAvatarFile,
 } from './security';
 
 describe('sanitizeInput', () => {
@@ -26,5 +29,27 @@ describe('sanitizeInput', () => {
   it('returns empty string for non-string input', () => {
     expect(sanitizeInput(null)).toBe('');
     expect(sanitizeInput(undefined)).toBe('');
+  });
+});
+
+describe('avatar security hardening', () => {
+  it('rejects SVG files with script injection vectors', () => {
+    expect(looksLikeImage({ type: 'image/svg+xml', name: 'avatar.svg' })).toBe(false);
+    expect(looksLikeImage({ type: '', name: 'avatar.svg' })).toBe(false);
+  });
+
+  it('accepts valid raster image formats', () => {
+    expect(looksLikeImage({ type: 'image/jpeg', name: 'avatar.jpg' })).toBe(true);
+    expect(looksLikeImage({ type: 'image/png', name: 'avatar.png' })).toBe(true);
+    expect(looksLikeImage({ type: 'image/webp', name: 'avatar.webp' })).toBe(true);
+  });
+
+  it('rejects files exceeding MAX_AVATAR_INPUT_BYTES before decoding', async () => {
+    const fakeOversizedFile = {
+      type: 'image/jpeg',
+      name: 'huge.jpg',
+      size: MAX_AVATAR_INPUT_BYTES + 1,
+    };
+    await expect(compressAvatarFile(fakeOversizedFile)).rejects.toThrow('AVATAR_TOO_LARGE');
   });
 });

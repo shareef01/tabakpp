@@ -359,3 +359,169 @@ describe('useRegistry lifecycle', () => {
     expect(result.current.isOnline).toBe(true);
   });
 });
+
+describe('H-01 Concurrency & Day Rollover Invariants', () => {
+  it('Scenario A: listener snapshot arrives before mutation completes without double-counting', async () => {
+    let releaseMutation;
+    RegistryService.adjustCounter.mockImplementation(
+      () => new Promise((resolve) => { releaseMutation = resolve; })
+    );
+    const { result } = mountHydrated({ day: dayData({ cig: 5 }) });
+    expect(result.current.metrics.activeCounts.cig).toBe(5);
+
+    // User taps increment -> optimistic UI shows 6
+    let pending;
+    act(() => { pending = result.current.increment('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+
+    // Firestore listener emits server count = 6 BEFORE mutation promise resolves
+    act(() => cap.dayCb.current(dayData({ cig: 6 })));
+    // Invariant: MUST NOT double-count to 7!
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+
+    // Mutation promise finally resolves
+    await act(async () => {
+      releaseMutation();
+      await pending;
+    });
+    // Invariant: MUST remain 6!
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+  });
+
+  it('Scenario B: mutation promise resolves before snapshot without downward flicker', async () => {
+    let releaseMutation;
+    RegistryService.adjustCounter.mockImplementation(
+      () => new Promise((resolve) => { releaseMutation = resolve; })
+    );
+    const { result } = mountHydrated({ day: dayData({ cig: 5 }) });
+    expect(result.current.metrics.activeCounts.cig).toBe(5);
+
+    let pending;
+    act(() => { pending = result.current.increment('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+
+    // Mutation promise resolves BEFORE snapshot arrives
+    await act(async () => {
+      releaseMutation();
+      await pending;
+    });
+    // Invariant: MUST NOT flicker down to 5! Stays at 6!
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+
+    // Snapshot finally arrives
+    act(() => cap.dayCb.current(dayData({ cig: 6 })));
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+  });
+
+  it('Scenario C: two very fast increments before any acknowledgements', async () => {
+    const releases = [];
+    RegistryService.adjustCounter.mockImplementation(
+      () => new Promise((resolve) => { releases.push(resolve); })
+    );
+    const { result } = mountHydrated({ day: dayData({ cig: 5 }) });
+
+    let p1, p2;
+    act(() => { p1 = result.current.increment('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+    act(() => { p2 = result.current.increment('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(7);
+
+    // First snapshot arrives
+    act(() => cap.dayCb.current(dayData({ cig: 6 })));
+    expect(result.current.metrics.activeCounts.cig).toBe(7);
+
+    // Second snapshot arrives
+    act(() => cap.dayCb.current(dayData({ cig: 7 })));
+    expect(result.current.metrics.activeCounts.cig).toBe(7);
+
+    // Mutations resolve
+    await act(async () => {
+      releases.forEach((r) => r());
+      await Promise.all([p1, p2]);
+    });
+    expect(result.current.metrics.activeCounts.cig).toBe(7);
+  });
+
+  it('Scenario D: increment and decrement overlap cleanly', async () => {
+    const releases = [];
+    RegistryService.adjustCounter.mockImplementation(
+      () => new Promise((resolve) => { releases.push(resolve); })
+    );
+    const { result } = mountHydrated({ day: dayData({ cig: 5 }) });
+
+    let p1, p2;
+    act(() => { p1 = result.current.increment('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+    act(() => { p2 = result.current.decrement('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(5);
+
+    await act(async () => {
+      releases.forEach((r) => r());
+      await Promise.all([p1, p2]);
+    });
+    expect(result.current.metrics.activeCounts.cig).toBe(5);
+  });
+
+  it('Scenario F: midnight day-rollover while mutation for yesterday is in flight does not mutate today', async () => {
+    let releaseYesterday;
+    RegistryService.adjustCounter.mockImplementation(
+      () => new Promise((resolve) => { releaseYesterday = resolve; })
+    );
+    const TOMORROW = '2026-07-21';
+    const { result, rerender } = renderHook(
+      (props) => useRegistry(props.user, props.today, 0.5),
+      { initialProps: { user: USER, today: TODAY } }
+    );
+    act(() => cap.profileCb.current(profileSnap(defaultProfile())));
+    act(() => cap.configsCb.current([CIG]));
+    act(() => cap.logsCb.current([]));
+    act(() => cap.daysCb.current([]));
+    act(() => cap.dayCb.current(dayData({ cig: 5 })));
+    act(() => cap.avatarCb.current({ avatar: null }));
+
+    expect(result.current.metrics.activeCounts.cig).toBe(5);
+
+    // User taps increment at 23:59:59 for yesterday
+    let pendingYesterday;
+    act(() => { pendingYesterday = result.current.increment('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+
+    // Wall-clock midnight arrives -> today changes to TOMORROW
+    act(() => {
+      rerender({ user: USER, today: TOMORROW });
+    });
+    // Attach listener for TOMORROW (starts empty / 0)
+    act(() => {
+      cap.dayCb.current({ date: TOMORROW, counts: {}, trackerSnapshots: {}, status: 'open' });
+    });
+
+    // Invariant: Today MUST be 0! Yesterday's pending operation must NOT infect today!
+    expect(result.current.metrics.activeCounts.cig || 0).toBe(0);
+
+    // Yesterday's mutation finishes afterward
+    await act(async () => {
+      releaseYesterday();
+      await pendingYesterday;
+    });
+
+    // Invariant: Today MUST STILL be 0! Not mutated by yesterday's resolved operation!
+    expect(result.current.metrics.activeCounts.cig || 0).toBe(0);
+  });
+
+  it('Scenario H: mutation failure cleanly rolls back display', async () => {
+    RegistryService.adjustCounter.mockRejectedValueOnce(new Error('Network error'));
+    const { result } = mountHydrated({ day: dayData({ cig: 5 }) });
+    expect(result.current.metrics.activeCounts.cig).toBe(5);
+
+    let failed = false;
+    await act(async () => {
+      try {
+        await result.current.increment('cig');
+      } catch {
+        failed = true;
+      }
+    });
+    expect(failed).toBe(true);
+    expect(result.current.metrics.activeCounts.cig).toBe(5);
+  });
+});
