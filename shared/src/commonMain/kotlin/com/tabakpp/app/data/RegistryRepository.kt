@@ -84,4 +84,7 @@ interface RegistryRepository {
 
     /** Spark-safe wipe of users/{uid} + configs + logs + days + meta (Auth deleteUser is separate). */
     suspend fun deleteAllUserData(uid: String)
+
+    /** Clears local cache/persistence post account deletion (M-04). */
+    suspend fun clearLocalCache()
 }

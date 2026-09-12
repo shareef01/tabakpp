@@ -41,9 +41,14 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   const [loading, setLoading] = useState(!!user);
   const [isEndingDay, setIsEndingDay] = useState(false);
   const [registryError, setRegistryError] = useState(null);
-  /** Optimistic overlay: display = server + pendingDelta (Android RegistryViewModel parity). */
+  /**
+   * IN-FLIGHT MUTATION LEDGER (H-01 fix)
+   * Tracks pending mutations with explicit date and tracker association.
+   * Authoritative server baseline comes exclusively from Firestore onSnapshot.
+   * Operations for day A can never contaminate day B's baseline.
+   */
   const latestServerCountsRef = useRef({});
-  const pendingDeltaRef = useRef({});
+  const pendingOpsRef = useRef([]);
   const activeCountsRef = useRef(activeCounts);
   activeCountsRef.current = activeCounts;
   const isEndingDayRef = useRef(isEndingDay);
@@ -52,24 +57,27 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   todayRef.current = today;
 
   const publishCounterOverlay = useCallback(() => {
-    const pending = pendingDeltaRef.current;
     const server = latestServerCountsRef.current || {};
-    const keys = new Set([...Object.keys(server), ...Object.keys(pending)]);
+    const currentToday = todayRef.current;
+    const pendingByTracker = {};
+
+    // Only unabsorbed operations belonging to currentToday contribute to current active counts
+    for (const op of pendingOpsRef.current) {
+      if (op.trackingDate === currentToday && !op.acknowledged) {
+        pendingByTracker[op.trackerId] = (pendingByTracker[op.trackerId] || 0) + op.delta;
+      }
+    }
+
+    const keys = new Set([...Object.keys(server), ...Object.keys(pendingByTracker)]);
     if (keys.size === 0) {
       setActiveCounts({});
       return;
     }
     const next = {};
     keys.forEach((id) => {
-      next[id] = Math.max(0, (server[id] || 0) + (pending[id] || 0));
+      next[id] = Math.max(0, (server[id] || 0) + (pendingByTracker[id] || 0));
     });
     setActiveCounts(next);
-  }, []);
-
-  const adjustPending = useCallback((id, delta) => {
-    const next = (pendingDeltaRef.current[id] || 0) + delta;
-    if (Math.abs(next) < 1e-9) delete pendingDeltaRef.current[id];
-    else pendingDeltaRef.current[id] = next;
   }, []);
 
   useEffect(() => {
@@ -96,7 +104,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       setLifetimeAggregates(cleared.lifetimeAggregates);
       setProfileSettings(cleared.profileSettings);
       setAvatar(cleared.avatar);
-      pendingDeltaRef.current = {};
+      pendingOpsRef.current = [];
       latestServerCountsRef.current = {};
       setLoading(false);
       setRegistryError(null);
@@ -114,7 +122,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     setLoading(true);
     setRegistryError(null);
     latestServerCountsRef.current = {};
-    pendingDeltaRef.current = {};
+    pendingOpsRef.current = [];
 
     const onListenerError = (err) => {
       console.error('[REGISTRY] listener error', err);
@@ -222,14 +230,92 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   // effect tears down the old subscription and attaches a fresh one to the
   // new date's doc, which starts empty until the first tap creates it. There
   // is nothing to "reset" — the previous date's doc simply stops changing.
+  const opSeqRef = useRef(0);
+  const nextOpId = useCallback(() => `${Date.now()}_${++opSeqRef.current}_${Math.random().toString(36).slice(2, 7)}`, []);
+
+  const purgeAcknowledgedOrCanceledOps = useCallback(() => {
+    const byTracker = {};
+    for (const op of pendingOpsRef.current) {
+      if (!byTracker[op.trackerId]) byTracker[op.trackerId] = [];
+      byTracker[op.trackerId].push(op);
+    }
+
+    const remaining = [];
+    for (const trackerId of Object.keys(byTracker)) {
+      const list = byTracker[trackerId];
+      const server = latestServerCountsRef.current[trackerId] || 0;
+
+      let settledIncrements = list.filter((o) => o.settled && o.delta > 0 && !o.acknowledged);
+      let settledDecrements = list.filter((o) => o.settled && o.delta < 0 && !o.acknowledged);
+      const unacknowledgedInFlight = list.filter((o) => !o.settled && !o.acknowledged);
+
+      // Cancel matching pairs of settled increments and decrements (net delta = 0)
+      while (settledIncrements.length > 0 && settledDecrements.length > 0) {
+        settledIncrements.pop();
+        settledDecrements.pop();
+      }
+
+      // Check remaining settled increments against server count
+      for (const op of settledIncrements) {
+        if (server >= op.targetCount) {
+          op.acknowledged = true;
+        } else {
+          remaining.push(op);
+        }
+      }
+      // Check remaining settled decrements against server count
+      for (const op of settledDecrements) {
+        if (server <= op.targetCount) {
+          op.acknowledged = true;
+        } else {
+          remaining.push(op);
+        }
+      }
+
+      for (const op of unacknowledgedInFlight) {
+        remaining.push(op);
+      }
+    }
+
+    pendingOpsRef.current = remaining;
+  }, []);
+
+  // Live "today" bucket — the dated day doc `today` currently points at. This
+  // is the entire fix for item 1: `today` is recomputed independently of this
+  // effect (in App.jsx, from wall-clock time), and whenever it changes this
+  // effect tears down the old subscription and attaches a fresh one to the
+  // new date's doc, which starts empty until the first tap creates it. There
+  // is nothing to "reset" — the previous date's doc simply stops changing.
   useEffect(() => {
     if (!user || !today) return undefined;
     latestServerCountsRef.current = {};
-    pendingDeltaRef.current = {};
     publishCounterOverlay();
 
     const unsub = RegistryService.subscribeToDay(user.uid, today, (dayData) => {
-      latestServerCountsRef.current = dayData?.counts || {};
+      const newCounts = dayData?.counts || {};
+      latestServerCountsRef.current = newCounts;
+
+      // Reconcile pending operations against the updated server counts
+      for (const op of pendingOpsRef.current) {
+        if (op.trackingDate === today && !op.acknowledged) {
+          const currentServer = newCounts[op.trackerId] || 0;
+          if (op.delta > 0) {
+            if (currentServer === op.targetCount) {
+              op.acknowledged = true;
+            } else if (currentServer > op.targetCount) {
+              op.targetCount = currentServer + op.delta;
+            }
+          } else if (op.delta < 0) {
+            if (currentServer === op.targetCount) {
+              op.acknowledged = true;
+            } else if (currentServer < op.targetCount) {
+              op.targetCount = Math.max(0, currentServer + op.delta);
+            }
+          }
+        }
+      }
+
+      purgeAcknowledgedOrCanceledOps();
       publishCounterOverlay();
     }, (err) => console.error('[REGISTRY] day listener error', err));
 
@@ -239,7 +325,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     RegistryService.reconcileStaleDays(user.uid, today).catch(() => { /* best-effort */ });
 
     return () => unsub();
-  }, [user?.uid, today, publishCounterOverlay]);
+  }, [user?.uid, today, publishCounterOverlay, purgeAcknowledgedOrCanceledOps]);
 
   const avatarValue = avatar ?? profileSettings?.legacyAvatar ?? null;
   const effectiveUnitPrice = profileSettings?.unitPrice ?? unitPrice;
@@ -275,48 +361,74 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   const increment = useCallback(async (id) => {
     if (!user) return;
     const trackingDate = todayRef.current;
-    adjustPending(id, 1);
+    const currentServer = latestServerCountsRef.current[id] || 0;
+    let expectedBase = currentServer;
+    for (const o of pendingOpsRef.current) {
+      if (o.trackingDate === trackingDate && o.trackerId === id && !o.acknowledged) {
+        expectedBase += o.delta;
+      }
+    }
+    const op = {
+      id: nextOpId(),
+      trackerId: id,
+      delta: 1,
+      trackingDate,
+      targetCount: Math.max(0, expectedBase + 1),
+      settled: false,
+      acknowledged: false,
+    };
+    pendingOpsRef.current.push(op);
     publishCounterOverlay();
     try {
       await runMutation(
         () => RegistryService.adjustCounter(user.uid, id, 1, trackingDate, effectiveUnitPrice),
         'Could not update counter.'
       );
-      latestServerCountsRef.current = {
-        ...latestServerCountsRef.current,
-        [id]: Math.max(0, (latestServerCountsRef.current[id] || 0) + 1),
-      };
-      adjustPending(id, -1);
+      op.settled = true;
+      purgeAcknowledgedOrCanceledOps();
       publishCounterOverlay();
     } catch (e) {
-      adjustPending(id, -1);
+      pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.id !== op.id);
       publishCounterOverlay();
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, adjustPending, publishCounterOverlay]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps]);
 
   const decrement = useCallback(async (id) => {
     if (!user || (activeCountsRef.current[id] || 0) <= 0) return;
     const trackingDate = todayRef.current;
-    adjustPending(id, -1);
+    const currentServer = latestServerCountsRef.current[id] || 0;
+    let expectedBase = currentServer;
+    for (const o of pendingOpsRef.current) {
+      if (o.trackingDate === trackingDate && o.trackerId === id && !o.acknowledged) {
+        expectedBase += o.delta;
+      }
+    }
+    const op = {
+      id: nextOpId(),
+      trackerId: id,
+      delta: -1,
+      trackingDate,
+      targetCount: Math.max(0, expectedBase - 1),
+      settled: false,
+      acknowledged: false,
+    };
+    pendingOpsRef.current.push(op);
     publishCounterOverlay();
     try {
       await runMutation(
         () => RegistryService.adjustCounter(user.uid, id, -1, trackingDate, effectiveUnitPrice),
         'Could not update counter.'
       );
-      latestServerCountsRef.current = {
-        ...latestServerCountsRef.current,
-        [id]: Math.max(0, (latestServerCountsRef.current[id] || 0) - 1),
-      };
-      adjustPending(id, 1);
+      op.settled = true;
+      purgeAcknowledgedOrCanceledOps();
       publishCounterOverlay();
     } catch (e) {
-      adjustPending(id, 1);
+      pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.id !== op.id);
       publishCounterOverlay();
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, adjustPending, publishCounterOverlay]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps]);
 
   /**
    * "Close day" — a UX affordance only (see registryService.closeDay). It

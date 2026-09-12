@@ -40,9 +40,15 @@ export const sanitizeString = sanitizeInput;
 /** Tracker/counter name — 80 chars to match firestore.rules validConfig. */
 export const sanitizeTrackerName = (str) => sanitizeInput(str, MAX_TRACKER_NAME);
 
-const looksLikeImage = (file) => {
+/** Pre-decode file size limit (10MB) to protect against decompression memory exhaustion. */
+export const MAX_AVATAR_INPUT_BYTES = 10 * 1024 * 1024;
+/** Maximum allowed decoded dimension (8192px) to prevent decompression bombs. */
+export const MAX_DECODED_DIMENSION = 8192;
+
+export const looksLikeImage = (file) => {
   const type = (file.type || '').toLowerCase();
   const name = (file.name || '').toLowerCase();
+  if (type === 'image/svg+xml' || /\.svg$/i.test(name)) return false;
   return (
     type.startsWith('image/') ||
     !type ||
@@ -65,6 +71,9 @@ const drawScaled = (source, maxSide) => {
   const sw = source.width || source.videoWidth || 0;
   const sh = source.height || source.videoHeight || 0;
   if (!sw || !sh) throw new Error('DECODE_FAILED');
+  if (sw > MAX_DECODED_DIMENSION || sh > MAX_DECODED_DIMENSION) {
+    throw new Error('IMAGE_TOO_LARGE');
+  }
   const scale = Math.min(1, maxSide / Math.max(sw, sh));
   const w = Math.max(1, Math.round(sw * scale));
   const h = Math.max(1, Math.round(sh * scale));
@@ -134,6 +143,10 @@ export const compressAvatarFile = async (file, opts = {}) => {
 
   if (!file || !looksLikeImage(file)) {
     throw new Error('INVALID_IMAGE');
+  }
+
+  if (file.size > MAX_AVATAR_INPUT_BYTES) {
+    throw new Error('AVATAR_TOO_LARGE');
   }
 
   const encodeSource = (source) => {

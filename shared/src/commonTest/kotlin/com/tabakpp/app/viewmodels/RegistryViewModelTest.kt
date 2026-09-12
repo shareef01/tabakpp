@@ -113,6 +113,7 @@ private class FakeRegistryRepository : RegistryRepository {
     override suspend fun ensureUserDocument(uid: String, displayName: String?) {}
     override suspend fun migrateSmokingUnitsIfNeeded(uid: String) {}
     override suspend fun deleteAllUserData(uid: String) { maybeFail() }
+    override suspend fun clearLocalCache() { maybeFail() }
 }
 
 private class FakeLocalSettings : LocalSettings {
@@ -416,5 +417,128 @@ class RegistryViewModelTest {
         vm.updateProfile { it.copy(accent = "#000000") }
         scheduler.runCurrent()
         assertTrue(reg.profileSettingsCalls.isEmpty())
+    }
+
+    @Test
+    fun scenarioA_snapshotArrivesBeforeMutationCompletes_doesNotDoubleCount() {
+        val (vm, reg) = build()
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
+        scheduler.runCurrent()
+        assertEquals(5.0, vm.activeCounts.value["cig"])
+
+        // In-flight mutation gate
+        val gate = CompletableDeferred<Unit>()
+        reg.liveCounterGate = gate
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        // Optimistic display shows 6.0
+        assertEquals(6.0, vm.activeCounts.value["cig"])
+
+        // Snapshot arrives with 6.0 BEFORE mutation completes
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 6.0))
+        scheduler.runCurrent()
+        // MUST NOT double-count to 7.0!
+        assertEquals(6.0, vm.activeCounts.value["cig"])
+
+        // Mutation completes
+        gate.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(6.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun scenarioB_mutationCompletesBeforeSnapshot_doesNotDownwardFlicker() {
+        val (vm, reg) = build()
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
+        scheduler.runCurrent()
+        assertEquals(5.0, vm.activeCounts.value["cig"])
+
+        val gate = CompletableDeferred<Unit>()
+        reg.liveCounterGate = gate
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(6.0, vm.activeCounts.value["cig"])
+
+        // Mutation resolves while server snapshot is still 5.0
+        gate.complete(Unit)
+        scheduler.runCurrent()
+        // MUST NOT flicker down to 5.0!
+        assertEquals(6.0, vm.activeCounts.value["cig"])
+
+        // Snapshot arrives with 6.0
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 6.0))
+        scheduler.runCurrent()
+        assertEquals(6.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun scenarioC_twoFastIncrementsBeforeAcknowledgement() {
+        val (vm, reg) = build()
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
+        scheduler.runCurrent()
+
+        val gate = CompletableDeferred<Unit>()
+        reg.liveCounterGate = gate
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(6.0, vm.activeCounts.value["cig"])
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(7.0, vm.activeCounts.value["cig"])
+
+        // Snapshot 1 arrives
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 6.0))
+        scheduler.runCurrent()
+        assertEquals(7.0, vm.activeCounts.value["cig"])
+
+        // Snapshot 2 arrives
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 7.0))
+        scheduler.runCurrent()
+        assertEquals(7.0, vm.activeCounts.value["cig"])
+
+        gate.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(7.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun scenarioD_overlappingIncrementAndDecrement() {
+        val (vm, reg) = build()
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
+        scheduler.runCurrent()
+
+        val gate = CompletableDeferred<Unit>()
+        reg.liveCounterGate = gate
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(6.0, vm.activeCounts.value["cig"])
+
+        vm.decrement("cig")
+        scheduler.runCurrent()
+        assertEquals(5.0, vm.activeCounts.value["cig"])
+
+        gate.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(5.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun scenarioH_mutationFailureCleanlyRollsBack() {
+        val (vm, reg) = build()
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
+        scheduler.runCurrent()
+
+        reg.failWith = Exception("Mutation denied")
+        vm.increment("cig")
+        scheduler.runCurrent()
+
+        // Rolled back to 5.0
+        assertEquals(5.0, vm.activeCounts.value["cig"])
+        assertNotNull(vm.error.value)
     }
 }

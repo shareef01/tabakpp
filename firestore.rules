@@ -49,7 +49,7 @@ service cloud.firestore {
     }
 
     function isDateString(v) {
-      return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+      return v is string && v.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
     }
 
     function validLifetimeAggregates(a) {
@@ -76,7 +76,7 @@ service cloud.firestore {
     // Dynamic tracker ids — bound size, keys, and each numeric value (matches
     // InputSanitizer.counts). Rules forbid recursion, so lists are unrolled.
     function validCountValue(v) {
-      return isNumber(v) && v >= 0 && v <= 10000;
+      return isWholeNumber(v) && v >= 0 && v <= 10000;
     }
 
     function validCountKey(k) {
@@ -170,8 +170,8 @@ service cloud.firestore {
     function validSnapshotValue(v) {
       return v is map
         && v.size() <= 7
-        && (!('target' in v) || (isNumber(v.target) && v.target >= 0 && v.target <= 10000))
-        && (!('baseline' in v) || v.baseline == null || (isNumber(v.baseline) && v.baseline >= 0 && v.baseline <= 10000))
+        && (!('target' in v) || (isWholeNumber(v.target) && v.target >= 0 && v.target <= 10000))
+        && (!('baseline' in v) || v.baseline == null || (isWholeNumber(v.baseline) && v.baseline >= 0 && v.baseline <= 10000))
         && (!('unitPrice' in v) || v.unitPrice == null || (isNumber(v.unitPrice) && v.unitPrice >= 0 && v.unitPrice <= 1000));
     }
 
@@ -370,8 +370,7 @@ service cloud.firestore {
           'isArchive', 'isManual', 'aggregateCredit'
         ])
         && d.keys().hasAll(['logDate', 'counts'])
-        && d.logDate is string
-        && d.logDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && isDateString(d.logDate)
         && validCountMap(d.counts)
         && (!('origin' in d) || d.origin in ['DAY_RESET', 'MANUAL_ENTRY'])
         && (!('isArchive' in d) || d.isArchive is bool)

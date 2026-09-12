@@ -154,16 +154,19 @@ describe('Firestore ownership and write paths', () => {
 
     const db = testEnv.authenticatedContext('alice').firestore();
     await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
-      activeCounts: { cig: 3, ryo: 1.5 },
+      activeCounts: { cig: 3, ryo: 2 },
     }));
   });
 
-  it('rejects out-of-range or non-numeric count map values', async () => {
+  it('rejects out-of-range, fractional, or non-numeric count map values', async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
     });
 
     const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(updateDoc(doc(db, 'users/alice'), {
+      activeCounts: { cig: 1.5 },
+    }));
     await assertFails(updateDoc(doc(db, 'users/alice'), {
       activeCounts: { cig: -1 },
     }));
@@ -393,6 +396,8 @@ describe('users/{uid}/days/{date} — dated daily-document model (items 1, 2, 13
   it('rejects a malformed date, an oversized snapshot map, or extra keys', async () => {
     const db = await seedAlice();
     await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...openDay, date: 'not-a-date' }));
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-13-01'), { ...openDay, date: '2026-13-01' }));
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-02-32'), { ...openDay, date: '2026-02-32' }));
     await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...openDay, somethingElse: true }));
 
     const oversizedSnapshots = Object.fromEntries(
@@ -400,6 +405,21 @@ describe('users/{uid}/days/{date} — dated daily-document model (items 1, 2, 13
     );
     await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), {
       ...openDay, trackerSnapshots: oversizedSnapshots,
+    }));
+  });
+
+  it('rejects fractional counts and fractional snapshot targets in day documents', async () => {
+    const db = await seedAlice();
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay, counts: { cig: 2.5 },
+    }));
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay,
+      trackerSnapshots: { cig: { ...openDay.trackerSnapshots.cig, target: 10.5 } },
+    }));
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay,
+      trackerSnapshots: { cig: { ...openDay.trackerSnapshots.cig, baseline: 8.2 } },
     }));
   });
 });

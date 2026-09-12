@@ -204,36 +204,45 @@ export const RegistryService = {
   },
 
   reorderConfigs: async (uid, c1, c2) => {
-    const b = writeBatch(db);
-    b.update(doc(db, 'users', uid, 'configs', c1.id), { order: c2.order });
-    b.update(doc(db, 'users', uid, 'configs', c2.id), { order: c1.order });
-    return b.commit();
+    return runTransaction(db, async (transaction) => {
+      const ref1 = doc(db, 'users', uid, 'configs', c1.id);
+      const ref2 = doc(db, 'users', uid, 'configs', c2.id);
+      const snap1 = await transaction.get(ref1);
+      const snap2 = await transaction.get(ref2);
+      if (!snap1.exists() || !snap2.exists()) return;
+      const o1 = snap1.data().order;
+      const o2 = snap2.data().order;
+      transaction.update(ref1, { order: o2 });
+      transaction.update(ref2, { order: o1 });
+    });
   },
 
   // --- PROFILE BOOTSTRAP ---
 
   /**
-   * Creates a default user doc only when missing — never overwrites
-   * existing counters/aggregates. New accounts are created directly on the
-   * current schema (no `activeCounts`, no migration ever needed for them).
+   * Creates a default user doc transactionally only when missing — never overwrites
+   * existing counters/aggregates even under concurrent sign-ins (M-05 fix).
+   * New accounts are created directly on the current schema.
    */
   ensureUserDocument: async (uid, { name = '', accent = '#FF5F5F' } = {}) => {
     if (!uid) throw new Error('INVALID_REF');
     const ref = doc(db, 'users', uid);
-    const snap = await getDoc(ref);
-    if (snap.exists()) return;
-    await setDoc(ref, {
-      name: name || '',
-      accent: accent || '#FF5F5F',
-      widgetSize: 'MEDIUM',
-      purchaseType: 'PACK',
-      unitPrice: 0.5,
-      pouchPrice: 0,
-      estimatedYield: 0,
-      dayStartHour: 6,
-      lifetimeAggregates: emptyAggregates(),
-      smokingUnitsMigrated: true,
-      schemaVersion: CURRENT_SCHEMA_VERSION,
+    return runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(ref);
+      if (snap.exists()) return;
+      transaction.set(ref, {
+        name: name || '',
+        accent: accent || '#FF5F5F',
+        widgetSize: 'MEDIUM',
+        purchaseType: 'PACK',
+        unitPrice: 0.5,
+        pouchPrice: 0,
+        estimatedYield: 0,
+        dayStartHour: 6,
+        lifetimeAggregates: emptyAggregates(),
+        smokingUnitsMigrated: true,
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+      });
     });
   },
 
@@ -257,33 +266,54 @@ export const RegistryService = {
 
   /**
    * One-shot: compute smokingUnits from full log history if not yet migrated.
-   * Keeps life-lost accurate beyond the live log subscription window.
+   * Concurrency-safe (H-02 fix): guards against concurrent log mutations while scanning
+   * outside the transaction, retrying if source totals shifted before commit.
    */
-  migrateSmokingUnitsIfNeeded: async (uid) => {
+  migrateSmokingUnitsIfNeeded: async (uid, maxRetries = 2) => {
     if (!uid) return;
     const userRef = doc(db, 'users', uid);
-    const snap = await getDoc(userRef);
-    if (!snap.exists() || snap.data().smokingUnitsMigrated) return;
 
-    const configs = await getConfigsOnce(uid);
-    const logs = await getAllLogs(uid);
-    const units = SmokingCalculator.sumSmokingUnitsFromLogs(logs, configs);
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const snap = await getDoc(userRef);
+      if (!snap.exists() || snap.data().smokingUnitsMigrated) return;
+      const initialAggs = snap.data().lifetimeAggregates || emptyAggregates();
 
-    await runTransaction(db, async (transaction) => {
-      const live = await transaction.get(userRef);
-      if (!live.exists() || live.data().smokingUnitsMigrated) return;
-      const liveData = live.data();
-      const liveAggs = liveData.lifetimeAggregates || emptyAggregates();
-      transaction.update(userRef, {
-        lifetimeAggregates: {
-          saved: Number(liveAggs.saved || 0),
-          wasted: Number(liveAggs.wasted || 0),
-          smokingUnits: units,
-          baselineSaved: Number(liveAggs.baselineSaved || 0),
-        },
-        smokingUnitsMigrated: true
+      const configs = await getConfigsOnce(uid);
+      const logs = await getAllLogs(uid);
+      const units = SmokingCalculator.sumSmokingUnitsFromLogs(logs, configs);
+
+      let retryNeeded = false;
+      await runTransaction(db, async (transaction) => {
+        const live = await transaction.get(userRef);
+        if (!live.exists() || live.data().smokingUnitsMigrated) return;
+        const liveData = live.data();
+        const liveAggs = liveData.lifetimeAggregates || emptyAggregates();
+
+        // Concurrency check: If lifetimeAggregates (saved/wasted/baselineSaved) shifted
+        // while we scanned logs outside the transaction, a concurrent mutation happened.
+        // We must not commit stale smokingUnits; abort and retry with fresh logs.
+        if (
+          Number(liveAggs.saved || 0) !== Number(initialAggs.saved || 0) ||
+          Number(liveAggs.wasted || 0) !== Number(initialAggs.wasted || 0) ||
+          Number(liveAggs.baselineSaved || 0) !== Number(initialAggs.baselineSaved || 0)
+        ) {
+          retryNeeded = true;
+          return;
+        }
+
+        transaction.update(userRef, {
+          lifetimeAggregates: {
+            saved: Number(liveAggs.saved || 0),
+            wasted: Number(liveAggs.wasted || 0),
+            smokingUnits: units,
+            baselineSaved: Number(liveAggs.baselineSaved || 0),
+          },
+          smokingUnitsMigrated: true
+        });
       });
-    });
+
+      if (!retryNeeded) break;
+    }
   },
 
   /**
@@ -657,15 +687,19 @@ export const RegistryService = {
   },
 
   /**
-   * One-shot cursor page of logs older than the live subscription window
-   * (item 14 — real pagination instead of assuming the 1,200 cap means
-   * truncation). `hasMore` is derived from an actual full page being
-   * returned, not a hardcoded count.
+   * One-shot cursor page of logs older than the live subscription window.
+   * Supports deterministic pagination (M-02 fix) via document snapshot cursor
+   * `cursorLogId` or legacy date cursor.
    */
-  fetchOlderLogs: async (uid, { cursorLogDate, pageSize = 200 } = {}) => {
+  fetchOlderLogs: async (uid, { cursorLogDate, cursorLogId, pageSize = 200 } = {}) => {
     if (!uid) return { items: [], hasMore: false };
     let q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), limit(pageSize));
-    if (cursorLogDate) {
+    if (cursorLogId) {
+      const cursorSnap = await getDoc(doc(db, 'users', uid, 'logs', cursorLogId));
+      if (cursorSnap.exists()) {
+        q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), startAfter(cursorSnap), limit(pageSize));
+      }
+    } else if (cursorLogDate) {
       const cursorDocs = await getDocs(
         query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), where('logDate', '==', cursorLogDate), limit(1))
       );
@@ -675,7 +709,13 @@ export const RegistryService = {
     }
     const snap = await getDocs(q);
     const items = snap.docs.map(withDocId);
-    return { items, hasMore: items.length === pageSize, nextCursor: items.length ? items[items.length - 1].logDate : null };
+    const lastItem = items.length ? items[items.length - 1] : null;
+    return {
+      items,
+      hasMore: items.length === pageSize,
+      nextCursor: lastItem ? lastItem.logDate : null,
+      nextCursorDocId: lastItem ? lastItem.id : null,
+    };
   },
 
   /**
@@ -802,7 +842,9 @@ export const RegistryService = {
     const userRef = doc(db, 'users', uid);
     const normalized = normalizeCounts(counts);
     const now = Date.now();
-    const entropy = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+    const entropy = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
     const logId = `${date}_M${now}_${entropy}`;
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const configIds = await listConfigIds(uid);
