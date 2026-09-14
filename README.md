@@ -126,11 +126,18 @@ users/{uid}/meta/profile           avatar — kept off the profile document so
                                     along on every counter tap
 ```
 
-Historical days are immutable at the rules level once closed: `firestore.rules`
-rejects any write that would change a closed day's stamped tracker snapshot,
-so raising or lowering a tracker's target today can never retroactively
-change whether an old day was a success, and repricing a tracker can never
-rewrite what an old day cost. Money saved and reduction are always computed
+Historical days are anchored at the rules level once closed: `firestore.rules`
+(`validDayUpdate`, line 433) rejects any write that would change a closed day's
+stamped `trackerSnapshots`, so raising or lowering a tracker's target today
+can never retroactively change whether an old day was a success, and repricing
+a tracker can never rewrite what an old day cost. `status`, `date`,
+`foldedIntoLifetime`, and `legacyMigrationApplied` are also one-way or
+identity-locked on closed days. `counts` and `aggregateCredit` remain writable
+by the authenticated owner — the Firestore rules validate shape and bounds but
+do not restrict writes to the application-layer `updateHistoricalDay` path.
+That application path additionally reconciles `lifetimeAggregates` on the user
+profile by the delta; a direct Firestore write can bypass that reconciliation.
+Money saved and reduction are always computed
 against a tracker's **baseline** (an optional, separate "previous average"
 field), never against its target — hitting a goal and reducing from a
 personal baseline are different claims and are never conflated.
@@ -152,13 +159,14 @@ flowchart LR
   Rules --> Owner["request.auth.uid == userId"]
   Rules --> Split["Settings vs mutation<br/>write-path split"]
   Rules --> Shape["Schema + bounds<br/>on profile · configs · days · logs · meta"]
-  Rules --> Frozen["Closed days: historical<br/>snapshot is immutable"]
+  Rules --> Frozen["Closed days: trackerSnapshots frozen;<br/>status one-way open→closed"]
+  Rules --> Writability["Closed days: counts/aggregateCredit<br/>writable by owner (rules-validated);<br/>updateHistoricalDay reconciles lifetimeAggs"]
   Rules --> Deny["Default deny<br/>/{document=**}"]
 
   AC["App Check<br/>integrated · not enforced"] -. advisory .-> Auth
 ```
 
-Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing; once a `days/{date}` document is closed, its stamped tracker snapshot can never be rewritten. Every write path is covered by rules tests run against the real Firestore emulator in CI. As a client-side self-tracking app on Firebase Spark tier (without Cloud Functions re-verifying every increment), Firestore Security Rules are the primary authorization and validation boundary protecting cross-user isolation.
+Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing; once a `days/{date}` document is closed, its stamped `trackerSnapshots` can never be rewritten (while `counts` and `aggregateCredit` remain writable by the authenticated owner — subject only to Firestore rule shape/bounds validation, and reconciled with `lifetimeAggregates` only when written through the application-layer `updateHistoricalDay` path). Every write path is covered by rules tests run against the real Firestore emulator in CI. As a client-side self-tracking app on Firebase Spark tier (without Cloud Functions re-verifying every increment), Firestore Security Rules are the primary authorization and validation boundary protecting cross-user isolation.
 
 **On App Check:** integrated on both clients (reCAPTCHA Enterprise on web, debug provider on Android) with enforcement **deliberately off**, so it is advisory rather than part of the security boundary.
 
