@@ -19,9 +19,13 @@ rules_version = '2';
 //   users/{uid}/days/{YYYY-MM-DD}  THE fix for item 1: every count always
 //     belongs to an explicit tracking date decided at write time, never to a
 //     dateless mutable bucket. Also carries a per-tracker historical
-//     `trackerSnapshots` stamp (item 2) so editing/deleting/repricing a
-//     tracker later can never change what an old day meant. Immutable once
-//     `status == 'closed'` (see validDayUpdate).
+//     trackerSnapshots stamp (item 2) so editing/deleting/repricing a
+//     tracker later can never change what an old day meant. On a closed day,
+//     rules freeze `trackerSnapshots`, `status`, `date`,
+//     `foldedIntoLifetime`, and `legacyMigrationApplied` (see validDayUpdate,
+//     line 433). `counts` and `aggregateCredit` remain writable by the
+//     authenticated owner — the application-layer `updateHistoricalDay`
+//     path additionally reconciles `lifetimeAggregates`.
 //   users/{uid}/logs/{id}          legacy ledger: manual backfill entries
 //     (still written here) and pre-migration day archives (`{date}_DAY`,
 //     no longer created by updated clients, but still readable).
