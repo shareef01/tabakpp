@@ -42,8 +42,9 @@ LOCAL_ACTION_RE = re.compile(r'^\./')
 DOCKER_ACTION_RE = re.compile(r'^docker://.+$')
 
 # Reusable workflow: owner/repo/.github/workflows/name.yml@ref
-# Also includes the nested path case: owner/repo/path/to/action@ref
-REUSABLE_WORKFLOW_RE = re.compile(r'^[^/@]+/[^/@]+/.github/workflows/[^/@]+@.+')
+# Also handles nested workflow paths: owner/repo/.github/workflows/sub/dir/ci.yml@ref
+# The workflow path segment after workflows/ can contain subdirectory separators
+REUSABLE_WORKFLOW_RE = re.compile(r'^[^/@]+/[^/@]+/.github/workflows/[^@]+@')
 
 # Standard GitHub Action: owner/repo/action-name@ref or owner/repo@ref
 # The ref is everything after the last @
@@ -159,15 +160,12 @@ def parse_uses_ref(ref_str):
 
     # Standard GitHub Action: owner/repo/action-name@ref
     # or owner/repo@ref
+    # or owner/repo/some/deep/action/path@ref (nested actions)
+    # In all cases, the repo is owner/repo (first two segments)
     parts = repo_and_action.split("/")
-    if len(parts) == 3:
-        # owner/repo/action-name@ref
+    if len(parts) >= 2:
         repo = "/".join(parts[:2])
-    elif len(parts) == 2:
-        # owner/repo@ref (rare — no action subpath)
-        repo = repo_and_action
     else:
-        # Unrecognized multi-segment path
         return None, None, "malformed", ref_str
 
     return repo, ref, "action", ref_str

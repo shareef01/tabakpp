@@ -18,13 +18,17 @@ import sys
 import textwrap
 
 # Import the validator's functions
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
-from validate_action_pins import (
-    IMMUTABLE_SHA_RE,
-    parse_uses_ref,
-    check_ref,
-    get_auth_header,
-)
+# The validator file uses hyphens in its name (validate-action-pins.py),
+# so we load it manually via importlib
+import importlib.util
+_validator_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validate-action-pins.py")
+_spec = importlib.util.spec_from_file_location("validate_action_pins", _validator_path)
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+IMMUTABLE_SHA_RE = _module.IMMUTABLE_SHA_RE
+parse_uses_ref = _module.parse_uses_ref
+check_ref = _module.check_ref
+get_auth_header = _module.get_auth_header
 
 
 def assert_eq(name, actual, expected):
