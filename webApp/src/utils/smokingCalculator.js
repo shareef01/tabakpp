@@ -565,4 +565,183 @@ export const SmokingCalculator = {
       hasOpenSession: SmokingCalculator.hasOpenSession(sessionCounts)
     };
   },
+
+  /**
+   * Aggregate daily tracking data into monthly summaries for historical insights.
+   *
+   * Uses the canonical merge semantics: `aggregateLoggedCounts(logs)` merges legacy
+   * log archives + manual entries per date, then `mergeDayDocsIntoLogged` additively
+   * overlays `days/{date}` documents. This prevents double-counting — see the
+   * regression test covering overlapping logs + day docs.
+   *
+   * Historical economics use each day's stamped `trackerSnapshots` via
+   * `computeDayCredit` — NEVER current configs. See regression test "historical
+   * snapshots with old prices."
+   *
+   * Missing-day semantics: only dates present in the merged set count as "tracked
+   * days." Untracked calendar days are excluded from the denominator (tracked-day
+   * average), not treated as zero.
+   *
+   * @param {Array} logs - legacy LogEntry[] (archives, manual entries)
+   * @param {Array} dayDocs - List<DayDocument> with { date, counts, trackerSnapshots, aggregateCredit }
+   * @param {string} trackingDay - today's YYYY-MM-DD
+   * @param {object} activeCounts - { [trackerId]: count } for the still-open session
+   * @param {number} defaultUnitPrice - fallback price for legacy data without snapshots
+   * @param {number} monthsToInclude - how many complete recent months + current MTD to include
+   * @returns {{ months: Array<{ month: string, label: string, units: number, trackedDays: number, avgUnitsPerTrackedDay: number, spent: number, saved: number, baselineSaved: number, hasBaseline: boolean, isCurrentMonth: boolean }>, currentMonthMtd: object }}
+   */
+  aggregateMonthlyData: (logs, dayDocs = [], trackingDay, activeCounts = {}, defaultUnitPrice = 0.5, monthsToInclude = 6) => {
+    const merged = SmokingCalculator.mergeDayDocsIntoLogged(
+      SmokingCalculator.aggregateLoggedCounts(logs), dayDocs
+    );
+
+    // Build per-day records: { date, units, spent, saved, baselineSaved, hasBaseline }
+    // For dayDocs with trackerSnapshots, use computeDayCredit for historical economics.
+    // For legacy logs without dayDocs, fall back to aggregateLoggedCounts data.
+    const snapshotsByDate = {};
+    (dayDocs || []).forEach((d) => {
+      if (d.date && d.trackerSnapshots) snapshotsByDate[d.date] = d.trackerSnapshots;
+    });
+
+    const dayCreditByDate = {};
+    (dayDocs || []).forEach((d) => {
+      if (d.date && d.aggregateCredit) {
+        dayCreditByDate[d.date] = d.aggregateCredit;
+      }
+    });
+
+    const dayRecords = {};
+    Object.entries(merged).forEach(([date, counts]) => {
+      let isToday = date === trackingDay;
+      let dayCounts = counts || {};
+
+      // If today is still open, merge active counts
+      if (isToday) {
+        dayCounts = SmokingCalculator.mergeCounts(dayCounts, activeCounts || {});
+      }
+
+      const units = Object.values(dayCounts).reduce((sum, v) => sum + Math.max(0, v || 0), 0);
+
+      // Compute financials: prefer stamped dayDoc.aggregateCredit, then computeDayCredit from snapshots,
+      // then fall back to zero (legacy logs without economics).
+      let spent = 0, saved = 0, baselineSaved = 0, hasBaseline = false;
+      if (dayCreditByDate[date]) {
+        const credit = dayCreditByDate[date];
+        spent = credit.wasted || 0;
+        saved = credit.saved || 0;
+        baselineSaved = credit.baselineSaved || 0;
+        hasBaseline = baselineSaved > 0;
+      } else if (snapshotsByDate[date]) {
+        const credit = SmokingCalculator.computeDayCredit(dayCounts, snapshotsByDate[date], defaultUnitPrice);
+        spent = credit.wasted || 0;
+        saved = credit.saved || 0;
+        baselineSaved = credit.baselineSaved || 0;
+        hasBaseline = baselineSaved > 0;
+      }
+
+      dayRecords[date] = { units, spent, saved, baselineSaved, hasBaseline };
+    });
+
+    // Group by calendar month (YYYY-MM)
+    const monthsMap = {};
+    Object.entries(dayRecords).forEach(([date, record]) => {
+      const monthKey = date.substring(0, 7); // "YYYY-MM"
+      if (!monthsMap[monthKey]) {
+        monthsMap[monthKey] = { month: monthKey, days: [] };
+      }
+      monthsMap[monthKey].days.push({ date, ...record });
+    });
+
+    // Get today's month key for current month detection
+    const todayMonthKey = trackingDay ? trackingDay.substring(0, 7) : null;
+
+    // Sort months descending (newest first)
+    const sortedMonths = Object.keys(monthsMap).sort().reverse();
+
+    // Build month summaries
+    const months = sortedMonths.map((monthKey) => {
+      const monthData = monthsMap[monthKey];
+      const isCurrentMonth = monthKey === todayMonthKey;
+      const trackedDays = monthData.days.length;
+      const totalUnits = monthData.days.reduce((sum, d) => sum + d.units, 0);
+      const totalSpent = monthData.days.reduce((sum, d) => sum + d.spent, 0);
+      const totalSaved = monthData.days.reduce((sum, d) => sum + d.saved, 0);
+      const totalBaselineSaved = monthData.days.reduce((sum, d) => sum + d.baselineSaved, 0);
+      const hasBaseline = monthData.days.some((d) => d.hasBaseline);
+
+      return {
+        month: monthKey,
+        label: SmokingCalculator.formatMonthLabel(monthKey),
+        units: totalUnits,
+        trackedDays,
+        avgUnitsPerTrackedDay: trackedDays > 0 ? totalUnits / trackedDays : 0,
+        spent: totalSpent,
+        saved: totalSaved,
+        baselineSaved: totalBaselineSaved,
+        hasBaseline,
+        isCurrentMonth,
+        // Only complete months have MTD data
+        isComplete: !isCurrentMonth,
+      };
+    });
+
+    // Sort: current month (MTD) first, then complete months descending
+    const currentMonthMtd = months.find((m) => m.isCurrentMonth) || null;
+    const completedMonths = months.filter((m) => !m.isCurrentMonth);
+
+    // Limit to monthsToInclude complete months (plus current MTD)
+    const trimmedCompleted = completedMonths.slice(0, monthsToInclude);
+
+    return {
+      months: currentMonthMtd
+        ? [currentMonthMtd, ...trimmedCompleted]
+        : trimmedCompleted,
+      currentMonthMtd,
+      completedMonths: trimmedCompleted,
+    };
+  },
+
+  /** Format a YYYY-MM string like "2026-09" into "September 2026". */
+  formatMonthLabel: (monthKey) => {
+    if (!monthKey || monthKey.length < 7) return monthKey;
+    const [y, m] = monthKey.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1, 1));
+    const monthName = d.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' });
+    return `${monthName} ${y}`;
+  },
+
+  /**
+   * Compare two period averages. Returns a trend object with safe zero-denominator handling.
+   *
+   * @param {number} currentAvg - average for the current period
+   * @param {number} previousAvg - average for the comparable previous period
+   * @returns {{ current: number, previous: number, delta: number, percentChange: number|null, direction: 'down'|'up'|'unchanged'|'from_zero'|'to_zero', text: string }}
+   */
+  calculateTrend: (currentAvg, previousAvg) => {
+    const current = Math.max(0, currentAvg || 0);
+    const previous = Math.max(0, previousAvg || 0);
+
+    if (previous > 0 && current > 0) {
+      const pct = ((current - previous) / previous) * 100;
+      const direction = pct < 0 ? 'down' : pct > 0 ? 'up' : 'unchanged';
+      const absPct = Math.abs(pct);
+      const text = pct < 0
+        ? `${absPct.toFixed(0)}% fewer units`
+        : pct > 0
+          ? `${absPct.toFixed(0)}% more units`
+          : 'unchanged';
+      return { current, previous, delta: current - previous, percentChange: pct, direction, text };
+    }
+
+    if (previous === 0 && current === 0) {
+      return { current, previous, delta: 0, percentChange: 0, direction: 'unchanged', text: 'unchanged' };
+    }
+
+    if (previous === 0 && current > 0) {
+      return { current, previous, delta: current, percentChange: null, direction: 'from_zero', text: 'increased from zero' };
+    }
+
+    // previous > 0, current === 0
+    return { current, previous, delta: -previous, percentChange: -100, direction: 'to_zero', text: '100% fewer units' };
+  },
 };

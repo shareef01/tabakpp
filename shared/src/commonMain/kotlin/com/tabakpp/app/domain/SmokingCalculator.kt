@@ -666,4 +666,224 @@ object SmokingCalculator {
     fun normalizeCounts(counts: Map<String, Double>): Map<String, Double> {
         return counts.mapValues { max(0.0, it.value) }
     }
+
+    /**
+     * Format a YYYY-MM string like "2026-09" into "September 2026".
+     */
+    fun formatMonthLabel(monthKey: String): String {
+        if (monthKey.length < 7) return monthKey
+        val parts = monthKey.split("-")
+        if (parts.size < 2) return monthKey
+        val y = parts[0].toIntOrNull() ?: return monthKey
+        val m = parts[1].toIntOrNull() ?: return monthKey
+        return try {
+            val date = LocalDate(y, m, 1)
+            "${date.month.name.lowercase().replaceFirstChar { it.uppercase() }} $y"
+        } catch (_: Exception) {
+            monthKey
+        }
+    }
+
+    data class MonthSummary(
+        val month: String, // YYYY-MM
+        val label: String, // "September 2026"
+        val units: Int,
+        val trackedDays: Int,
+        val avgUnitsPerTrackedDay: Double,
+        val spent: Double,
+        val saved: Double,
+        val baselineSaved: Double,
+        val hasBaseline: Boolean,
+        val isCurrentMonth: Boolean,
+        val isComplete: Boolean
+    )
+
+    data class TrendResult(
+        val current: Double,
+        val previous: Double,
+        val delta: Double,
+        val percentChange: Double?,
+        val direction: String, // "down" | "up" | "unchanged" | "from_zero" | "to_zero"
+        val text: String // "12% fewer units", "unchanged", etc.
+    )
+
+    /**
+     * Compare two period averages. Safe zero-denominator handling — no "∞%" display.
+     * - previous > 0 && current > 0 → normal percentage change
+     * - previous == 0 && current == 0 → unchanged
+     * - previous == 0 && current > 0 → "increased from zero" (no percentage)
+     * - previous > 0 && current == 0 → "100% fewer units"
+     */
+    fun calculateTrend(currentAvg: Double, previousAvg: Double): TrendResult {
+        val current = max(0.0, currentAvg)
+        val previous = max(0.0, previousAvg)
+
+        if (previous > 0 && current > 0) {
+            val pct = ((current - previous) / previous) * 100
+            val direction = if (pct < 0) "down" else if (pct > 0) "up" else "unchanged"
+            val absPct = kotlin.math.abs(pct)
+            val text = if (pct < 0) {
+                "${absPct.toInt()}% fewer units"
+            } else if (pct > 0) {
+                "${absPct.toInt()}% more units"
+            } else {
+                "unchanged"
+            }
+            return TrendResult(current, previous, current - previous, pct, direction, text)
+        }
+
+        if (previous == 0.0 && current == 0.0) {
+            return TrendResult(current, previous, 0.0, 0.0, "unchanged", "unchanged")
+        }
+
+        if (previous == 0.0 && current > 0) {
+            return TrendResult(current, previous, current, null, "from_zero", "increased from zero")
+        }
+
+        // previous > 0, current == 0
+        return TrendResult(current, previous, -previous, -100.0, "to_zero", "100% fewer units")
+    }
+
+    /**
+     * Aggregate daily tracking data into monthly summaries for historical insights.
+     *
+     * Uses the canonical merge semantics: [aggregateLoggedCounts] merges legacy log
+     * archives + manual entries per date, then [mergeDayDocsIntoLogged] additively
+     * overlays `days/{date}` documents. This prevents double-counting.
+     *
+     * Historical economics use each day's stamped [TrackerSnapshot]s via
+     * [computeDayCredit] — NEVER current configs.
+     *
+     * Missing-day semantics: only dates present in the merged set count as "tracked
+     * days." Untracked calendar days are excluded from the denominator (tracked-day
+     * average), not treated as zero.
+     *
+     * @param logs legacy LogEntry list (archives, manual entries)
+     * @param dayDocs List<DayDocument> with date, counts, trackerSnapshots, aggregateCredit
+     * @param trackingDay today's YYYY-MM-DD
+     * @param activeCounts { [trackerId]: count } for the still-open session
+     * @param defaultUnitPrice fallback price for legacy data without snapshots
+     * @param monthsToInclude how many complete recent months + current MTD to include
+     * @returns Pair(months list, currentMonthMtd)
+     */
+    fun aggregateMonthlyData(
+        logs: List<LogEntry>,
+        dayDocs: List<DayDocument> = emptyList(),
+        trackingDay: String,
+        activeCounts: Map<String, Double> = emptyMap(),
+        defaultUnitPrice: Double = 0.5,
+        monthsToInclude: Int = 6
+    ): Pair<List<MonthSummary>, MonthSummary?> {
+        val logged = aggregateLoggedCounts(logs)
+        val merged = mergeDayDocsIntoLogged(logged, dayDocs)
+
+        val snapshotsByDate = dayDocs.associate { it.date to it.trackerSnapshots }
+        val dayCreditByDate: Map<String, LifetimeAggregates> = dayDocs
+            .filter { it.aggregateCredit != null }
+            .associate { it.date to it.aggregateCredit!! }
+
+        // Build per-day records
+        val dayRecords = mutableMapOf<String, DayRecord>()
+        merged.forEach { (date, counts) ->
+            val isToday = date == trackingDay
+            val dayCounts = if (isToday) mergeCounts(counts, activeCounts) else counts
+
+            val units = dayCounts.values.sumOf { max(0.0, it) }.toInt()
+
+            var spent = 0.0
+            var saved = 0.0
+            var baselineSaved = 0.0
+            var hasBaseline = false
+
+            dayCreditByDate[date]?.let { credit ->
+                spent = credit.wasted
+                saved = credit.saved
+                baselineSaved = credit.baselineSaved
+                hasBaseline = baselineSaved > 0
+            } ?: run {
+                snapshotsByDate[date]?.let { snapshots ->
+                    val credit = computeDayCredit(dayCounts, snapshots, defaultUnitPrice)
+                    spent = credit.wasted
+                    saved = credit.saved
+                    baselineSaved = credit.baselineSaved
+                    hasBaseline = baselineSaved > 0
+                }
+            }
+
+            dayRecords[date] = DayRecord(units, spent, saved, baselineSaved, hasBaseline)
+        }
+
+        // Group by calendar month (YYYY-MM)
+        val monthsMap = mutableMapOf<String, MutableList<Pair<String, DayRecord>>>()
+        dayRecords.forEach { (date, record) ->
+            val monthKey = date.substring(0, 7)
+            monthsMap.getOrPut(monthKey) { mutableListOf() }.add(date to record)
+        }
+
+        val todayMonthKey = trackingDay.substring(0, 7)
+
+        // Sort months descending (newest first)
+        val sortedMonths = monthsMap.keys.sortedDescending()
+
+        val currentMonthMtd = monthsMap[todayMonthKey]?.let { days ->
+            buildMonthSummary(todayMonthKey, days, true, monthsMap, snapshotsByDate, dayCreditByDate, trackingDay, activeCounts, defaultUnitPrice)
+        }
+
+        val completedMonths = sortedMonths
+            .filter { it != todayMonthKey }
+            .take(monthsToInclude)
+            .mapNotNull { monthKey ->
+                val days = monthsMap[monthKey] ?: return@mapNotNull null
+                buildMonthSummary(monthKey, days, false, monthsMap, snapshotsByDate, dayCreditByDate, trackingDay, activeCounts, defaultUnitPrice)
+            }
+
+        val months = if (currentMonthMtd != null) {
+            listOf(currentMonthMtd!!) + completedMonths
+        } else {
+            completedMonths
+        }
+
+        return Pair(months, currentMonthMtd)
+    }
+
+    private data class DayRecord(
+        val units: Int,
+        val spent: Double,
+        val saved: Double,
+        val baselineSaved: Double,
+        val hasBaseline: Boolean
+    )
+
+    private fun buildMonthSummary(
+        monthKey: String,
+        days: List<Pair<String, DayRecord>>,
+        isCurrentMonth: Boolean,
+        monthsMap: Map<String, List<Pair<String, DayRecord>>>,
+        snapshotsByDate: Map<String, Map<String, TrackerSnapshot>>,
+        dayCreditByDate: Map<String, LifetimeAggregates>,
+        trackingDay: String,
+        activeCounts: Map<String, Double>,
+        defaultUnitPrice: Double
+    ): MonthSummary {
+        val trackedDays = days.size
+        val totalUnits = days.sumOf { it.second.units }
+        val totalSpent = days.sumOf { it.second.spent }
+        val totalSaved = days.sumOf { it.second.saved }
+        val totalBaselineSaved = days.sumOf { it.second.baselineSaved }
+        val hasBaseline = days.any { it.second.hasBaseline }
+
+        return MonthSummary(
+            month = monthKey,
+            label = formatMonthLabel(monthKey),
+            units = totalUnits,
+            trackedDays = trackedDays,
+            avgUnitsPerTrackedDay = if (trackedDays > 0) totalUnits.toDouble() / trackedDays else 0.0,
+            spent = totalSpent,
+            saved = totalSaved,
+            baselineSaved = totalBaselineSaved,
+            hasBaseline = hasBaseline,
+            isCurrentMonth = isCurrentMonth,
+            isComplete = !isCurrentMonth
+        )
+    }
 }

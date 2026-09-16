@@ -31,6 +31,43 @@ const runFixture = (op, input) => {
       return SmokingCalculator.formatCurrency(input.amount);
     case 'backfillAllowed':
       return SmokingCalculator.isBackfillDateAllowed(input.date, input.trackingDay);
+    case 'monthlyInsights': {
+      const result = SmokingCalculator.aggregateMonthlyData(
+        input.logs || [],
+        (input.dayDocs || []).map((d) => ({
+          date: d.date,
+          counts: d.counts || {},
+          trackerSnapshots: d.trackerSnapshots || {},
+          aggregateCredit: d.aggregateCredit || null,
+          status: d.status || 'closed',
+        })),
+        input.trackingDay,
+        input.activeCounts || {},
+        input.defaultUnitPrice,
+        input.monthsToInclude
+      );
+      // Serialize for comparison — avgUnitsPerTrackedDay as number
+      return {
+        months: result.months.map((m) => ({
+          month: m.month, label: m.label, units: m.units, trackedDays: m.trackedDays,
+          avgUnitsPerTrackedDay: m.avgUnitsPerTrackedDay,
+          spent: m.spent, saved: m.saved, baselineSaved: m.baselineSaved,
+          hasBaseline: m.hasBaseline, isCurrentMonth: m.isCurrentMonth, isComplete: m.isComplete,
+        })),
+        currentMonthMtd: result.currentMonthMtd ? {
+          month: result.currentMonthMtd.month, label: result.currentMonthMtd.label,
+          units: result.currentMonthMtd.units, trackedDays: result.currentMonthMtd.trackedDays,
+          avgUnitsPerTrackedDay: result.currentMonthMtd.avgUnitsPerTrackedDay,
+          spent: result.currentMonthMtd.spent, saved: result.currentMonthMtd.saved,
+          baselineSaved: result.currentMonthMtd.baselineSaved,
+          hasBaseline: result.currentMonthMtd.hasBaseline,
+          isCurrentMonth: result.currentMonthMtd.isCurrentMonth,
+          isComplete: result.currentMonthMtd.isComplete,
+        } : null,
+      };
+    }
+    case 'trendComparison':
+      return SmokingCalculator.calculateTrend(input.currentAvg, input.previousAvg);
     default:
       throw new Error(`Unknown fixture op: ${op}`);
   }

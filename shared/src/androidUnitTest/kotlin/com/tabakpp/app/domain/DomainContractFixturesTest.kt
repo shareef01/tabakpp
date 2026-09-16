@@ -1,5 +1,8 @@
 package com.tabakpp.app.domain
 
+import com.tabakpp.app.data.DayDocument
+import com.tabakpp.app.data.LifetimeAggregates
+import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.TrackerSnapshot
 import com.tabakpp.app.data.TrackerType
@@ -21,6 +24,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertNotNull
 import kotlin.test.fail
 
 /**
@@ -144,6 +148,73 @@ class DomainContractFixturesTest {
                 )
                 assertEquals(expected.jsonPrimitive.boolean, actual)
             }
+            "monthlyInsights" -> {
+                val logs = input["logs"]!!.jsonArray.map { parseLog(it.jsonObject) }
+                val dayDocs = input["dayDocs"]!!.jsonArray.map { parseDayDoc(it.jsonObject) }
+                val trackingDay = input["trackingDay"]!!.jsonPrimitive.content
+                val activeCounts = jsonObjectToDoubleMap(input["activeCounts"]!!.jsonObject)
+                val defaultUnitPrice = input["defaultUnitPrice"]?.jsonPrimitive?.double ?: 0.5
+                val monthsToInclude = input["monthsToInclude"]?.jsonPrimitive?.int ?: 6
+
+                val result = SmokingCalculator.aggregateMonthlyData(
+                    logs, dayDocs, trackingDay, activeCounts, defaultUnitPrice, monthsToInclude
+                )
+                val exp = expected.jsonObject
+                val expMonths = exp["months"]!!.jsonArray.map { it.jsonObject }
+                val actualMonths = result.first
+
+                assertEquals(expMonths.size, actualMonths.size, "month count mismatch")
+                expMonths.forEachIndexed { idx, expMonth ->
+                    val actual = actualMonths[idx]
+                    assertEquals(expMonth["month"]!!.jsonPrimitive.content, actual.month, "month[${idx}].month")
+                    assertEquals(expMonth["label"]!!.jsonPrimitive.content, actual.label, "month[${idx}].label")
+                    assertEquals(expMonth["units"]!!.jsonPrimitive.int, actual.units, "month[${idx}].units")
+                    assertEquals(expMonth["trackedDays"]!!.jsonPrimitive.int, actual.trackedDays, "month[${idx}].trackedDays")
+                    assertEquals(expMonth["avgUnitsPerTrackedDay"]!!.jsonPrimitive.double, actual.avgUnitsPerTrackedDay, 1e-9, "month[${idx}].avgUnitsPerTrackedDay")
+                    assertEquals(expMonth["spent"]!!.jsonPrimitive.double, actual.spent, 1e-9, "month[${idx}].spent")
+                    assertEquals(expMonth["saved"]!!.jsonPrimitive.double, actual.saved, 1e-9, "month[${idx}].saved")
+                    assertEquals(expMonth["baselineSaved"]!!.jsonPrimitive.double, actual.baselineSaved, 1e-9, "month[${idx}].baselineSaved")
+                    assertEquals(expMonth["hasBaseline"]!!.jsonPrimitive.boolean, actual.hasBaseline, "month[${idx}].hasBaseline")
+                    assertEquals(expMonth["isCurrentMonth"]!!.jsonPrimitive.boolean, actual.isCurrentMonth, "month[${idx}].isCurrentMonth")
+                    assertEquals(expMonth["isComplete"]!!.jsonPrimitive.boolean, actual.isComplete, "month[${idx}].isComplete")
+                }
+
+                // currentMonthMtd
+                val expMtd = exp["currentMonthMtd"]!!
+                if (expMtd is JsonNull) {
+                    assertNull(result.second)
+                } else {
+                    val mtd = result.second!!
+                    val expMtdObj = expMtd.jsonObject
+                    assertEquals(expMtdObj["month"]!!.jsonPrimitive.content, mtd.month)
+                    assertEquals(expMtdObj["units"]!!.jsonPrimitive.int, mtd.units)
+                    assertEquals(expMtdObj["trackedDays"]!!.jsonPrimitive.int, mtd.trackedDays)
+                    assertEquals(expMtdObj["avgUnitsPerTrackedDay"]!!.jsonPrimitive.double, mtd.avgUnitsPerTrackedDay, 1e-9)
+                    assertEquals(expMtdObj["spent"]!!.jsonPrimitive.double, mtd.spent, 1e-9)
+                    assertEquals(expMtdObj["saved"]!!.jsonPrimitive.double, mtd.saved, 1e-9)
+                    assertEquals(expMtdObj["baselineSaved"]!!.jsonPrimitive.double, mtd.baselineSaved, 1e-9)
+                    assertEquals(expMtdObj["hasBaseline"]!!.jsonPrimitive.boolean, mtd.hasBaseline)
+                    assertEquals(expMtdObj["isCurrentMonth"]!!.jsonPrimitive.boolean, mtd.isCurrentMonth)
+                    assertEquals(expMtdObj["isComplete"]!!.jsonPrimitive.boolean, mtd.isComplete)
+                }
+            }
+            "trendComparison" -> {
+                val actual = SmokingCalculator.calculateTrend(
+                    input["currentAvg"]!!.jsonPrimitive.double,
+                    input["previousAvg"]!!.jsonPrimitive.double
+                )
+                val exp = expected.jsonObject
+                assertEquals(exp["direction"]!!.jsonPrimitive.content, actual.direction)
+                assertEquals(exp["text"]!!.jsonPrimitive.content, actual.text)
+                val expPct = exp["percentChange"]!!.let { if (it is JsonNull) null else it.jsonPrimitive.double }
+                val actualPct = actual.percentChange
+                if (expPct == null) {
+                    assertNull(actualPct)
+                } else {
+                    assertNotNull(actualPct, "percentChange should not be null for non-null expected")
+                    assertEquals(expPct, actualPct, 1e-9)
+                }
+            }
             else -> fail("Unknown fixture op: $op")
         }
     }
@@ -167,6 +238,35 @@ class DomainContractFixturesTest {
         unitPrice = obj["unitPrice"]?.let { if (it is JsonNull) null else it.jsonPrimitive.double },
         type = obj["type"]?.jsonPrimitive?.content?.let { TrackerType.valueOf(it) } ?: TrackerType.CIGARETTE,
         isFinanciallyTracked = obj["isFinanciallyTracked"]?.jsonPrimitive?.boolean ?: true
+    )
+
+    private fun parseLog(obj: JsonObject): LogEntry {
+        val origin = obj["origin"]?.jsonPrimitive?.content ?: "MANUAL_ENTRY"
+        val isArchive = origin == "DAY_RESET" || (obj["id"]?.jsonPrimitive?.content?.endsWith("_DAY") ?: false)
+        return LogEntry(
+            id = obj["id"]?.jsonPrimitive?.content ?: "",
+            logDate = obj["logDate"]!!.jsonPrimitive.content,
+            counts = jsonObjectToDoubleMap(obj["counts"]!!.jsonObject),
+            isArchive = isArchive,
+            isManual = origin == "MANUAL_ENTRY",
+            origin = origin,
+            aggregateCredit = obj["aggregateCredit"]?.let { if (it is JsonNull) null else parseLifetimeAggregates(it.jsonObject) }
+        )
+    }
+
+    private fun parseDayDoc(obj: JsonObject): DayDocument = DayDocument(
+        date = obj["date"]!!.jsonPrimitive.content,
+        counts = jsonObjectToDoubleMap(obj["counts"]!!.jsonObject),
+        trackerSnapshots = obj["trackerSnapshots"]?.jsonObject?.mapValues { (_, v) -> parseSnapshot(v.jsonObject) } ?: emptyMap(),
+        aggregateCredit = (obj["aggregateCredit"]?.let { if (it is JsonNull) null else parseLifetimeAggregates(it.jsonObject) }),
+        status = obj["status"]?.jsonPrimitive?.content ?: "closed"
+    )
+
+    private fun parseLifetimeAggregates(obj: JsonObject): LifetimeAggregates = LifetimeAggregates(
+        saved = obj["saved"]?.jsonPrimitive?.double ?: 0.0,
+        wasted = obj["wasted"]?.jsonPrimitive?.double ?: 0.0,
+        smokingUnits = obj["smokingUnits"]?.jsonPrimitive?.double ?: 0.0,
+        baselineSaved = obj["baselineSaved"]?.jsonPrimitive?.double ?: 0.0
     )
 }
 
