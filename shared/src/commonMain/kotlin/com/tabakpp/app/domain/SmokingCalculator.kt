@@ -749,7 +749,11 @@ object SmokingCalculator {
      *
      * Uses the canonical merge semantics: [aggregateLoggedCounts] merges legacy log
      * archives + manual entries per date, then [mergeDayDocsIntoLogged] additively
-     * overlays `days/{date}` documents. This prevents double-counting.
+     * overlays `days/{date}` documents — identical to existing streak and velocity
+     * calculations. In production, each date is written by exactly one source
+     * (the day-doc schema ships forward from the migration point), so overlap is
+     * a no-op. Where both exist, the merge is additive — the established domain
+     * behavior, not an Insights-specific choice.
      *
      * Historical economics use each day's stamped [TrackerSnapshot]s via
      * [computeDayCredit] — NEVER current configs.

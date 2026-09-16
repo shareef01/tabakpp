@@ -316,3 +316,174 @@ describe('calculateTrend', () => {
     expect(trend.text).toBe('100% fewer units');
   });
 });
+
+// --- Correctness gate: Case A — overlapping logs + dayDocs (same tracker, same date) ---
+// The canonical merge is additive: logs counts and dayDoc counts for the same date
+// and same tracker are ADDED. This is the existing domain behavior inherited from
+// mergeDayDocsIntoLogged / buildVelocitySeries / calculateStreak.
+describe('aggregateMonthlyData — Case A (overlapping sources)', () => {
+  it('adds log + dayDoc counts for same date and tracker (additive)', () => {
+    const logs = [logEntry('2026-08-10', { cig: 4 })];
+    const dayDocs = [dayDoc('2026-08-10', { cig: 4 })];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, dayDocs, '2026-09-16');
+    expect(result.completedMonths).toHaveLength(1);
+    expect(result.completedMonths[0].units).toBe(8); // 4 + 4
+  });
+});
+
+// --- Correctness gate: Case B — which source is authoritative ---
+// Both log and dayDoc for same date: merge is additive, no single source "wins".
+// Each source contributes its counts; the merge function sums them.
+describe('aggregateMonthlyData — Case B (dual source dates)', () => {
+  it('sums both sources: log 3 + dayDoc 5 = 8', () => {
+    const logs = [logEntry('2026-08-10', { cig: 3 })];
+    const dayDocs = [dayDoc('2026-08-10', { cig: 5 })];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, dayDocs, '2026-09-16');
+    const month = result.completedMonths[0];
+    expect(month.units).toBe(8);
+    expect(month.trackedDays).toBe(1);
+    expect(month.avgUnitsPerTrackedDay).toBe(8);
+  });
+});
+
+// --- Correctness gate: Case C — different trackers on same date ---
+describe('aggregateMonthlyData — Case C (different trackers same date)', () => {
+  it('retains both tracker IDs without collision', () => {
+    const logs = [logEntry('2026-08-10', { cig: 3 })];
+    const dayDocs = [dayDoc('2026-08-10', { ryo: 5 })];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, dayDocs, '2026-09-16');
+    const month = result.completedMonths[0];
+    expect(month.units).toBe(8); // 3 (cig from log) + 5 (ryo from dayDoc)
+  });
+});
+
+// --- Correctness gate: Historical financial semantics ---
+// Logs-only dates have NO financials (no stamped snapshots/aggregateCredit).
+// They must NOT be repriced using current configs.
+describe('aggregateMonthlyData — logs-only historical financials', () => {
+  it('logs-only date has zero financials (no fabricated pricing)', () => {
+    const logs = [logEntry('2026-08-15', { cig: 5 })];
+    const configs = [{ id: 'cig', limit: 10, pricePerUnit: 0.60 }];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-16', {}, 0.60);
+    expect(result.completedMonths[0].spent).toBe(0);
+    expect(result.completedMonths[0].saved).toBe(0);
+    expect(result.completedMonths[0].baselineSaved).toBe(0);
+    expect(result.completedMonths[0].hasBaseline).toBe(false);
+  });
+
+  it('dayDoc with aggregateCredit uses stamped values, not current configs', () => {
+    const logs = [logEntry('2026-08-15', { cig: 4 })];
+    const dayDocs = [dayDoc('2026-08-15', { cig: 4 }, {}, {
+      wasted: 1.60, // €0.40 × 4 = historical price
+      saved: 2.40,
+      baselineSaved: 1.20,
+    })];
+    const configs = [{ id: 'cig', limit: 10, pricePerUnit: 0.60 }]; // current price is higher
+    const result = SmokingCalculator.aggregateMonthlyData(logs, dayDocs, '2026-09-16', {}, 0.60);
+    // With additive merge: 4 + 4 = 8 units consumed
+    expect(result.completedMonths[0].units).toBe(8);
+    // Financials from stamped aggregateCredit, NOT recomputed at €0.60
+    expect(result.completedMonths[0].spent).toBe(1.60);
+    expect(result.completedMonths[0].saved).toBe(2.40);
+    expect(result.completedMonths[0].baselineSaved).toBe(1.20);
+  });
+});
+
+// --- Correctness gate: Current-month isolation ---
+// Completed months exclude September when trackingDay is in September.
+describe('aggregateMonthlyData — current month isolation', () => {
+  it('separates current month from completed months', () => {
+    const logs = [
+      logEntry('2026-07-15', { cig: 10 }),
+      logEntry('2026-08-15', { cig: 8 }),
+      logEntry('2026-09-10', { cig: 5 }),
+    ];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-16');
+    expect(result.completedMonths.map(m => m.month)).toEqual(['2026-08', '2026-07']);
+    expect(result.currentMonthMtd).not.toBeNull();
+    expect(result.currentMonthMtd.month).toBe('2026-09');
+    expect(result.currentMonthMtd.units).toBe(5);
+  });
+
+  it('handles year boundary: Jan 2027 with Dec 2026 data', () => {
+    const logs = [
+      logEntry('2026-12-15', { cig: 10 }),
+      logEntry('2026-11-15', { cig: 8 }),
+      logEntry('2027-01-08', { cig: 5 }),
+    ];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2027-01-10');
+    expect(result.completedMonths.map(m => m.month)).toEqual(['2026-12', '2026-11']);
+    expect(result.currentMonthMtd?.month).toBe('2027-01');
+    expect(result.currentMonthMtd?.units).toBe(5);
+  });
+});
+
+// --- Correctness gate: Tracked-day denominator ---
+// Missing days are excluded from the denominator, not treated as zero.
+describe('aggregateMonthlyData — tracked-day denominator', () => {
+  it('missing days excluded from average (not treated as zero)', () => {
+    const logs = [
+      logEntry('2026-08-01', { cig: 10 }),
+      logEntry('2026-08-03', { cig: 6 }), // Aug 2 is missing
+    ];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-16');
+    const month = result.completedMonths[0];
+    expect(month.trackedDays).toBe(2); // only 2 tracked days
+    expect(month.avgUnitsPerTrackedDay).toBe(8); // (10+6)/2, NOT (10+0+6)/3
+  });
+
+  it('zero-consumption day doc counts as tracked day', () => {
+    const logs = [];
+    const dayDocs = [dayDoc('2026-08-01', {})]; // empty counts = zero consumption
+    const result = SmokingCalculator.aggregateMonthlyData(logs, dayDocs, '2026-09-16');
+    const month = result.completedMonths[0];
+    expect(month.trackedDays).toBe(1);
+    expect(month.units).toBe(0);
+  });
+});
+
+// --- Correctness gate: Financial history — current config must NOT reprice old usage ---
+describe('aggregateMonthlyData — no current-config historical repricing', () => {
+  it('logs-only month uses zero financials even with high current price', () => {
+    const logs = [
+      logEntry('2026-07-01', { cig: 20 }),
+    ];
+    const configs = [{ id: 'cig', limit: 10, pricePerUnit: 0.60 }];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-16', {}, 0.60);
+    // Units ARE included (consumption), but financials are zero (no stamped price)
+    expect(result.completedMonths[0].units).toBe(20);
+    expect(result.completedMonths[0].spent).toBe(0);
+    expect(result.completedMonths[0].saved).toBe(0);
+    expect(result.completedMonths[0].hasBaseline).toBe(false);
+  });
+});
+
+// --- Correctness gate: Period-comparison semantics ---
+// Trend uses equal-length 7-day windows (current vs previous comparable 7-day period).
+describe('calculateTrend — equal-length windows', () => {
+  it('normal percentage for equal-length windows', () => {
+    const trend = SmokingCalculator.calculateTrend(6, 8);
+    expect(trend.percentChange).toBe(-25);
+    expect(trend.direction).toBe('down');
+    expect(trend.text).toBe('25% fewer units');
+  });
+
+  it('no Infinity when previous is 0', () => {
+    const trend = SmokingCalculator.calculateTrend(5, 0);
+    expect(trend.percentChange).toBeNull();
+    expect(trend.text).toBe('increased from zero');
+  });
+});
+
+// --- Correctness gate: Cross-platform equivalence (JS side) ---
+// These fixtures run through the same domain-fixtures.json contract tests in Kotlin.
+describe('aggregateMonthlyData — one completed month', () => {
+  it('single month with no current month MTD', () => {
+    const logs = [logEntry('2026-08-10', { cig: 10 })];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-16');
+    expect(result.completedMonths).toHaveLength(1);
+    expect(result.currentMonthMtd).toBeNull();
+    expect(result.completedMonths[0].units).toBe(10);
+    expect(result.completedMonths[0].trackedDays).toBe(1);
+  });
+});

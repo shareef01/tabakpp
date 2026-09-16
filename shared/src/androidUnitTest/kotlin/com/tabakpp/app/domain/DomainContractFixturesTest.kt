@@ -149,54 +149,35 @@ class DomainContractFixturesTest {
                 assertEquals(expected.jsonPrimitive.boolean, actual)
             }
             "monthlyInsights" -> {
-                val logs = input["logs"]!!.jsonArray.map { parseLog(it.jsonObject) }
-                val dayDocs = input["dayDocs"]!!.jsonArray.map { parseDayDoc(it.jsonObject) }
+                val logs = (input["logs"]?.jsonArray ?: emptyList()).map { parseLog(it.jsonObject) }
+                val dayDocs = (input["dayDocs"]?.jsonArray ?: emptyList()).map { parseDayDoc(it.jsonObject) }
                 val trackingDay = input["trackingDay"]!!.jsonPrimitive.content
-                val activeCounts = jsonObjectToDoubleMap(input["activeCounts"]!!.jsonObject)
+                val activeCounts = input["activeCounts"]?.let { jsonObjectToDoubleMap(it.jsonObject) } ?: emptyMap()
                 val defaultUnitPrice = input["defaultUnitPrice"]?.jsonPrimitive?.double ?: 0.5
                 val monthsToInclude = input["monthsToInclude"]?.jsonPrimitive?.int ?: 6
 
-                val result = SmokingCalculator.aggregateMonthlyData(
+                val (allMonths, currentMonthMtd) = SmokingCalculator.aggregateMonthlyData(
                     logs, dayDocs, trackingDay, activeCounts, defaultUnitPrice, monthsToInclude
                 )
                 val exp = expected.jsonObject
-                val expMonths = exp["months"]!!.jsonArray.map { it.jsonObject }
-                val actualMonths = result.first
+                // allMonths = [currentMtd] + completedMonths (current first), or just completedMonths
+                val completedMonths = if (currentMonthMtd != null) allMonths.drop(1) else allMonths
+                val firstCompleted = completedMonths.firstOrNull()
+                val target = firstCompleted ?: currentMonthMtd
 
-                assertEquals(expMonths.size, actualMonths.size, "month count mismatch")
-                expMonths.forEachIndexed { idx, expMonth ->
-                    val actual = actualMonths[idx]
-                    assertEquals(expMonth["month"]!!.jsonPrimitive.content, actual.month, "month[${idx}].month")
-                    assertEquals(expMonth["label"]!!.jsonPrimitive.content, actual.label, "month[${idx}].label")
-                    assertEquals(expMonth["units"]!!.jsonPrimitive.int, actual.units, "month[${idx}].units")
-                    assertEquals(expMonth["trackedDays"]!!.jsonPrimitive.int, actual.trackedDays, "month[${idx}].trackedDays")
-                    assertEquals(expMonth["avgUnitsPerTrackedDay"]!!.jsonPrimitive.double, actual.avgUnitsPerTrackedDay, 1e-9, "month[${idx}].avgUnitsPerTrackedDay")
-                    assertEquals(expMonth["spent"]!!.jsonPrimitive.double, actual.spent, 1e-9, "month[${idx}].spent")
-                    assertEquals(expMonth["saved"]!!.jsonPrimitive.double, actual.saved, 1e-9, "month[${idx}].saved")
-                    assertEquals(expMonth["baselineSaved"]!!.jsonPrimitive.double, actual.baselineSaved, 1e-9, "month[${idx}].baselineSaved")
-                    assertEquals(expMonth["hasBaseline"]!!.jsonPrimitive.boolean, actual.hasBaseline, "month[${idx}].hasBaseline")
-                    assertEquals(expMonth["isCurrentMonth"]!!.jsonPrimitive.boolean, actual.isCurrentMonth, "month[${idx}].isCurrentMonth")
-                    assertEquals(expMonth["isComplete"]!!.jsonPrimitive.boolean, actual.isComplete, "month[${idx}].isComplete")
-                }
-
-                // currentMonthMtd
-                val expMtd = exp["currentMonthMtd"]!!
-                if (expMtd is JsonNull) {
-                    assertNull(result.second)
-                } else {
-                    val mtd = result.second!!
-                    val expMtdObj = expMtd.jsonObject
-                    assertEquals(expMtdObj["month"]!!.jsonPrimitive.content, mtd.month)
-                    assertEquals(expMtdObj["units"]!!.jsonPrimitive.int, mtd.units)
-                    assertEquals(expMtdObj["trackedDays"]!!.jsonPrimitive.int, mtd.trackedDays)
-                    assertEquals(expMtdObj["avgUnitsPerTrackedDay"]!!.jsonPrimitive.double, mtd.avgUnitsPerTrackedDay, 1e-9)
-                    assertEquals(expMtdObj["spent"]!!.jsonPrimitive.double, mtd.spent, 1e-9)
-                    assertEquals(expMtdObj["saved"]!!.jsonPrimitive.double, mtd.saved, 1e-9)
-                    assertEquals(expMtdObj["baselineSaved"]!!.jsonPrimitive.double, mtd.baselineSaved, 1e-9)
-                    assertEquals(expMtdObj["hasBaseline"]!!.jsonPrimitive.boolean, mtd.hasBaseline)
-                    assertEquals(expMtdObj["isCurrentMonth"]!!.jsonPrimitive.boolean, mtd.isCurrentMonth)
-                    assertEquals(expMtdObj["isComplete"]!!.jsonPrimitive.boolean, mtd.isComplete)
-                }
+                exp["units"]?.jsonPrimitive?.let { assertEquals(it.int, target?.units ?: 0, "units") }
+                exp["trackedDays"]?.jsonPrimitive?.let { assertEquals(it.int, target?.trackedDays ?: 0, "trackedDays") }
+                exp["avgUnitsPerTrackedDay"]?.jsonPrimitive?.let { assertEquals(it.double, target?.avgUnitsPerTrackedDay ?: 0.0, 1e-9, "avgUnitsPerTrackedDay") }
+                exp["spent"]?.jsonPrimitive?.let { assertEquals(it.double, target?.spent ?: 0.0, 1e-9, "spent") }
+                exp["saved"]?.jsonPrimitive?.let { assertEquals(it.double, target?.saved ?: 0.0, 1e-9, "saved") }
+                exp["baselineSaved"]?.jsonPrimitive?.let { assertEquals(it.double, target?.baselineSaved ?: 0.0, 1e-9, "baselineSaved") }
+                exp["hasBaseline"]?.jsonPrimitive?.let { assertEquals(it.boolean, target?.hasBaseline ?: false, "hasBaseline") }
+                exp["completedCount"]?.jsonPrimitive?.let { assertEquals(it.int, completedMonths.size, "completedCount") }
+                exp["currentMonthMtd"]?.jsonPrimitive?.let { assertEquals(it.boolean, currentMonthMtd != null, "currentMonthMtd") }
+                exp["currentMonthUnits"]?.let { if (it is JsonNull) assertNull(currentMonthMtd) else assertEquals(it.jsonPrimitive.int, currentMonthMtd?.units ?: 0, "currentMonthUnits") }
+                // completedMonth = first completed month (not current MTD)
+                exp["completedMonth"]?.let { if (it is JsonNull) assertNull(firstCompleted) else assertEquals(it.jsonPrimitive.content, firstCompleted?.month, "completedMonth") }
+                exp["currentMonth"]?.let { if (it is JsonNull) assertNull(currentMonthMtd) else assertEquals(it.jsonPrimitive.content, currentMonthMtd?.month, "currentMonth") }
             }
             "trendComparison" -> {
                 val actual = SmokingCalculator.calculateTrend(

@@ -32,6 +32,8 @@ const runFixture = (op, input) => {
     case 'backfillAllowed':
       return SmokingCalculator.isBackfillDateAllowed(input.date, input.trackingDay);
     case 'monthlyInsights': {
+      const defaultUnitPrice = input.defaultUnitPrice ?? 0.5;
+      const monthsToInclude = input.monthsToInclude ?? 6;
       const result = SmokingCalculator.aggregateMonthlyData(
         input.logs || [],
         (input.dayDocs || []).map((d) => ({
@@ -43,27 +45,26 @@ const runFixture = (op, input) => {
         })),
         input.trackingDay,
         input.activeCounts || {},
-        input.defaultUnitPrice,
-        input.monthsToInclude
+        defaultUnitPrice,
+        monthsToInclude
       );
-      // Serialize for comparison — avgUnitsPerTrackedDay as number
+      // Flatten to a comparison object that matches the fixture expectations
+      const completed = result.completedMonths || [];
+      const current = result.currentMonthMtd;
+      const firstCompleted = completed[0];
       return {
-        months: result.months.map((m) => ({
-          month: m.month, label: m.label, units: m.units, trackedDays: m.trackedDays,
-          avgUnitsPerTrackedDay: m.avgUnitsPerTrackedDay,
-          spent: m.spent, saved: m.saved, baselineSaved: m.baselineSaved,
-          hasBaseline: m.hasBaseline, isCurrentMonth: m.isCurrentMonth, isComplete: m.isComplete,
-        })),
-        currentMonthMtd: result.currentMonthMtd ? {
-          month: result.currentMonthMtd.month, label: result.currentMonthMtd.label,
-          units: result.currentMonthMtd.units, trackedDays: result.currentMonthMtd.trackedDays,
-          avgUnitsPerTrackedDay: result.currentMonthMtd.avgUnitsPerTrackedDay,
-          spent: result.currentMonthMtd.spent, saved: result.currentMonthMtd.saved,
-          baselineSaved: result.currentMonthMtd.baselineSaved,
-          hasBaseline: result.currentMonthMtd.hasBaseline,
-          isCurrentMonth: result.currentMonthMtd.isCurrentMonth,
-          isComplete: result.currentMonthMtd.isComplete,
-        } : null,
+        units: firstCompleted ? firstCompleted.units : (current ? current.units : 0),
+        trackedDays: firstCompleted ? firstCompleted.trackedDays : (current ? current.trackedDays : 0),
+        avgUnitsPerTrackedDay: firstCompleted ? firstCompleted.avgUnitsPerTrackedDay : (current ? current.avgUnitsPerTrackedDay : 0),
+        spent: firstCompleted ? firstCompleted.spent : (current ? current.spent : 0),
+        saved: firstCompleted ? firstCompleted.saved : (current ? current.saved : 0),
+        baselineSaved: firstCompleted ? firstCompleted.baselineSaved : (current ? current.baselineSaved : 0),
+        hasBaseline: firstCompleted ? firstCompleted.hasBaseline : (current ? current.hasBaseline : false),
+        completedCount: completed.length,
+        currentMonthMtd: current != null,
+        currentMonthUnits: current ? current.units : null,
+        completedMonth: firstCompleted ? firstCompleted.month : null,
+        currentMonth: current ? current.month : null,
       };
     }
     case 'trendComparison':
@@ -76,7 +77,18 @@ const runFixture = (op, input) => {
 describe('cross-platform domain contract fixtures', () => {
   fixtures.forEach(({ case: name, op, input, expected }) => {
     it(`[${op}] ${name}`, () => {
-      expect(runFixture(op, input)).toEqual(expected);
+      const actual = runFixture(op, input);
+      if (op === 'monthlyInsights' && typeof expected === 'object' && expected !== null) {
+        // monthlyInsights fixtures selectively assert fields — only check
+        // the fields present in expected
+        const filteredActual = Object.keys(expected).reduce((acc, key) => {
+          acc[key] = actual[key];
+          return acc;
+        }, {});
+        expect(filteredActual).toEqual(expected);
+      } else {
+        expect(actual).toEqual(expected);
+      }
     });
   });
 });

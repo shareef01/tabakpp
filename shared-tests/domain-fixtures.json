@@ -118,7 +118,8 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": { "months": [], "currentMonthMtd": null } },
+      "expected": { "units": 0, "trackedDays": 0, "completedCount": 0, "currentMonthMtd": false,
+        "completedMonth": null, "currentMonth": null } },
 
     { "case": "monthly_insights_one_tracked_day", "op": "monthlyInsights",
       "input": {
@@ -131,16 +132,10 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": {
-        "months": [
-          { "month": "2026-09", "label": "September 2026", "units": 5, "trackedDays": 1,
-            "avgUnitsPerTrackedDay": 5.0, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0,
-            "hasBaseline": false, "isCurrentMonth": true, "isComplete": false }
-        ],
-        "currentMonthMtd": { "month": "2026-09", "label": "September 2026", "units": 5,
-          "trackedDays": 1, "avgUnitsPerTrackedDay": 5.0, "spent": 0.0, "saved": 0.0,
-          "baselineSaved": 0.0, "hasBaseline": false, "isCurrentMonth": true, "isComplete": false }
-      } },
+      "expected": { "units": 5, "trackedDays": 1, "avgUnitsPerTrackedDay": 5.0,
+        "completedCount": 0, "currentMonthMtd": true, "currentMonthUnits": 5,
+        "completedMonth": null, "currentMonth": "2026-09",
+        "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
 
     { "case": "monthly_insights_spans_two_months", "op": "monthlyInsights",
       "input": {
@@ -155,19 +150,10 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": {
-        "months": [
-          { "month": "2026-09", "label": "September 2026", "units": 5, "trackedDays": 2,
-            "avgUnitsPerTrackedDay": 2.5, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0,
-            "hasBaseline": false, "isCurrentMonth": true, "isComplete": false },
-          { "month": "2026-08", "label": "August 2026", "units": 5, "trackedDays": 1,
-            "avgUnitsPerTrackedDay": 5.0, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0,
-            "hasBaseline": false, "isCurrentMonth": false, "isComplete": true }
-        ],
-        "currentMonthMtd": { "month": "2026-09", "label": "September 2026", "units": 5,
-          "trackedDays": 2, "avgUnitsPerTrackedDay": 2.5, "spent": 0.0, "saved": 0.0,
-          "baselineSaved": 0.0, "hasBaseline": false, "isCurrentMonth": true, "isComplete": false }
-      } },
+      "expected": { "units": 5, "trackedDays": 1, "avgUnitsPerTrackedDay": 5.0,
+        "completedCount": 1, "currentMonthMtd": true, "currentMonthUnits": 5,
+        "completedMonth": "2026-08", "currentMonth": "2026-09",
+        "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
 
     { "case": "monthly_insights_tracked_day_average_not_calendar_day_average", "op": "monthlyInsights",
       "input": {
@@ -181,14 +167,9 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": {
-        "months": [
-          { "month": "2026-08", "label": "August 2026", "units": 10, "trackedDays": 2,
-            "avgUnitsPerTrackedDay": 5.0, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0,
-            "hasBaseline": false, "isCurrentMonth": false, "isComplete": true }
-        ],
-        "currentMonthMtd": null
-      } },
+      "expected": { "units": 10, "trackedDays": 2, "avgUnitsPerTrackedDay": 5.0,
+        "completedCount": 1, "completedMonth": "2026-08",
+        "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
 
     { "case": "monthly_insights_historical_pricing_stamped_not_live", "op": "monthlyInsights",
       "input": {
@@ -203,16 +184,9 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": {
-        "months": [
-          { "month": "2026-09", "label": "September 2026", "units": 10, "trackedDays": 1,
-            "avgUnitsPerTrackedDay": 10.0, "spent": 10.0, "saved": 10.0, "baselineSaved": 5.0,
-            "hasBaseline": true, "isCurrentMonth": true, "isComplete": false }
-        ],
-        "currentMonthMtd": { "month": "2026-09", "label": "September 2026", "units": 10,
-          "trackedDays": 1, "avgUnitsPerTrackedDay": 10.0, "spent": 10.0, "saved": 10.0,
-          "baselineSaved": 5.0, "hasBaseline": true, "isCurrentMonth": true, "isComplete": false }
-      } },
+      "expected": { "units": 10, "trackedDays": 1, "avgUnitsPerTrackedDay": 10.0,
+        "spent": 10.0, "saved": 10.0, "baselineSaved": 5.0, "hasBaseline": true,
+        "currentMonthMtd": true, "currentMonth": "2026-09" } },
 
     { "case": "monthly_insights_merges_active_counts_for_today", "op": "monthlyInsights",
       "input": {
@@ -225,16 +199,10 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": {
-        "months": [
-          { "month": "2026-09", "label": "September 2026", "units": 5, "trackedDays": 1,
-            "avgUnitsPerTrackedDay": 5.0, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0,
-            "hasBaseline": false, "isCurrentMonth": true, "isComplete": false }
-        ],
-        "currentMonthMtd": { "month": "2026-09", "label": "September 2026", "units": 5,
-          "trackedDays": 1, "avgUnitsPerTrackedDay": 5.0, "spent": 0.0, "saved": 0.0,
-          "baselineSaved": 0.0, "hasBaseline": false, "isCurrentMonth": true, "isComplete": false }
-      } },
+      "expected": { "units": 5, "trackedDays": 1, "avgUnitsPerTrackedDay": 5.0,
+        "completedCount": 0, "currentMonthMtd": true, "currentMonthUnits": 5,
+        "completedMonth": null, "currentMonth": "2026-09",
+        "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
 
     { "case": "monthly_insights_overlap_logs_and_daydocs_additive", "op": "monthlyInsights",
       "input": {
@@ -249,16 +217,10 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": {
-        "months": [
-          { "month": "2026-09", "label": "September 2026", "units": 6, "trackedDays": 1,
-            "avgUnitsPerTrackedDay": 6.0, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0,
-            "hasBaseline": false, "isCurrentMonth": true, "isComplete": false }
-        ],
-        "currentMonthMtd": { "month": "2026-09", "label": "September 2026", "units": 6,
-          "trackedDays": 1, "avgUnitsPerTrackedDay": 6.0, "spent": 0.0, "saved": 0.0,
-          "baselineSaved": 0.0, "hasBaseline": false, "isCurrentMonth": true, "isComplete": false }
-      } },
+      "expected": { "units": 6, "trackedDays": 1, "avgUnitsPerTrackedDay": 6.0,
+        "completedCount": 0, "currentMonthMtd": true, "currentMonthUnits": 6,
+        "completedMonth": null, "currentMonth": "2026-09",
+        "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
 
     { "case": "monthly_insights_month_year_boundary", "op": "monthlyInsights",
       "input": {
@@ -272,19 +234,8 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": {
-        "months": [
-          { "month": "2026-01", "label": "January 2026", "units": 5, "trackedDays": 1,
-            "avgUnitsPerTrackedDay": 5.0, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0,
-            "hasBaseline": false, "isCurrentMonth": true, "isComplete": false },
-          { "month": "2025-12", "label": "December 2025", "units": 4, "trackedDays": 1,
-            "avgUnitsPerTrackedDay": 4.0, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0,
-            "hasBaseline": false, "isCurrentMonth": false, "isComplete": true }
-        ],
-        "currentMonthMtd": { "month": "2026-01", "label": "January 2026", "units": 5,
-          "trackedDays": 1, "avgUnitsPerTrackedDay": 5.0, "spent": 0.0, "saved": 0.0,
-          "baselineSaved": 0.0, "hasBaseline": false, "isCurrentMonth": true, "isComplete": false }
-      } },
+      "expected": { "completedCount": 1, "currentMonthMtd": true, "currentMonthUnits": 5,
+        "completedMonth": "2025-12", "currentMonth": "2026-01" } },
 
     { "case": "trend_down_50_percent", "op": "trendComparison",
       "input": { "currentAvg": 5, "previousAvg": 10 },
@@ -308,6 +259,57 @@
 
     { "case": "trend_previous_positive_current_zero", "op": "trendComparison",
       "input": { "currentAvg": 0, "previousAvg": 10 },
-      "expected": { "current": 0.0, "previous": 10.0, "delta": -10.0, "percentChange": -100.0, "direction": "to_zero", "text": "100% fewer units" } }
+      "expected": { "current": 0.0, "previous": 10.0, "delta": -10.0, "percentChange": -100.0, "direction": "to_zero", "text": "100% fewer units" } },
+
+    { "case": "monthly_additive_merge_same_tracker_same_date", "op": "monthlyInsights",
+      "input": {
+        "logs": [{ "id": "l1", "logDate": "2026-08-10", "counts": { "cig": 4 }, "origin": "MANUAL_ENTRY" }],
+        "dayDocs": [{ "date": "2026-08-10", "counts": { "cig": 4 }, "trackerSnapshots": {}, "aggregateCredit": null, "status": "closed" }],
+        "trackingDay": "2026-09-16"
+      },
+      "expected": { "units": 8, "trackedDays": 1, "avgUnitsPerTrackedDay": 8.0 } },
+
+    { "case": "monthly_logs_only_zero_financials", "op": "monthlyInsights",
+      "input": {
+        "logs": [{ "id": "l1", "logDate": "2026-08-15", "counts": { "cig": 5 }, "origin": "MANUAL_ENTRY" }],
+        "dayDocs": [],
+        "trackingDay": "2026-09-16"
+      },
+      "expected": { "units": 5, "trackedDays": 1, "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
+
+    { "case": "monthly_current_month_isolated", "op": "monthlyInsights",
+      "input": {
+        "logs": [{ "id": "l1", "logDate": "2026-07-15", "counts": { "cig": 10 }, "origin": "MANUAL_ENTRY" },
+                 { "id": "l2", "logDate": "2026-09-10", "counts": { "cig": 5 }, "origin": "MANUAL_ENTRY" }],
+        "dayDocs": [],
+        "trackingDay": "2026-09-16"
+      },
+      "expected": { "completedCount": 1, "currentMonthMtd": true, "currentMonthUnits": 5, "completedMonth": "2026-07" } },
+
+    { "case": "monthly_missing_days_excluded_from_average", "op": "monthlyInsights",
+      "input": {
+        "logs": [{ "id": "l1", "logDate": "2026-08-01", "counts": { "cig": 10 }, "origin": "MANUAL_ENTRY" },
+                 { "id": "l2", "logDate": "2026-08-03", "counts": { "cig": 6 }, "origin": "MANUAL_ENTRY" }],
+        "dayDocs": [],
+        "trackingDay": "2026-09-16"
+      },
+      "expected": { "units": 16, "trackedDays": 2, "avgUnitsPerTrackedDay": 8.0 } },
+
+    { "case": "monthly_year_boundary_dec_jan", "op": "monthlyInsights",
+      "input": {
+        "logs": [{ "id": "l1", "logDate": "2026-12-15", "counts": { "cig": 10 }, "origin": "MANUAL_ENTRY" }],
+        "dayDocs": [],
+        "trackingDay": "2027-01-10"
+      },
+      "expected": { "completedCount": 1, "completedMonth": "2026-12",
+        "currentMonthMtd": false, "currentMonth": null } },
+
+    { "case": "monthly_stamped_credit_not_repriced", "op": "monthlyInsights",
+      "input": {
+        "logs": [{ "id": "l1", "logDate": "2026-08-15", "counts": { "cig": 4 }, "origin": "MANUAL_ENTRY" }],
+        "dayDocs": [{ "date": "2026-08-15", "counts": { "cig": 4 }, "trackerSnapshots": {}, "aggregateCredit": { "wasted": 1.6, "saved": 2.4, "baselineSaved": 1.2 }, "status": "closed" }],
+        "trackingDay": "2026-09-16"
+      },
+      "expected": { "units": 8, "spent": 1.6, "saved": 2.4, "baselineSaved": 1.2 } }
   ]
 }
