@@ -8,6 +8,7 @@ import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
 import { formatDateDisplay } from '../../utils/formatters';
+import { InsightsScreen } from './InsightsScreen';
 import { mapFirestoreError } from '../../utils/errorHandlers';
 import { UndoToast, UNDO_TOAST_MS } from '../feedback/UndoToast';
 import { ConfirmModal } from '../modals/ConfirmModal';
@@ -166,6 +167,7 @@ export const HistoryScreen = React.memo(({
 
   const velocityPeriod = VELOCITY_PERIODS.find((p) => p.days === velocityDays) || VELOCITY_PERIODS[0];
   const hasAnyBaseline = (configs || []).some((c) => c.baseline != null);
+  const [subView, setSubView] = useState('history');
 
   const handleDelete = async (snapshot) => {
     if (!snapshot || !userId) return;
@@ -273,8 +275,53 @@ export const HistoryScreen = React.memo(({
 
   return (
     <div className="space-y-5 md:space-y-7">
-      {/* Top: Daily Usage Trend Chart */}
-      <Card className="p-5 md:p-8 overflow-hidden bg-bg-card">
+      {/* Sub-view selector: History vs Insights */}
+      <div
+        role="group"
+        aria-label="History sub-view"
+        className="inline-flex p-1 rounded-full bg-white/[0.03] border border-white/[0.06] gap-0.5 self-start"
+      >
+        <button
+          type="button"
+          aria-pressed={subView === 'history'}
+          onClick={() => setSubView('history')}
+          className={cn(
+            'h-10 min-w-[2.75rem] px-4 rounded-full text-[10px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
+            subView === 'history'
+              ? 'bg-white text-black shadow-sm'
+              : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
+          )}
+        >
+          History
+        </button>
+        <button
+          type="button"
+          aria-pressed={subView === 'insights'}
+          onClick={() => setSubView('insights')}
+          className={cn(
+            'h-10 min-w-[2.75rem] px-4 rounded-full text-[10px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
+            subView === 'insights'
+              ? 'bg-white text-black shadow-sm'
+              : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
+          )}
+        >
+          Insights
+        </button>
+      </div>
+
+      {subView === 'insights' ? (
+        <InsightsScreen
+          logs={logs}
+          dayDocs={dayDocs}
+          configs={configs}
+          m={m}
+          today={today}
+          unitPrice={unitPrice}
+        />
+      ) : (
+        <React.Fragment>
+          {/* Top: Daily Usage Trend Chart */}
+          <Card className="p-5 md:p-8 overflow-hidden bg-bg-card">
         <div className="flex items-end justify-between gap-4 md:gap-6 mb-3 md:mb-4">
           <div className="flex flex-col gap-1 min-w-0">
             <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Usage trend</span>
@@ -601,9 +648,11 @@ export const HistoryScreen = React.memo(({
             </div>
           )}
         </Card>
-      </div>
+        </div>
+        </React.Fragment>
+      )}
 
-      {actionError && (
+        {actionError && (
         <div className="fixed top-24 left-1/2 z-[4000] -translate-x-1/2 flex items-center gap-4 px-5 py-3 rounded-2xl bg-red-950/90 border border-red-500/30 shadow-[0_20px_60px_rgba(0,0,0,0.8)]">
           <span className="text-[11px] font-black uppercase tracking-[0.16em] text-red-300">{actionError}</span>
           <button

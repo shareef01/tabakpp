@@ -31,6 +31,44 @@ const runFixture = (op, input) => {
       return SmokingCalculator.formatCurrency(input.amount);
     case 'backfillAllowed':
       return SmokingCalculator.isBackfillDateAllowed(input.date, input.trackingDay);
+    case 'monthlyInsights': {
+      const defaultUnitPrice = input.defaultUnitPrice ?? 0.5;
+      const monthsToInclude = input.monthsToInclude ?? 6;
+      const result = SmokingCalculator.aggregateMonthlyData(
+        input.logs || [],
+        (input.dayDocs || []).map((d) => ({
+          date: d.date,
+          counts: d.counts || {},
+          trackerSnapshots: d.trackerSnapshots || {},
+          aggregateCredit: d.aggregateCredit || null,
+          status: d.status || 'closed',
+        })),
+        input.trackingDay,
+        input.activeCounts || {},
+        defaultUnitPrice,
+        monthsToInclude
+      );
+      // Flatten to a comparison object that matches the fixture expectations
+      const completed = result.completedMonths || [];
+      const current = result.currentMonthMtd;
+      const firstCompleted = completed[0];
+      return {
+        units: firstCompleted ? firstCompleted.units : (current ? current.units : 0),
+        trackedDays: firstCompleted ? firstCompleted.trackedDays : (current ? current.trackedDays : 0),
+        avgUnitsPerTrackedDay: firstCompleted ? firstCompleted.avgUnitsPerTrackedDay : (current ? current.avgUnitsPerTrackedDay : 0),
+        spent: firstCompleted ? firstCompleted.spent : (current ? current.spent : 0),
+        saved: firstCompleted ? firstCompleted.saved : (current ? current.saved : 0),
+        baselineSaved: firstCompleted ? firstCompleted.baselineSaved : (current ? current.baselineSaved : 0),
+        hasBaseline: firstCompleted ? firstCompleted.hasBaseline : (current ? current.hasBaseline : false),
+        completedCount: completed.length,
+        currentMonthMtd: current != null,
+        currentMonthUnits: current ? current.units : null,
+        completedMonth: firstCompleted ? firstCompleted.month : null,
+        currentMonth: current ? current.month : null,
+      };
+    }
+    case 'trendComparison':
+      return SmokingCalculator.calculateTrend(input.currentAvg, input.previousAvg);
     default:
       throw new Error(`Unknown fixture op: ${op}`);
   }
@@ -39,7 +77,18 @@ const runFixture = (op, input) => {
 describe('cross-platform domain contract fixtures', () => {
   fixtures.forEach(({ case: name, op, input, expected }) => {
     it(`[${op}] ${name}`, () => {
-      expect(runFixture(op, input)).toEqual(expected);
+      const actual = runFixture(op, input);
+      if (op === 'monthlyInsights' && typeof expected === 'object' && expected !== null) {
+        // monthlyInsights fixtures selectively assert fields — only check
+        // the fields present in expected
+        const filteredActual = Object.keys(expected).reduce((acc, key) => {
+          acc[key] = actual[key];
+          return acc;
+        }, {});
+        expect(filteredActual).toEqual(expected);
+      } else {
+        expect(actual).toEqual(expected);
+      }
     });
   });
 });
