@@ -51,6 +51,9 @@ fun HistoryScreen(
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val trackingDay by viewModel.trackingDay.collectAsStateWithLifecycle()
     val historyIsTruncated by viewModel.historyIsTruncated.collectAsStateWithLifecycle()
+    val dayDocs by viewModel.dayDocs.collectAsStateWithLifecycle()
+    val configs by viewModel.configs.collectAsStateWithLifecycle()
+    var historySubView by rememberSaveable { mutableStateOf("history") }
 
     val scope = rememberCoroutineScope()
     val accentColor = LocalAccentColor.current
@@ -93,6 +96,44 @@ fun HistoryScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // SUB-VIEW SELECTOR
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = historySubView == "history",
+                            onClick = { historySubView = "history" },
+                            label = { Text("History") },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                        )
+                        FilterChip(
+                            selected = historySubView == "insights",
+                            onClick = { historySubView = "insights" },
+                            label = { Text("Insights") },
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                        )
+                    }
+                }
+
+                // INSIGHTS SUBVIEW
+                if (historySubView == "insights") {
+                    item {
+                        HistoricalInsightsContent(
+                            logs = logs,
+                            dayDocs = dayDocs,
+                            configs = configs,
+                            trackingDay = trackingDay,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                }
+
+                // HISTORY SUBVIEW (existing content)
+                if (historySubView == "history") {
                 // TREND ANALYSIS BLOCK
                 item {
                     Column {
@@ -242,9 +283,9 @@ fun HistoryScreen(
                     }
                 }
             }
-        }
-
-    }
+            } // close history subview conditional
+        } // close LazyColumn lambda
+    } // close else
 
     if (logToEdit != null) {
         ModalBottomSheet(
