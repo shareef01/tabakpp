@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { User, Check, Plus, ArrowUp, ArrowDown, Edit2, Trash2, Camera, Loader2, Package, Wind, Moon, Square, Columns2, LayoutGrid, AlertTriangle } from 'lucide-react';
+import { User, Check, Plus, ArrowUp, ArrowDown, Edit2, Trash2, Camera, Loader2, Package, Wind, Moon, Square, Columns2, LayoutGrid, AlertTriangle, Download, Copy } from 'lucide-react';
 import { updateProfile, EmailAuthProvider, GoogleAuthProvider, reauthenticateWithCredential, reauthenticateWithPopup, reauthenticateWithRedirect } from 'firebase/auth';
 import { deleteAuthUserAfterWipe, DELETE_INCOMPLETE_MESSAGE } from '../../utils/deleteAuthUserAfterWipe';
 import { auth } from '../../firebase';
 import { RegistryService } from '../../services/registryService';
 import { Input, Button, UI, Card } from '../Common';
+import { buildJson, buildCsv } from '../../utils/ExportBuilder';
 import { cn } from '../../utils/utils';
 import { sanitizeString, compressAvatarFile } from '../../utils/security';
 import { SmokingCalculator } from '../../utils/smokingCalculator';
@@ -119,6 +120,8 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [notification, setNotification] = useState(null);
   const [nameError, setNameError] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
   const fileInputRef = useRef(null);
   const deleteDialogRef = useDialogA11y(showDeleteAccount, () => setShowDeleteAccount(false), { disabled: isDeletingAccount });
 
@@ -353,6 +356,41 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
   };
 
   const canPasswordDelete = hasPasswordProvider(auth.currentUser || user);
+  const handleExport = async (format) => {
+    if (!user) return;
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const snapshot = await RegistryService.readCompleteExportSnapshot(user.uid);
+      let content, filename, mimeType;
+      if (format === 'json') {
+        content = buildJson(snapshot);
+        filename = `tabakpp-data-${new Date().toISOString().slice(0, 10)}.json`;
+        mimeType = 'application/json';
+      } else {
+        content = buildCsv(snapshot, settings.unitPrice || 0.5);
+        filename = `tabakpp-history-${new Date().toISOString().slice(0, 10)}.csv`;
+        mimeType = 'text/csv';
+      }
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setNotification({ title: 'Export', message: `${filename} downloaded.`, type: 'success' });
+    } catch (err) {
+      console.error(err);
+      setExportError(err?.message || 'Could not export your data. Try again.');
+      setNotification({ title: 'Export', message: 'Could not export your data.', type: 'error' });
+    } finally {
+      setIsExporting(false);
+    }
+  };
   const canGoogleDelete = hasGoogleProvider(auth.currentUser || user);
 
   return (
@@ -724,6 +762,60 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                   </button>
                 </div>
               )}
+            </div>
+          </Card>
+
+          <Card className="p-6 md:p-8 bg-bg-card">
+            <div className="flex flex-col gap-1 mb-5 min-w-0">
+              <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Privacy</span>
+              <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
+                Export data
+              </h3>
+            </div>
+
+            <p className="text-[11px] text-neutral-400 leading-relaxed mb-5">
+              Download a copy of your profile, counters, daily counts, and
+              historical entries. JSON preserves the full raw structure; CSV is
+              a flat analysis log with economics where tracked snapshots exist.
+              This is a data copy, not a restorable backup — it cannot reimport
+              or restore your account.
+            </p>
+
+            {exportError && (
+              <p role="alert" className="mb-3 text-[11px] font-bold text-rose-400">{exportError}</p>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-2.5">
+              <Button
+                className="flex-1"
+                disabled={isExporting || !user}
+                onClick={() => handleExport('json')}
+              >
+                {isExporting ? (
+                  <>
+                    <Loader2 className="animate-spin" size={15} strokeWidth={2.5} />
+                    Exporting…
+                  </>
+                ) : (
+                  <>
+                    <Download size={15} strokeWidth={2.5} />
+                    JSON export
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="secondary"
+                className="flex-1"
+                disabled={isExporting || !user}
+                onClick={() => handleExport('csv')}
+              >
+                {isExporting ? 'Exporting…' : (
+                  <>
+                    <Download size={15} strokeWidth={2.5} />
+                    CSV export
+                  </>
+                )}
+              </Button>
             </div>
           </Card>
 
