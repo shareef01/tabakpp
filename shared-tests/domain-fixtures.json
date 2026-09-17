@@ -310,6 +310,120 @@
         "dayDocs": [{ "date": "2026-08-15", "counts": { "cig": 4 }, "trackerSnapshots": {}, "aggregateCredit": { "wasted": 1.6, "saved": 2.4, "baselineSaved": 1.2 }, "status": "closed" }],
         "trackingDay": "2026-09-16"
       },
-      "expected": { "units": 8, "spent": 1.6, "saved": 2.4, "baselineSaved": 1.2 } }
+      "expected": { "units": 8, "spent": 1.6, "saved": 2.4, "baselineSaved": 1.2 } },
+
+    { "case": "export_empty_account", "op": "export",
+      "input": {
+        "configs": [], "days": [], "logs": [],
+        "profile": { "name": "Test User", "unitPrice": 0.5 }
+      },
+      "expected": { "exportVersion": 1, "daysCount": 0, "logsCount": 0, "configsCount": 0,
+        "hasProfile": true } },
+
+    { "case": "export_single_day_document", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "Cigarettes", "limit": 20, "order": 0, "pricePerUnit": 0.5, "baseline": 15 }],
+        "days": [{ "date": "2026-09-15", "counts": { "c1": 3.0 }, "trackerSnapshots": { "c1": { "name": "Cigarettes", "target": 20, "baseline": 20, "unitPrice": 0.5 } }, "status": "closed" }],
+        "logs": [],
+        "profile": { "name": "Test User", "unitPrice": 0.5 }
+      },
+      "expected": { "exportVersion": 1, "daysCount": 1, "logsCount": 0, "configsCount": 1,
+        "dayRow0": "2026-09-15,day,c1,Cigarettes,3.0,20,20,0.5,1.5,8.5,closed",
+        "csvHeader": "date,source,tracker_id,tracker_name,count,target,baseline,unit_price,spent,saved,status" } },
+
+    { "case": "export_manual_entry", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "Cigarettes", "limit": 20, "order": 0 }],
+        "days": [],
+        "logs": [{ "id": "log1", "logDate": "2026-09-10", "counts": { "c1": 5.0 }, "origin": "MANUAL_ENTRY" }],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 0, "logsCount": 1, "configsCount": 1,
+        "logRow0": "2026-09-10,manual_entry,c1,Cigarettes,5.0,,,,,," } },
+
+    { "case": "export_legacy_day_reset", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "Cigarettes", "limit": 20, "order": 0 }],
+        "days": [],
+        "logs": [{ "id": "log_DAY", "logDate": "2026-08-01", "counts": { "c1": 20.0 }, "origin": "DAY_RESET" }],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 0, "logsCount": 1,
+        "logRow0": "2026-08-01,legacy_day_archive,c1,Cigarettes,20.0,,,,,," } },
+
+    { "case": "export_day_and_manual_log_same_date", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "Cigarettes", "limit": 20, "order": 0 }],
+        "days": [{ "date": "2026-09-15", "counts": { "c1": 3.0 }, "trackerSnapshots": { "c1": { "name": "Cigarettes", "target": 20, "baseline": 20, "unitPrice": 0.5 } }, "status": "closed" }],
+        "logs": [{ "id": "log1", "logDate": "2026-09-15", "counts": { "c1": 2.0 }, "origin": "MANUAL_ENTRY" }],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 1, "logsCount": 1,
+        "csvRows": 3 } },
+
+    { "case": "export_historical_stamped_price", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "Cigarettes", "limit": 5, "order": 0, "pricePerUnit": 0.70, "baseline": 15 }],
+        "days": [{ "date": "2025-01-15", "counts": { "c1": 20.0 }, "trackerSnapshots": { "c1": { "name": "Cigarettes", "target": 20, "baseline": 20, "unitPrice": 0.40 } }, "status": "closed" }],
+        "logs": [],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 1,
+        "dayRow0": "2025-01-15,day,c1,Cigarettes,20.0,20,20,0.4,8.0,0.0,closed" } },
+
+    { "case": "export_logs_only_missing_economics", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "Cigarettes", "limit": 20, "order": 0, "pricePerUnit": 0.5 }],
+        "days": [],
+        "logs": [{ "id": "log1", "logDate": "2026-09-15", "counts": { "c1": 5.0 }, "origin": "MANUAL_ENTRY" }],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 0, "logsCount": 1,
+        "logRow0": "2026-09-15,manual_entry,c1,Cigarettes,5.0,,,,,," } },
+
+    { "case": "export_unicode_tracker_name", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "Cigarettes 🚭", "limit": 20, "order": 0 }],
+        "days": [],
+        "logs": [{ "id": "log1", "logDate": "2026-09-15", "counts": { "c1": 1.0 }, "origin": "MANUAL_ENTRY" }],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 0, "logsCount": 1 } },
+
+    { "case": "export_formula_like_name", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "=CMD()", "limit": 20, "order": 0 }],
+        "days": [],
+        "logs": [{ "id": "log1", "logDate": "2026-09-15", "counts": { "c1": 1.0 }, "origin": "MANUAL_ENTRY" }],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 0, "logsCount": 1,
+        "logRow0": "2026-09-15,manual_entry,c1,'=CMD(),1.0,,,,,," } },
+
+    { "case": "export_deterministic_ordering", "op": "export",
+      "input": {
+        "configs": [{ "id": "c3", "name": "C", "limit": 20, "order": 2 },
+                    { "id": "c1", "name": "A", "limit": 20, "order": 0 },
+                    { "id": "c2", "name": "B", "limit": 20, "order": 1 }],
+        "days": [{ "date": "2025-03-15", "counts": { "c1": 1.0 }, "trackerSnapshots": {}, "status": "closed" },
+                 { "date": "2025-01-15", "counts": { "c1": 2.0 }, "trackerSnapshots": {}, "status": "closed" },
+                 { "date": "2025-02-15", "counts": { "c1": 3.0 }, "trackerSnapshots": {}, "status": "closed" }],
+        "logs": [],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 3, "logsCount": 0,
+        "dayDates": ["2025-01-15", "2025-02-15", "2025-03-15"] } },
+
+    { "case": "export_multi_year_history", "op": "export",
+      "input": {
+        "configs": [{ "id": "c1", "name": "Cigarettes", "limit": 20, "order": 0 }],
+        "days": [{ "date": "2023-06-15", "counts": { "c1": 10.0 }, "trackerSnapshots": {}, "status": "closed" },
+                 { "date": "2024-01-01", "counts": { "c1": 15.0 }, "trackerSnapshots": {}, "status": "closed" },
+                 { "date": "2025-03-20", "counts": { "c1": 5.0 }, "trackerSnapshots": {}, "status": "closed" }],
+        "logs": [],
+        "profile": null
+      },
+      "expected": { "exportVersion": 1, "daysCount": 3, "logsCount": 0,
+        "csvHeader": "date,source,tracker_id,tracker_name,count,target,baseline,unit_price,spent,saved,status" } }
   ]
 }
