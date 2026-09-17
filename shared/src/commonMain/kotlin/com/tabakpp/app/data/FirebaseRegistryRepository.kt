@@ -1,5 +1,7 @@
 package com.tabakpp.app.data
 
+import com.tabakpp.app.domain.CompleteExportSnapshot
+import com.tabakpp.app.domain.ProfileMetaExport
 import com.tabakpp.app.domain.RegistryMutations
 import com.tabakpp.app.domain.SmokingCalculator
 import dev.gitlive.firebase.firestore.*
@@ -93,12 +95,26 @@ class FirebaseRegistryRepository(
             .documents.map { doc -> doc.data<TrackerConfig>().copy(id = doc.id) }
     }
 
-    /** Full history for one-shot migration only — not used by the live listener. */
+    /**
+     * Paginated full-history read for logs — NOT the bounded live
+     * listener (which uses limit(LIVE_LOG_QUERY_LIMIT)). Paginates to stay
+     * under Firestore's 1MB response cap on heavy accounts.
+     */
     private suspend fun getAllLogsOnce(uid: String): List<LogEntry> {
-        return firestore.collection("users").document(uid).collection("logs")
-            .orderBy("logDate", Direction.DESCENDING)
-            .get()
-            .documents.mapNotNull { doc -> decodeLogEntry(doc) }
+        val out = mutableListOf<LogEntry>()
+        var lastDoc: DocumentSnapshot? = null
+        while (true) {
+            val query = firestore.collection("users").document(uid).collection("logs")
+                .orderBy("logDate", Direction.DESCENDING)
+                .limit(BATCH_LIMIT.toLong())
+            val snap = if (lastDoc != null) query.startAfter(lastDoc).get() else query.get()
+            val docs = snap.documents
+            if (docs.isEmpty()) break
+            docs.mapNotNull { doc -> decodeLogEntry(doc) }.let { out.addAll(it) }
+            if (docs.size < BATCH_LIMIT) break
+            lastDoc = docs.last()
+        }
+        return out
     }
 
     private fun decodeLogEntry(doc: DocumentSnapshot): LogEntry? {
@@ -127,6 +143,73 @@ class FirebaseRegistryRepository(
             val snap = get(configsRef.document(id))
             if (snap.exists) snap.data<TrackerConfig>().copy(id = id) else null
         }
+    }
+
+    /**
+     * Paginated full-history read for day documents — NOT the bounded live
+     * listener (which uses limit(LIVE_DAYS_QUERY_LIMIT)). Paginates to stay
+     * under Firestore's 1MB response cap.
+     */
+    private suspend fun getAllDaysOnce(uid: String): List<DayDocument> {
+        val out = mutableListOf<DayDocument>()
+        var lastDoc: DocumentSnapshot? = null
+        while (true) {
+            val query = firestore.collection("users").document(uid).collection("days")
+                .orderBy("date", Direction.DESCENDING)
+                .limit(BATCH_LIMIT.toLong())
+            val snap = if (lastDoc != null) query.startAfter(lastDoc).get() else query.get()
+            val docs = snap.documents
+            if (docs.isEmpty()) break
+            docs.mapNotNull { doc -> decodeDayDocument(doc) }.let { out.addAll(it) }
+            if (docs.size < BATCH_LIMIT) break
+            lastDoc = docs.last()
+        }
+        return out
+    }
+
+    private suspend fun getUserProfileOnce(uid: String): UserProfile? {
+        val snap = firestore.collection("users").document(uid).get()
+        return if (snap.exists) {
+            try {
+                snap.data<UserProfile>()
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+    }
+
+    private suspend fun getProfileExtraOnce(uid: String): ProfileExtra? {
+        val snap = firestore.collection("users").document(uid).collection("meta").document("profile").get()
+        return if (snap.exists) {
+            try {
+                snap.data<ProfileExtra>()
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+    }
+
+    /**
+     * Read-only complete snapshot of all user data for export.
+     *
+     * Uses unbounded, paginated reads — NOT the bounded live-query collections
+     * (limit(1200) for logs, limit(400) for days). Safe to call from ViewModel
+     * without triggering migrations, day-close, or any writes.
+     */
+    override suspend fun readCompleteExportSnapshot(uid: String): CompleteExportSnapshot {
+        val profile = getUserProfileOnce(uid)
+        val profileExtra = getProfileExtraOnce(uid)
+        val configs = getConfigsOnce(uid)
+        val days = getAllDaysOnce(uid)
+        val logs = getAllLogsOnce(uid)
+        return CompleteExportSnapshot(
+            generatedAt = kotlinx.datetime.Clock.System.now().toString(),
+            profile = profile,
+            profileMeta = profileExtra?.let { ProfileMetaExport(it.avatar) },
+            configs = configs,
+            days = days,
+            logs = logs
+        )
     }
 
     override suspend fun updateLiveCounter(
