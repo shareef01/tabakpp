@@ -345,6 +345,92 @@ class SmokingCalculatorTest {
     }
 
     @Test
+    fun testCalculateTrackingStreak_fixtureCoverage() {
+        val configs = listOf(TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE))
+        val today = "2024-07-14"
+
+        // 1. no history → 0
+        assertEquals(0, SmokingCalculator.calculateTrackingStreak(emptyList(), emptyMap(), today))
+
+        // 2. one tracked day
+        assertEquals(1, SmokingCalculator.calculateTrackingStreak(
+            listOf(LogEntry("l1", "2024-07-14", mapOf("c1" to 1.0))),
+            emptyMap(), today
+        ))
+
+        // 3. consecutive tracked days
+        assertEquals(3, SmokingCalculator.calculateTrackingStreak(
+            listOf(
+                LogEntry("l1", "2024-07-13", mapOf("c1" to 3.0)),
+                LogEntry("l2", "2024-07-12", mapOf("c1" to 3.0))
+            ),
+            mapOf("c1" to 1.0), today
+        ))
+
+        // 4. missing day breaks streak — log from 2 days ago with no session today = 0
+        // (mostRecent 07-12 is older than yesterday 07-13, so streak is 0)
+        assertEquals(0, SmokingCalculator.calculateTrackingStreak(
+            listOf(LogEntry("l1", "2024-07-12", mapOf("c1" to 3.0))),
+            emptyMap(), today
+        ))
+
+        // 5. tracked zero (manual entry with zero counts) preserves streak
+        assertEquals(3, SmokingCalculator.calculateTrackingStreak(
+            listOf(
+                LogEntry("l1", "2024-07-13", mapOf("c1" to 0.0), origin = "MANUAL_ENTRY"),
+                LogEntry("l2", "2024-07-12", mapOf("c1" to 5.0))
+            ),
+            mapOf("c1" to 1.0), today
+        ))
+
+        // 6. manual-entry day counts as tracked
+        assertEquals(2, SmokingCalculator.calculateTrackingStreak(
+            listOf(LogEntry("l1", "2024-07-13", mapOf("c1" to 5.0), origin = "MANUAL_ENTRY")),
+            mapOf("c1" to 1.0), today
+        ))
+
+        // 7. dayDoc day counts as tracked — today has active count, yesterday is a dayDoc (possibly zero)
+        assertEquals(2, SmokingCalculator.calculateTrackingStreak(
+            emptyList(),
+            mapOf("c1" to 1.0),
+            today,
+            listOf(DayDocument("2024-07-13", mapOf("c1" to 3.0), emptyMap()))
+        ))
+
+        // 8. manual + dayDoc same date → still 1 streak day
+        assertEquals(2, SmokingCalculator.calculateTrackingStreak(
+            listOf(LogEntry("l1", "2024-07-13", mapOf("c1" to 4.0), origin = "MANUAL_ENTRY")),
+            mapOf("c1" to 1.0),
+            today,
+            listOf(DayDocument("2024-07-13", mapOf("c1" to 2.0), emptyMap()))
+        ))
+
+        // 9. goal missed but tracking preserved (over target every day)
+        val overConfigs = listOf(TrackerConfig("c1", "Cig", 1, 1, TrackerType.CIGARETTE))
+        val overLogs = listOf(
+            LogEntry("d1", "2024-07-13", mapOf("c1" to 20.0)),
+            LogEntry("d2", "2024-07-12", mapOf("c1" to 20.0))
+        )
+        assertEquals(0, SmokingCalculator.calculateStreak(overLogs, overConfigs, mapOf("c1" to 20.0), today))
+        assertEquals(3, SmokingCalculator.calculateTrackingStreak(overLogs, mapOf("c1" to 20.0), today))
+
+        // 11. day-start boundary (trackingDay = cursor, yesterday empty)
+        // With trackingDay "2024-07-14", if yesterday (07-13) is missing → streak 0 (no recent activity)
+        assertEquals(0, SmokingCalculator.calculateTrackingStreak(
+            listOf(LogEntry("l1", "2024-07-11", mapOf("c1" to 5.0))),
+            emptyMap(), today
+        ))
+
+        // 12. year/month boundary — streak spans December → January
+        val yearBoundaryLogs = listOf(
+            LogEntry("l1", "2024-01-01", mapOf("c1" to 3.0)),
+            LogEntry("l2", "2023-12-31", mapOf("c1" to 3.0)),
+            LogEntry("l3", "2023-12-30", mapOf("c1" to 3.0))
+        )
+        assertEquals(4, SmokingCalculator.calculateTrackingStreak(yearBoundaryLogs, mapOf("c1" to 1.0), "2024-01-02"))
+    }
+
+    @Test
     fun futureDatedLogWouldReviveADeadStreak() {
         // Why the bound exists: calculateStreak only bails early when the most
         // recent logged date is older than yesterday, and a future date is not,

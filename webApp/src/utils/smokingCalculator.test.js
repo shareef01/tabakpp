@@ -374,6 +374,89 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
     it('is 0 when nothing was logged and no session is open', () => {
       expect(SmokingCalculator.calculateTrackingStreak([], {}, today)).toBe(0);
     });
+
+    it('covers the 12 cross-platform fixture cases', () => {
+      const _configs = [{ id: 'c1', type: 'CIGARETTE', limit: 10 }];
+      const day = '2024-07-14';
+
+      // 1. no history → 0
+      expect(SmokingCalculator.calculateTrackingStreak([], {}, day)).toBe(0);
+
+      // 2. one tracked day
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [{ logDate: '2024-07-14', counts: { c1: 1 } }],
+        { c1: 0 }, day
+      )).toBe(1);
+
+      // 3. consecutive tracked days
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [{ logDate: '2024-07-13', counts: { c1: 3 } }, { logDate: '2024-07-12', counts: { c1: 3 } }],
+        { c1: 1 }, day
+      )).toBe(3);
+
+      // 4. missing day breaks streak — log from 2 days ago with no session today = 0
+      // (mostRecent 07-12 is older than yesterday 07-13, so streak is 0)
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [{ logDate: '2024-07-12', counts: { c1: 3 } }],
+        {}, day
+      )).toBe(0);
+
+      // 5. tracked zero (manual entry with zero counts) preserves streak —
+      // historical zero-count entries still count as tracked.
+      // Today has active counts, 07-13 has a zero-count manual entry, 07-12 has positive.
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [
+          { logDate: '2024-07-13', counts: { c1: 0 }, origin: 'MANUAL_ENTRY' },
+          { logDate: '2024-07-12', counts: { c1: 5 } }
+        ],
+        { c1: 1 }, day
+      )).toBe(3); // today + 07-13 + 07-12 = 3
+
+      // 6. manual-entry day counts as tracked
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [{ logDate: '2024-07-13', counts: { c1: 5 }, origin: 'MANUAL_ENTRY' }],
+        { c1: 1 }, day
+      )).toBe(2);
+
+      // 7. dayDoc day counts as tracked — today has active count, yesterday is a dayDoc
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [],
+        { c1: 1 }, day,
+        [{ date: '2024-07-13', counts: { c1: 3 }, trackerSnapshots: {}, aggregateCredit: null, status: 'closed' }]
+      )).toBe(2);
+
+      // 8. manual + dayDoc same date → still 1 streak day
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [{ logDate: '2024-07-13', counts: { c1: 4 }, origin: 'MANUAL_ENTRY' }],
+        { c1: 1 }, day,
+        [{ date: '2024-07-13', counts: { c1: 2 }, trackerSnapshots: {}, aggregateCredit: null, status: 'closed' }]
+      )).toBe(2);
+
+      // 9. goal missed but tracking preserved (over target every day)
+      const overConfigs = [{ id: 'c1', type: 'CIGARETTE', limit: 1 }];
+      const overLogs = [
+        { logDate: '2024-07-13', counts: { c1: 20 } },
+        { logDate: '2024-07-12', counts: { c1: 20 } }
+      ];
+      expect(SmokingCalculator.calculateStreak(overLogs, overConfigs, { c1: 20 }, day)).toBe(0);
+      expect(SmokingCalculator.calculateTrackingStreak(overLogs, { c1: 20 }, day)).toBe(3);
+
+      // 11. day-start boundary — missing yesterday breaks streak
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [{ logDate: '2024-07-11', counts: { c1: 5 } }],
+        {}, day
+      )).toBe(0);
+
+      // 12. year/month boundary — streak spans December → January
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [
+          { logDate: '2024-01-01', counts: { c1: 3 } },
+          { logDate: '2023-12-31', counts: { c1: 3 } },
+          { logDate: '2023-12-30', counts: { c1: 3 } }
+        ],
+        { c1: 1 }, '2024-01-02'
+      )).toBe(4); // today + Jan 1 + Dec 31 + Dec 30 = 4
+    });
   });
 
   describe('computeDayCredit (item 2 — self-contained day-doc financials)', () => {

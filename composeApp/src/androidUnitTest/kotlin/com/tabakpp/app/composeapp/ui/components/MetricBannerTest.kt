@@ -26,11 +26,12 @@ class MetricBannerTest {
         count: Int = 7,
         limit: Int = 20,
         streak: Int = 8,
+        trackingStreak: Int = 12,
         progress: Double = 0.35,
         spent: Double = 4.51,
         hasOpen: Boolean = true,
     ) = SmokingCalculator.GlobalMetrics(
-        count = count, limit = limit, streak = streak,
+        count = count, limit = limit, streak = streak, trackingStreak = trackingStreak,
         spentToday = spent, budgetLeftToday = 0.0, saved = 0.0, savedLifetime = 0.0,
         progress = progress, lifeLost = 0, recovered = 0, hasOpenSession = hasOpen,
     )
@@ -50,6 +51,8 @@ class MetricBannerTest {
         rule.onNodeWithText("13").assertIsDisplayed()          // limit - count
         rule.onNodeWithText("GOAL STREAK").assertIsDisplayed()
         rule.onNodeWithText("8").assertIsDisplayed()
+        rule.onNodeWithText("TRACKING").assertIsDisplayed()
+        rule.onNodeWithText("12").assertIsDisplayed()
         rule.onNodeWithText("ENGAGEMENT").assertIsDisplayed()
         rule.onNodeWithText("DAILY USE").assertIsDisplayed()
         rule.onNodeWithText("35%").assertIsDisplayed()          // progress * 100
@@ -82,5 +85,28 @@ class MetricBannerTest {
     fun endDay_hiddenWhenNoOpenSession() {
         setBanner(metrics(hasOpen = false))
         rule.onNodeWithText("CLOSE TRACKING DAY").assertDoesNotExist()
+    }
+
+    @Test
+    fun trackingStreak_displaysGoalZeroButTrackingPositive() {
+        // Goal streak 0, tracking streak 9 — consistent tracking despite over goal.
+        setBanner(metrics(count = 50, limit = 10, streak = 0, trackingStreak = 9, progress = 1.0))
+        rule.onNodeWithText("GOAL STREAK").assertIsDisplayed()
+        rule.onNodeWithText("TRACKING").assertIsDisplayed()
+        rule.onNodeWithText("9").assertIsDisplayed()
+    }
+
+    @Test
+    fun trackingStreak_usesSingularDaySuffixWhenOne() {
+        setBanner(metrics(count = 7, limit = 20, streak = 8, trackingStreak = 1, progress = 0.35))
+        // Tracking streak = 1 renders "1 DAY"; goal streak = 8 renders "8 DAYS"
+        rule.onNodeWithText("1").assertIsDisplayed()
+    }
+
+    @Test
+    fun trackingStreak_longValueDoesNotOverflow() {
+        setBanner(metrics(streak = 365, trackingStreak = 730, progress = 0.1))
+        rule.onNodeWithText("365").assertIsDisplayed()
+        rule.onNodeWithText("730").assertIsDisplayed()
     }
 }
