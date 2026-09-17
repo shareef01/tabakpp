@@ -886,7 +886,46 @@ export const RegistryService = {
     await deleteCollectionDocs(uid, 'days');
     await deleteCollectionDocs(uid, 'meta');
     await deleteDoc(doc(db, 'users', uid));
-  }
+  },
+
+  /**
+   * Complete, unbounded read of all user data for export (spec item 1).
+   * Uses full-paginated reads, NOT the bounded live-query collections
+   * (limit(1200) for logs, limit(400) for days). Strictly read-only.
+   */
+  readCompleteExportSnapshot: async (uid) => {
+    if (!uid) throw new Error('INVALID_REF');
+
+    // Profile (single doc)
+    const profileSnap = await getDoc(doc(db, 'users', uid));
+    const profile = profileSnap.exists() ? profileSnap.data() : null;
+
+    // Profile meta / avatar (single doc under meta/profile)
+    const metaSnap = await getDoc(doc(db, 'users', uid, 'meta', 'profile'));
+    const profileMeta = metaSnap.exists()
+      ? { avatar: metaSnap.data().avatar || null }
+      : { avatar: null };
+
+    // Configs (full read — user will never have 10k+ trackers)
+    const configs = await getConfigsOnce(uid);
+
+    // Days (paginated — covers full history, not the bounded 400-day window)
+    const days = await getAllDays(uid);
+
+    // Logs (paginated — covers full history, not the bounded 1200-log window)
+    const logs = await getAllLogs(uid);
+
+    return {
+      exportVersion: 1,
+      generatedAt: new Date().toISOString(),
+      application: { name: 'Tabakpp' },
+      profile,
+      profileMeta,
+      configs,
+      days,
+      logs,
+    };
+  },
 };
 
 async function getConfigsOnce(uid) {
@@ -951,7 +990,9 @@ async function loadConfigsInTransaction(transaction, uid, configIds) {
   return out;
 }
 
-/** Paginated collection wipe for Spark (no Admin recursive delete). */
+/**
+ * Paginated collection wipe for Spark (no Admin recursive delete).
+ */
 async function deleteCollectionDocs(uid, subcollection, pageSize = 400) {
   const colRef = collection(db, 'users', uid, subcollection);
   while (true) {
@@ -962,4 +1003,27 @@ async function deleteCollectionDocs(uid, subcollection, pageSize = 400) {
     await batch.commit();
     if (snap.size < pageSize) break;
   }
+}
+
+/**
+ * Paginated read of every day document for export (spec item 1).
+ * Mirrors getAllLogs — unbounded, not the live-query limit(400) window.
+ */
+async function getAllDays(uid, pageSize = 400) {
+  const out = [];
+  let lastDoc = null;
+  while (true) {
+    let base = query(
+      collection(db, 'users', uid, 'days'),
+      orderBy('dayDate', 'desc'),
+      limit(pageSize)
+    );
+    if (lastDoc) base = query(base, startAfter(lastDoc));
+    const snap = await getDocs(base);
+    if (snap.empty) break;
+    snap.docs.forEach((d) => out.push(withDocId(d)));
+    lastDoc = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
+  }
+  return out;
 }

@@ -10,6 +10,7 @@ import com.tabakpp.app.data.RegistryRepository
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.User
 import com.tabakpp.app.data.UserProfile
+import com.tabakpp.app.domain.CompleteExportSnapshot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -114,6 +115,14 @@ private class FakeRegistryRepository : RegistryRepository {
     override suspend fun migrateSmokingUnitsIfNeeded(uid: String) {}
     override suspend fun deleteAllUserData(uid: String) { maybeFail() }
     override suspend fun clearLocalCache() { maybeFail() }
+    override suspend fun readCompleteExportSnapshot(uid: String): CompleteExportSnapshot =
+        CompleteExportSnapshot(
+            generatedAt = "2026-09-16T08:15:00Z",
+            profile = profileFlow.value,
+            configs = configsFlow.value,
+            days = daysFlow.value,
+            logs = logsFlow.value
+        )
 }
 
 private class FakeLocalSettings : LocalSettings {

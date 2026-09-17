@@ -87,4 +87,13 @@ interface RegistryRepository {
 
     /** Clears local cache/persistence post account deletion (M-04). */
     suspend fun clearLocalCache()
+
+    /**
+     * Complete, unbounded read of all user data for export (spec item 1).
+     * Returns raw, unsorted snapshot data — the caller (ExportBuilder)
+     * applies deterministic ordering. Strictly read-only: does NOT close
+     * days, reconcile stale days, migrate active counts, or update any
+     * document (spec items 16, 26).
+     */
+    suspend fun readCompleteExportSnapshot(uid: String): com.tabakpp.app.domain.CompleteExportSnapshot
 }

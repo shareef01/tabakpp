@@ -30,9 +30,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tabakpp.app.composeapp.theme.*
+import com.tabakpp.app.composeapp.ui.copyToClipboard
+import com.tabakpp.app.composeapp.ui.rememberExportFileSaver
 import com.tabakpp.app.composeapp.ui.components.AvatarIdentityBadge
 import com.tabakpp.app.composeapp.ui.components.ConfirmModal
 import com.tabakpp.app.composeapp.ui.components.TrackerForm
@@ -43,6 +46,8 @@ import com.tabakpp.app.data.UserProfile
 import com.tabakpp.app.data.WidgetSize
 import com.tabakpp.app.viewmodels.RegistryViewModel
 import com.tabakpp.app.viewmodels.AuthViewModel
+import com.tabakpp.app.domain.ExportState
+import com.tabakpp.app.domain.ExportFormat
 import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
 
@@ -58,6 +63,7 @@ fun SettingsScreen(
 ) {
     val profile by viewModel.userProfile.collectAsStateWithLifecycle()
     val configs by viewModel.configs.collectAsStateWithLifecycle()
+    val exportState by viewModel.exportState.collectAsStateWithLifecycle()
     val authViewModel = koinInject<AuthViewModel>()
     
     val accentColor = LocalAccentColor.current
@@ -247,7 +253,18 @@ fun SettingsScreen(
                 }
             }
 
-            // 7. Sign Out / Delete
+            // 7. Export (web Settings parity)
+            item {
+                ExportDataSection(
+                    exportState = exportState,
+                    onExport = { format -> viewModel.exportData(format) },
+                    onClear = { viewModel.clearExportState() },
+                    onSaveError = { message -> viewModel.setExportError(message) },
+                    accentColor = accentColor
+                )
+            }
+
+            // 8. Sign Out / Delete
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Spacer(modifier = Modifier.height(16.dp))
@@ -964,6 +981,243 @@ fun DayStartSettings(
                         label = { Text(label) },
                         modifier = Modifier.heightIn(min = 48.dp)
                     )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExportDataSection(
+    exportState: ExportState,
+    onExport: (ExportFormat) -> Unit,
+    onClear: () -> Unit,
+    onSaveError: (String) -> Unit,
+    accentColor: Color
+) {
+    val context = LocalContext.current
+    val fileSaver = rememberExportFileSaver { success: Boolean, error: String? ->
+        if (success) {
+            onClear()
+        } else if (error != null) {
+            onSaveError(error)
+        }
+    }
+
+    SettingsGroupCard {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                "EXPORT DATA",
+                style = TabakTypography.labelSmall.copy(
+                    letterSpacing = 1.sp,
+                    fontWeight = FontWeight.Black
+                ),
+                color = TextPrimary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "Download a full copy of your profile, counters, daily counts, and historical entries.",
+                style = TabakTypography.bodySmall,
+                color = TextMuted
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            when (exportState) {
+                is ExportState.Idle -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            onClick = { onExport(ExportFormat.JSON) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .tabakPressScale()
+                                .semantics { contentDescription = "Export JSON" },
+                            color = accentColor,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    "JSON",
+                                    style = TabakTypography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = 1.sp
+                                    ),
+                                    color = Color.White
+                                )
+                            }
+                        }
+                        Surface(
+                            onClick = { onExport(ExportFormat.CSV) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .tabakPressScale()
+                                .semantics { contentDescription = "Export CSV" },
+                            color = Color.White.copy(alpha = 0.04f),
+                            shape = MaterialTheme.shapes.small,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    "CSV",
+                                    style = TabakTypography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = 1.sp
+                                    ),
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                is ExportState.Exporting -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (fileSaver.isSaving) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = accentColor,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                "Saving to file…",
+                                style = TabakTypography.bodySmall,
+                                color = TextMuted
+                            )
+                        } else {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = accentColor,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                "Exporting your data…",
+                                style = TabakTypography.bodySmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+                }
+
+                is ExportState.Ready -> {
+                    val (content, format) = exportState
+                    val now = kotlinx.datetime.Clock.System.now().toString()
+                    val dateStr = now.substring(0, 10) // YYYY-MM-DD
+                    val filename = if (format == ExportFormat.JSON) {
+                        "tabakpp-data-$dateStr.json"
+                    } else {
+                        "tabakpp-history-$dateStr.csv"
+                    }
+                    val mimeType = if (format == ExportFormat.JSON) "application/json" else "text/csv"
+
+                    // Auto-trigger file save when content is ready (spec item 17)
+                    LaunchedEffect(exportState) {
+                        fileSaver.save(content, filename, mimeType)
+                    }
+
+                    // Show "Saving…" state with optional clipboard fallback
+                    if (fileSaver.isSaving) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = accentColor,
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                "Saving to file…",
+                                style = TabakTypography.bodySmall,
+                                color = TextMuted
+                            )
+                        }
+                    } else {
+                        Text(
+                            "${format.name} export ready — pick a location to save.",
+                            style = TabakTypography.bodySmall,
+                            color = TextMuted
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Surface(
+                            onClick = {
+                                copyToClipboard(context, content, "Export (${format.name})")
+                                onClear()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                                .tabakPressScale()
+                                .semantics { contentDescription = "Copy export to clipboard" },
+                            color = Color.White.copy(alpha = 0.04f),
+                            shape = MaterialTheme.shapes.small,
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ContentCopy,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = TextPrimary
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "Copy to clipboard",
+                                    style = TabakTypography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = 1.sp
+                                    ),
+                                    color = TextPrimary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                is ExportState.Error -> {
+                    Text(
+                        exportState.message,
+                        style = TabakTypography.bodySmall,
+                        color = ErrorColor
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        onClick = { onClear() },
+                        modifier = Modifier
+                            .wrapContentWidth()
+                            .height(40.dp)
+                            .tabakPressScale()
+                            .semantics { contentDescription = "Dismiss export error" },
+                        color = Color.White.copy(alpha = 0.04f),
+                        shape = MaterialTheme.shapes.small,
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f))
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                "Dismiss",
+                                style = TabakTypography.labelSmall.copy(
+                                    fontWeight = FontWeight.Black,
+                                    letterSpacing = 1.sp
+                                ),
+                                color = accentColor
+                            )
+                        }
+                    }
                 }
             }
         }

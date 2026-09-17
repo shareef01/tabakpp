@@ -6,6 +6,8 @@ import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.TrackerSnapshot
 import com.tabakpp.app.data.TrackerType
+import com.tabakpp.app.data.UserProfile
+import com.tabakpp.app.domain.ExportBuilder
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
@@ -196,6 +198,41 @@ class DomainContractFixturesTest {
                     assertEquals(expPct, actualPct, 1e-9)
                 }
             }
+            "export" -> {
+                val configs = (input["configs"]?.jsonArray ?: emptyList()).map { parseConfig(it.jsonObject) }
+                val days = (input["days"]?.jsonArray ?: emptyList()).map { parseDayDoc(it.jsonObject) }
+                val logs = (input["logs"]?.jsonArray ?: emptyList()).map { parseLog(it.jsonObject) }
+                val profile = input["profile"]?.let { if (it is JsonNull) null else parseProfile(it.jsonObject) }
+                val exp = expected.jsonObject
+
+                // JSON
+                val json = ExportBuilder.buildJson(profile, null, configs, days, logs)
+                val jsonEl = Json.parseToJsonElement(json).jsonObject
+                exp["exportVersion"]?.jsonPrimitive?.let { assertEquals(it.int, jsonEl["exportVersion"]!!.jsonPrimitive.int, "exportVersion") }
+                exp["configsCount"]?.jsonPrimitive?.let { assertEquals(it.int, configs.size, "configsCount") }
+                exp["daysCount"]?.jsonPrimitive?.let { assertEquals(it.int, days.size, "daysCount") }
+                exp["logsCount"]?.jsonPrimitive?.let { assertEquals(it.int, logs.size, "logsCount") }
+                exp["hasProfile"]?.jsonPrimitive?.let {
+                    val isPresent = jsonEl["profile"]?.let { it != JsonNull } ?: false
+                    assertEquals(it.boolean, isPresent, "hasProfile")
+                }
+                exp["hasProfileMeta"]?.jsonPrimitive?.let {
+                    val isPresent = jsonEl["profileMeta"]?.let { it != JsonNull } ?: false
+                    assertEquals(it.boolean, isPresent, "hasProfileMeta")
+                }
+
+                // CSV
+                val csv = ExportBuilder.buildCsv(profile, configs, days, logs, 0.5)
+                val lines = csv.trimEnd('\n').split('\n')
+                exp["csvHeader"]?.jsonPrimitive?.let { assertEquals(it.content, lines[0], "csvHeader") }
+                exp["dayRow0"]?.jsonPrimitive?.let { assertEquals(it.content, lines[1], "dayRow0") }
+                exp["logRow0"]?.jsonPrimitive?.let { assertEquals(it.content, lines[1], "logRow0") }
+                exp["csvRows"]?.jsonPrimitive?.let { assertEquals(it.int, lines.size, "csvRows") }
+                exp["dayDates"]?.jsonArray?.let {
+                    val actualDates = days.sortedBy { it.date }.map { it.date }
+                    assertEquals(it.map { d -> d.jsonPrimitive.content }, actualDates, "dayDates ordering")
+                }
+            }
             else -> fail("Unknown fixture op: $op")
         }
     }
@@ -205,7 +242,7 @@ class DomainContractFixturesTest {
 
     private fun parseConfig(obj: JsonObject): TrackerConfig = TrackerConfig(
         id = obj["id"]!!.jsonPrimitive.content,
-        name = obj["id"]!!.jsonPrimitive.content,
+        name = obj["name"]?.jsonPrimitive?.content ?: obj["id"]!!.jsonPrimitive.content,
         limit = obj["limit"]!!.jsonPrimitive.int,
         order = 0,
         baseline = obj["baseline"]?.let { if (it is JsonNull) null else it.jsonPrimitive.int },
@@ -214,6 +251,7 @@ class DomainContractFixturesTest {
     )
 
     private fun parseSnapshot(obj: JsonObject): TrackerSnapshot = TrackerSnapshot(
+        name = obj["name"]?.jsonPrimitive?.content ?: "",
         target = obj["target"]!!.jsonPrimitive.int,
         baseline = obj["baseline"]?.let { if (it is JsonNull) null else it.jsonPrimitive.int },
         unitPrice = obj["unitPrice"]?.let { if (it is JsonNull) null else it.jsonPrimitive.double },
@@ -248,6 +286,11 @@ class DomainContractFixturesTest {
         wasted = obj["wasted"]?.jsonPrimitive?.double ?: 0.0,
         smokingUnits = obj["smokingUnits"]?.jsonPrimitive?.double ?: 0.0,
         baselineSaved = obj["baselineSaved"]?.jsonPrimitive?.double ?: 0.0
+    )
+
+    private fun parseProfile(obj: JsonObject): UserProfile = UserProfile(
+        name = obj["name"]?.jsonPrimitive?.content ?: "",
+        unitPrice = obj["unitPrice"]?.jsonPrimitive?.double ?: 0.5
     )
 }
 

@@ -3,6 +3,9 @@ package com.tabakpp.app.viewmodels
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tabakpp.app.data.*
+import com.tabakpp.app.domain.ExportBuilder
+import com.tabakpp.app.domain.ExportFormat
+import com.tabakpp.app.domain.ExportState
 import com.tabakpp.app.domain.SmokingCalculator
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -633,5 +636,54 @@ class RegistryViewModel(
 
     fun clearError() {
         _error.value = null
+    }
+
+    /**
+     * Export state for the UI — idle by default, Exporting while the complete
+     * snapshot is being read, Ready with the built artifact.
+     */
+    private val _exportState = MutableStateFlow<ExportState>(ExportState.Idle)
+    val exportState: StateFlow<ExportState> = _exportState.asStateFlow()
+
+    /**
+     * Reads a complete, unbounded export snapshot from the repository (NOT
+     * the bounded live-query collections), then builds the requested format.
+     * Strictly read-only — does not close days, reconcile, migrate, or write.
+     */
+    fun exportData(format: ExportFormat) {
+        val uid = authUser.value?.uid
+        if (uid == null) {
+            _exportState.value = ExportState.Error("Sign in to export your data.")
+            return
+        }
+        viewModelScope.launch {
+            _exportState.value = ExportState.Exporting
+            try {
+                val snapshot = registryRepository.readCompleteExportSnapshot(uid)
+                val unitPrice = userProfile.value?.unitPrice ?: 0.5
+                val result = when (format) {
+                    ExportFormat.JSON -> ExportBuilder.buildJson(
+                        snapshot.profile, snapshot.profileMeta, snapshot.configs,
+                        snapshot.days, snapshot.logs
+                    )
+                    ExportFormat.CSV -> ExportBuilder.buildCsv(
+                        snapshot.profile, snapshot.configs, snapshot.days, snapshot.logs, unitPrice
+                    )
+                }
+                _exportState.value = ExportState.Ready(result, format)
+            } catch (e: Exception) {
+                _exportState.value = ExportState.Error(
+                    e.message ?: "Could not export your data. Try again."
+                )
+            }
+        }
+    }
+
+    fun clearExportState() {
+        _exportState.value = ExportState.Idle
+    }
+
+    fun setExportError(message: String) {
+        _exportState.value = ExportState.Error(message)
     }
 }
