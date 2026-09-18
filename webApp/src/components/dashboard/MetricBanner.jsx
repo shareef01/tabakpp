@@ -50,16 +50,15 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
   const quotaWarning = isOver || isAtLimit || progress >= 0.8;
 
   // Today's aggregate goal state — per-tracker worst state, neutral copy (item 5).
+  // Tracker-count semantics: "N tracker(s) above target" not pooled deltas.
+  // "Within today's targets" covers both "all at" and "mixed at+under" states.
   const gs = m.goalStatus;
   let goalText = 'No target';
   if (gs) {
     if (gs.status === 'over') {
-      goalText = gs.overTrackers === 1 ? '1 above target' : `${gs.overTrackers} above target`;
-    } else if (gs.status === 'at') {
-      goalText = 'At target';
-    } else {
-      const below = Math.round(gs.belowTarget);
-      goalText = below === 1 ? '1 below target' : `${below} below target`;
+      goalText = gs.overTrackers === 1 ? '1 tracker above target' : `${gs.overTrackers} trackers above target`;
+    } else if (gs.status === 'at' || gs.status === 'under') {
+      goalText = "Within today's targets";
     }
   }
 
@@ -83,9 +82,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
             m.goalStatus
               ? m.goalStatus.status === 'over'
                 ? `${m.goalStatus.overTrackers} tracker(s) above target`
-                : m.goalStatus.status === 'at'
-                ? 'All trackers at target'
-                : `${Math.round(m.goalStatus.belowTarget)} below target`
+                : "Within today's targets"
               : 'No trackers with targets'
           }
         />

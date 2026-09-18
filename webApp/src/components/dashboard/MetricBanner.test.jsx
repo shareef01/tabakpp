@@ -48,30 +48,39 @@ describe('MetricBanner tracking streak', () => {
   it('renders daily goal status — under target', () => {
     const m = makeMetrics({
       count: 7, limit: 10,
-      goalStatus: { status: 'under', belowTarget: 3, aboveTarget: 0, overTrackers: 0 },
+      goalStatus: { status: 'under', belowTarget: 3, aboveTarget: 0, overTrackers: 0, atTrackers: 0, underTrackers: 1, totalTrackers: 1 },
     });
     render(<MetricBanner m={m} onEndDay={vi.fn()} />);
     expect(screen.getByText("TODAY'S GOAL")).toBeTruthy();
-    expect(screen.getByText('3 below target')).toBeTruthy();
+    expect(screen.getByText("Within today's targets")).toBeTruthy();
   });
 
   it('renders daily goal status — at target', () => {
     const m = makeMetrics({
       count: 10, limit: 10,
-      goalStatus: { status: 'at', belowTarget: 0, aboveTarget: 0, overTrackers: 0 },
+      goalStatus: { status: 'at', belowTarget: 0, aboveTarget: 0, overTrackers: 0, atTrackers: 1, underTrackers: 0, totalTrackers: 1 },
     });
     render(<MetricBanner m={m} onEndDay={vi.fn()} />);
-    // "At target" appears in the goal column AND the daily-use sub-label
-    expect(screen.getAllByText('At target').length).toBeGreaterThanOrEqual(1);
+    // "Within today's targets" appears in the goal column AND the daily-use sub-label
+    expect(screen.getAllByText("Within today's targets").length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders daily goal status — over target', () => {
     const m = makeMetrics({
       count: 12, limit: 10,
-      goalStatus: { status: 'over', belowTarget: 0, aboveTarget: 2, overTrackers: 1 },
+      goalStatus: { status: 'over', belowTarget: 0, aboveTarget: 2, overTrackers: 1, atTrackers: 0, underTrackers: 0, totalTrackers: 1 },
     });
     render(<MetricBanner m={m} onEndDay={vi.fn()} />);
-    expect(screen.getByText('1 above target')).toBeTruthy();
+    expect(screen.getByText('1 tracker above target')).toBeTruthy();
+  });
+
+  it('renders daily goal status — multiple trackers over', () => {
+    const m = makeMetrics({
+      count: 12, limit: 10,
+      goalStatus: { status: 'over', belowTarget: 0, aboveTarget: 5, overTrackers: 3, atTrackers: 0, underTrackers: 0, totalTrackers: 3 },
+    });
+    render(<MetricBanner m={m} onEndDay={vi.fn()} />);
+    expect(screen.getByText('3 trackers above target')).toBeTruthy();
   });
 
   it('renders no-target fallback when goalStatus is null', () => {

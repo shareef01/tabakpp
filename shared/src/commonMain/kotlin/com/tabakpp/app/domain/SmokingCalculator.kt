@@ -318,24 +318,28 @@ object SmokingCalculator {
      * target to evaluate), so the UI can defer to empty-state behavior (item 20)
      * rather than fabricating "0 below target".
      */
-    data class GoalStatus(val status: String, val aboveTarget: Double, val belowTarget: Double, val overTrackers: Int)
+    data class GoalStatus(val status: String, val aboveTarget: Double, val belowTarget: Double, val overTrackers: Int, val atTrackers: Int, val underTrackers: Int, val totalTrackers: Int)
 
     fun getGoalStatus(counts: Map<String, Double>, configs: List<TrackerConfig>): GoalStatus? {
         val goalConfigs = getStreakConfigs(configs)
         if (goalConfigs.isEmpty()) return null
-        var worst = "under"
+        var overCount = 0
+        var atCount = 0
+        var underCount = 0
         var totalAbove = 0.0
         var totalBelow = 0.0
-        var overCount = 0
         for (c in goalConfigs) {
             val ls = getLimitStatus(max(0.0, counts[c.id] ?: 0.0), max(0, c.limit).toDouble())
+            totalAbove += ls.aboveTarget
+            totalBelow += ls.belowTarget
             when (ls.status) {
-                "over" -> { worst = "over"; totalAbove += ls.aboveTarget; overCount++ }
-                "at" -> { if (worst != "over") worst = "at" }
-                "under" -> { if (worst != "over" && worst != "at") { worst = "under"; totalBelow += ls.belowTarget } }
+                "over" -> overCount++
+                "at" -> atCount++
+                "under" -> underCount++
             }
         }
-        return GoalStatus(worst, totalAbove, totalBelow, overCount)
+        val status = if (overCount > 0) "over" else if (atCount > 0) "at" else "under"
+        return GoalStatus(status, totalAbove, totalBelow, overCount, atCount, underCount, goalConfigs.size)
     }
 
     data class Reduction(val baseline: Double, val actual: Double, val avoided: Double, val percent: Double?)
@@ -659,6 +663,27 @@ object SmokingCalculator {
         val sign = if (totalCents < 0) "-" else ""
         val cents = abs(totalCents)
         return "$sign${cents / 100},${(cents % 100).toString().padStart(2, '0')} €"
+    }
+
+    /**
+     * Format a non-negative delta for UI display — integer values without a
+     * trailing ".0", fractional values with minimal representation (1.0 -> "1",
+     * 2.5 -> "2.5", 2.25 -> "2.25"). Cross-platform parity with the JS port
+     * (both use the same trim-trailing-zero logic, never Math.round or toInt).
+     */
+    fun formatGoalDelta(value: Double): String {
+        val v = max(0.0, value)
+        val floorVal = floor(v)
+        return if (v == floorVal) {
+            floorVal.toLong().toString()
+        } else {
+            // Trim trailing zeros: 2.50 -> "2.5", 2.250 -> "2.25"
+            var s = v.toString()
+            if (s.contains('.')) {
+                s = s.trimEnd('0').trimEnd('.')
+            }
+            s
+        }
     }
 
     fun formatLifeMinutes(mins: Int): String {

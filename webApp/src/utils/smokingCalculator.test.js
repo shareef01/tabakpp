@@ -526,6 +526,9 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(gs.status).toBe('under');
       expect(gs.belowTarget).toBe(3);
       expect(gs.overTrackers).toBe(0);
+      expect(gs.atTrackers).toBe(0);
+      expect(gs.underTrackers).toBe(1);
+      expect(gs.totalTrackers).toBe(1);
     });
 
     it('exactly at target', () => {
@@ -533,6 +536,8 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(gs.status).toBe('at');
       expect(gs.belowTarget).toBe(0);
       expect(gs.overTrackers).toBe(0);
+      expect(gs.atTrackers).toBe(1);
+      expect(gs.underTrackers).toBe(0);
     });
 
     it('over target', () => {
@@ -540,6 +545,8 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(gs.status).toBe('over');
       expect(gs.aboveTarget).toBe(2);
       expect(gs.overTrackers).toBe(1);
+      expect(gs.atTrackers).toBe(0);
+      expect(gs.underTrackers).toBe(0);
     });
 
     it('zero target / zero actual → at target', () => {
@@ -547,6 +554,7 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       const gs = SmokingCalculator.getGoalStatus({ c1: 0 }, [zeroCig]);
       expect(gs.status).toBe('at');
       expect(gs.overTrackers).toBe(0);
+      expect(gs.atTrackers).toBe(1);
     });
 
     it('zero target / positive actual → over target', () => {
@@ -562,6 +570,8 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(gs.status).toBe('under');
       expect(gs.belowTarget).toBe(8);
       expect(gs.overTrackers).toBe(0);
+      expect(gs.underTrackers).toBe(2);
+      expect(gs.atTrackers).toBe(0);
     });
 
     it('one tracker over, one under → aggregate is over', () => {
@@ -569,12 +579,22 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(gs.status).toBe('over');
       expect(gs.overTrackers).toBe(1);
       expect(gs.aboveTarget).toBe(1);
+      expect(gs.underTrackers).toBe(1);
     });
 
     it('all exactly at', () => {
       const gs = SmokingCalculator.getGoalStatus({ c1: 10, c2: 5 }, [cig, ryo]);
       expect(gs.status).toBe('at');
       expect(gs.overTrackers).toBe(0);
+      expect(gs.atTrackers).toBe(2);
+      expect(gs.underTrackers).toBe(0);
+    });
+
+    it('mixed at + under → aggregate is at (not over)', () => {
+      const gs = SmokingCalculator.getGoalStatus({ c1: 10, c2: 2 }, [cig, ryo]);
+      expect(gs.status).toBe('at');
+      expect(gs.atTrackers).toBe(1);
+      expect(gs.underTrackers).toBe(1);
     });
 
     it('fractional actual', () => {
@@ -599,6 +619,25 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(m.goalStatus).not.toBeNull();
       expect(m.goalStatus.status).toBe('under');
       expect(m.goalStatus.belowTarget).toBe(3);
+    });
+  });
+
+  describe('formatGoalDelta (cross-platform display parity)', () => {
+    it('integer values: no trailing .0', () => {
+      expect(SmokingCalculator.formatGoalDelta(0)).toBe('0');
+      expect(SmokingCalculator.formatGoalDelta(1)).toBe('1');
+      expect(SmokingCalculator.formatGoalDelta(5)).toBe('5');
+    });
+
+    it('fractional: trim trailing zeros', () => {
+      expect(SmokingCalculator.formatGoalDelta(2.5)).toBe('2.5');
+      expect(SmokingCalculator.formatGoalDelta(2.25)).toBe('2.25');
+      expect(SmokingCalculator.formatGoalDelta(2.50)).toBe('2.5');
+    });
+
+    it('negative clamps to 0', () => {
+      expect(SmokingCalculator.formatGoalDelta(-3)).toBe('0');
+      expect(SmokingCalculator.formatGoalDelta(-1.5)).toBe('0');
     });
   });
 

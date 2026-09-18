@@ -491,21 +491,29 @@ class SmokingCalculatorTest {
         assertEquals("under", under.status)
         assertEquals(3.0, under.belowTarget, 1e-9)
         assertEquals(0, under.overTrackers)
+        assertEquals(0, under.atTrackers)
+        assertEquals(1, under.underTrackers)
+        assertEquals(1, under.totalTrackers)
 
         // 2. exactly at target
         val at = SmokingCalculator.getGoalStatus(mapOf("c1" to 10.0), listOf(cig))!!
         assertEquals("at", at.status)
         assertEquals(0, at.overTrackers)
+        assertEquals(1, at.atTrackers)
+        assertEquals(0, at.underTrackers)
 
         // 3. over target
         val over = SmokingCalculator.getGoalStatus(mapOf("c1" to 12.0), listOf(cig))!!
         assertEquals("over", over.status)
         assertEquals(2.0, over.aboveTarget, 1e-9)
         assertEquals(1, over.overTrackers)
+        assertEquals(0, over.atTrackers)
+        assertEquals(0, over.underTrackers)
 
         // 4. zero target / zero actual -> at
         val zeroAt = SmokingCalculator.getGoalStatus(mapOf("c1" to 0.0), listOf(TrackerConfig("c1", "Z", 0, 1, TrackerType.CIGARETTE)))!!
         assertEquals("at", zeroAt.status)
+        assertEquals(1, zeroAt.atTrackers)
 
         // 5. zero target / positive actual -> over
         val zeroOver = SmokingCalculator.getGoalStatus(mapOf("c1" to 1.0), listOf(TrackerConfig("c1", "Z", 0, 1, TrackerType.CIGARETTE)))!!
@@ -516,25 +524,36 @@ class SmokingCalculatorTest {
         val multiUnder = SmokingCalculator.getGoalStatus(mapOf("c1" to 5.0, "c2" to 2.0), listOf(cig, ryo))!!
         assertEquals("under", multiUnder.status)
         assertEquals(8.0, multiUnder.belowTarget, 1e-9)
+        assertEquals(2, multiUnder.underTrackers)
+        assertEquals(0, multiUnder.atTrackers)
 
         // 7. one over, one under -> aggregate over
-        val mixed = SmokingCalculator.getGoalStatus(mapOf("c1" to 11.0, "c2" to 2.0), listOf(cig, ryo))!!
-        assertEquals("over", mixed.status)
-        assertEquals(1, mixed.overTrackers)
+        val mixedOverUnder = SmokingCalculator.getGoalStatus(mapOf("c1" to 11.0, "c2" to 2.0), listOf(cig, ryo))!!
+        assertEquals("over", mixedOverUnder.status)
+        assertEquals(1, mixedOverUnder.overTrackers)
+        assertEquals(1, mixedOverUnder.underTrackers)
 
         // 8. all exactly at
         val allAt = SmokingCalculator.getGoalStatus(mapOf("c1" to 10.0, "c2" to 5.0), listOf(cig, ryo))!!
         assertEquals("at", allAt.status)
+        assertEquals(0, allAt.overTrackers)
+        assertEquals(2, allAt.atTrackers)
 
-        // 9. fractional actual
+        // 9. mixed at + under -> aggregate remains "at" (not over)
+        val mixedAtUnder = SmokingCalculator.getGoalStatus(mapOf("c1" to 10.0, "c2" to 2.0), listOf(cig, ryo))!!
+        assertEquals("at", mixedAtUnder.status)
+        assertEquals(1, mixedAtUnder.atTrackers)
+        assertEquals(1, mixedAtUnder.underTrackers)
+
+        // 10. fractional actual
         val frac = SmokingCalculator.getGoalStatus(mapOf("c1" to 2.5), listOf(TrackerConfig("c1", "Cig", 5, 1, TrackerType.CIGARETTE)))!!
         assertEquals("under", frac.status)
         assertEquals(2.5, frac.belowTarget, 1e-9)
 
-        // 10. no trackers -> null
+        // 11. no trackers -> null
         assertEquals(null, SmokingCalculator.getGoalStatus(emptyMap(), emptyList()))
 
-        // 11. only SIMPLE (no smoking) falls back to isPrimaryTracked
+        // 12. only SIMPLE (no smoking) falls back to isPrimaryTracked
         val simpleUnder = SmokingCalculator.getGoalStatus(mapOf("s1" to 2.0), listOf(simple))!!
         assertEquals("under", simpleUnder.status)
         assertEquals(1.0, simpleUnder.belowTarget, 1e-9)
@@ -546,5 +565,20 @@ class SmokingCalculatorTest {
         val m = SmokingCalculator.getGlobalMetrics(emptyList(), configs, mapOf("c1" to 7.0), "2024-05-20")
         assertEquals("under", m.goalStatus?.status)
         assertEquals(3.0, m.goalStatus?.belowTarget ?: -1.0, 1e-9)
+    }
+
+    @Test
+    fun testFormatGoalDelta() {
+        // integer values: no trailing .0
+        assertEquals("0", SmokingCalculator.formatGoalDelta(0.0))
+        assertEquals("1", SmokingCalculator.formatGoalDelta(1.0))
+        assertEquals("5", SmokingCalculator.formatGoalDelta(5.0))
+        // fractional: trim trailing zeros
+        assertEquals("2.5", SmokingCalculator.formatGoalDelta(2.5))
+        assertEquals("2.25", SmokingCalculator.formatGoalDelta(2.25))
+        assertEquals("2.5", SmokingCalculator.formatGoalDelta(2.50))
+        // negative clamps to 0
+        assertEquals("0", SmokingCalculator.formatGoalDelta(-3.0))
+        assertEquals("0", SmokingCalculator.formatGoalDelta(-1.5))
     }
 }
