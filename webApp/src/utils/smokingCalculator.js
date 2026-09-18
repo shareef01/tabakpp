@@ -323,26 +323,29 @@ export const SmokingCalculator = {
    * separate from `calculateStreak` (the goal streak) so "I tracked
    * consistently" and "I stayed on target" never collapse into one number —
    * logging faithfully is not the same accomplishment as hitting a goal.
+   *
+   * A day qualifies based on PRESENCE of a record (a day-doc, a log entry,
+   * or a non-empty activeCounts map), not on positive sum. This correctly
+   * distinguishes "tracked zero" (user interacted or explicitly logged 0)
+   * from "untracked/missing" (no record at all) — a day with a zero-count
+   * dayDoc or a zero-count manual entry still counts as tracked.
    */
   calculateTrackingStreak: (logs, activeCounts, trackingDay, dayDocs = []) => {
     if (!trackingDay) return 0;
     const logged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs);
     const loggedDates = Object.keys(logged).sort().reverse();
     const sessionOpen = SmokingCalculator.hasOpenSession(activeCounts);
-    const sumOf = (c) => Object.values(c || {}).reduce((s, v) => s + Math.max(0, v || 0), 0);
-
     if (loggedDates.length === 0 && !sessionOpen) return 0;
     const yesterday = shiftDate(trackingDay, -1);
     const mostRecent = loggedDates[0];
     if (mostRecent && mostRecent < yesterday && !sessionOpen) return 0;
 
-    let streak = 0;
-    let cursor = trackingDay;
+    let streak = 0
+    let cursor = trackingDay
     for (let i = 0; i < 366; i++) {
-      const dayTotal = cursor === trackingDay
-        ? sumOf(logged[cursor]) + sumOf(activeCounts)
-        : sumOf(logged[cursor]);
-      const hasEntry = cursor === trackingDay ? (dayTotal > 0) : Object.prototype.hasOwnProperty.call(logged, cursor);
+      const hasEntry = cursor === trackingDay
+        ? Object.prototype.hasOwnProperty.call(logged, cursor) || Object.keys(activeCounts || {}).length > 0
+        : Object.prototype.hasOwnProperty.call(logged, cursor);
       if (!hasEntry) break;
       streak++;
       cursor = shiftDate(cursor, -1);
