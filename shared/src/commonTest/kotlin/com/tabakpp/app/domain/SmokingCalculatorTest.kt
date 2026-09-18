@@ -587,48 +587,47 @@ class SmokingCalculatorTest {
         val cig = TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE, isPrimaryTracked = true)
         val today = "2024-05-20"
 
-        // 1. no trackers → stage 0
+        // 1. No trackers → hasTracker=false, card not shown (handled by empty dashboard)
         val noTrackers = SmokingCalculator.getFirstWeekGuidance(emptyList(), emptyList(), emptyList(), emptyMap(), today)
-        assertEquals(0, noTrackers.stage)
         assertEquals(false, noTrackers.hasTracker)
         assertEquals(false, noTrackers.hasTrackingEvidence)
 
-        // 2. tracker exists, no tracking evidence → stage 1
+        // 2. Tracker exists, no tracking evidence → card visible
         val trackerOnly = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), emptyList(), emptyMap(), today)
-        assertEquals(1, trackerOnly.stage)
         assertEquals(true, trackerOnly.hasTracker)
         assertEquals(false, trackerOnly.hasTrackingEvidence)
-        assertEquals(false, trackerOnly.hasHistory)
+        assertEquals(true, trackerOnly.showGettingStarted)
 
-        // 3. tracker + current-day active count → stage 2, evidence=true
+        // 3. Tracker + positive active count → evidence=true (Case B: tracker/no data stays visible)
         val withCurrent = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), emptyList(), mapOf("c1" to 3.0), today)
-        assertEquals(2, withCurrent.stage)
         assertEquals(true, withCurrent.hasTrackingEvidence)
-        assertEquals(false, withCurrent.hasHistory)
+        assertEquals(false, withCurrent.showGettingStarted)
 
-        // 4. tracker + explicit zero current-day doc (PR #45 semantics) → evidence=true
+        // 4. Zero-only activeCounts map (PR #45: non-empty zero IS evidence) → evidence=true
+        val zeroOnly = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), emptyList(), mapOf("c1" to 0.0), today)
+        assertEquals(true, zeroOnly.hasTrackingEvidence)
+        assertEquals(false, zeroOnly.showGettingStarted)
+
+        // 5. Zero-persisted current dayDoc (PR #45: explicit zero is evidence) → evidence=true
         val zeroDay = DayDocument(date = today, counts = mapOf("c1" to 0.0), status = "open")
         val hasZeroDay = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), listOf(zeroDay), emptyMap(), today)
         assertEquals(true, hasZeroDay.hasTrackingEvidence)
-        assertEquals(2, hasZeroDay.stage)
+        assertEquals(false, hasZeroDay.showGettingStarted)
 
-        // 5. tracker + one completed day in history → stage 3
+        // 6. Historical dayDoc → evidence=true
         val completedDay = DayDocument(date = "2024-05-19", counts = mapOf("c1" to 5.0), status = "closed")
         val oneHistory = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), listOf(completedDay), emptyMap(), today)
-        assertEquals(3, oneHistory.stage)
-        assertEquals(true, oneHistory.hasHistory)
-        assertEquals(true, oneHistory.hasCompletedDay)
+        assertEquals(true, oneHistory.hasTrackingEvidence)
+        assertEquals(false, oneHistory.showGettingStarted)
 
-        // 6. tracker + 7+ closed days → stage 4
-        val sevenDays = (1..7).map { d ->
-            DayDocument(date = "2024-05-$d", counts = mapOf("c1" to 3.0), status = "closed")
-        }
-        val sevenHistory = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), sevenDays, emptyMap(), today)
-        assertEquals(4, sevenHistory.stage)
+        // 7. Any log entry → evidence=true (including zero manual entry)
+        val zeroLog = LogEntry(id = "log1", logDate = today, counts = mapOf("c1" to 0.0), origin = "MANUAL_ENTRY")
+        val hasZeroLog = SmokingCalculator.getFirstWeekGuidance(listOf(cig), listOf(zeroLog), emptyList(), emptyMap(), today)
+        assertEquals(true, hasZeroLog.hasTrackingEvidence)
 
-        // 7. tracker + zero active count today, no history → stage 1 (no evidence)
-        val trulyEmpty = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), emptyList(), mapOf("c1" to 0.0), today)
-        assertEquals(1, trulyEmpty.stage)
+        // 8. Empty (zero-entry) activeCounts map → no evidence (Case B)
+        val trulyEmpty = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), emptyList(), emptyMap(), today)
         assertEquals(false, trulyEmpty.hasTrackingEvidence)
+        assertEquals(true, trulyEmpty.showGettingStarted)
     }
 }

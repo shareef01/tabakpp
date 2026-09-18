@@ -811,38 +811,36 @@ export const SmokingCalculator = {
   },
 
   /**
-   * Derives onboarding / first-week guidance state from real product state.
-   * Kotlin + JS parity (see SmokingCalculator.getFirstWeekGuidance).
+   * Derives onboarding state from real product state (item 10). Kotlin + JS parity.
    *
-   * Stages:
-   * 0 — no trackers
-   * 1 — tracker exists, no tracking evidence
-   * 2 — current-day activity exists but little/no history
-   * 3 — first completed tracking day (has history)
-   * 4 — fully established (7+ tracked days)
+   * Stages (item 10):
+   * 0 — no trackers (handled by empty dashboard, not the card)
+   * 1 — tracker exists, no tracking evidence (card visible)
+   * 2 — tracking evidence exists (card hidden)
    *
-   * "Tracking evidence" = at least one persisted tracking record (logs)
-   * OR a non-zero active count for the current tracking day.
+   * "Tracking evidence" = any persisted tracking record:
+   * - activeCounts is non-empty (live current-day counts, including zero —
+   *   PR #45: a zero-valued count is explicit tracking, not a default)
+   * - any day document exists (current or historical)
+   * - any log entry exists
    */
   getFirstWeekGuidance: (configs, logs, dayDocs, activeCounts, trackingDay) => {
     const hasTracker = (configs || []).length > 0;
-    if (!hasTracker) {
-      return { stage: 0, hasTracker: false, hasTrackingEvidence: false, hasHistory: false, hasCompletedDay: false };
-    }
 
-    const hasActiveCount = Object.values(activeCounts || {}).some(v => (v || 0) > 0);
-    const currentDayDoc = (dayDocs || []).find(d => d.date === trackingDay);
-    const hasCurrentDayDoc = currentDayDoc && Object.keys(currentDayDoc.counts || {}).length > 0;
-    const hasHistoricalDoc = (dayDocs || []).some(d => d.date !== trackingDay && Object.keys(d.counts || {}).length > 0);
+    // Presence semantics: a non-empty map IS tracking evidence (PR #45).
+    const hasActiveEvidence =
+      activeCounts !== null && activeCounts !== undefined && Object.keys(activeCounts).length > 0;
+    const hasCurrentDayDoc = (dayDocs || []).some(d => d.date === trackingDay && Object.keys(d.counts || {}).length > 0);
+    const hasHistoricalDoc = (dayDocs || []).some(d => d.date !== trackingDay);
     const hasLogEvidence = (logs || []).length > 0;
-    const hasCompletedDay = (dayDocs || []).some(d => d.date !== trackingDay && d.status === 'closed') || hasLogEvidence;
-    const hasTrackingEvidence = hasActiveCount || !!hasCurrentDayDoc || hasHistoricalDoc || hasLogEvidence;
+    const hasTrackingEvidence = hasActiveEvidence || hasCurrentDayDoc || hasHistoricalDoc || hasLogEvidence;
 
-    const trackedDays = (dayDocs || []).filter(d => d.status === 'closed').length + (logs || []).filter(l => l.origin === 'DAY_RESET').length;
-    const hasHistory = trackedDays >= 1;
-
-    const stage = !hasTrackingEvidence ? 1 : !hasHistory ? 2 : trackedDays >= 7 ? 4 : 3;
-
-    return { stage, hasTracker: true, hasTrackingEvidence, hasHistory, hasCompletedDay };
+    return {
+      hasTracker,
+      hasTrackingEvidence,
+      get showGettingStarted() {
+        return this.hasTracker && !this.hasTrackingEvidence;
+      },
+    };
   },
 };

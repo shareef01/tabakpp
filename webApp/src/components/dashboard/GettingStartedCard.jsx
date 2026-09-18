@@ -1,24 +1,24 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle2, CircleDot, X } from 'lucide-react';
+import { CheckCircle2, CircleDot } from 'lucide-react';
 import { cn } from '../../utils/utils';
 import { Card } from '../Common';
 
 /**
  * State-driven Getting Started card.
  *
- * Derives its checklist from SmokingCalculator.getFirstWeekGuidance (item 27)
- * — no separate onboarding-persisted flag. Disappears automatically once
- * tracking evidence exists (stage >= 2). Optionally dismissible via onDismiss.
+ * Derives its checklist from SmokingCalculator.getFirstWeekGuidance — no
+ * separate onboarding-persisted flag. Disappears automatically once tracking
+ * evidence exists.
  *
  * Shows:
  *   ✓ Tracker created
  *   ✓ Daily target set
  *   ○ Record your first activity
  *
- * Plus a hint line explaining what the target means (item 12).
+ * Plus a hint line explaining what the target means.
  */
-export const GettingStartedCard = React.memo(({ onboarding, onDismiss }) => {
+export const GettingStartedCard = React.memo(({ onboarding }) => {
   if (onboarding?.hasTrackingEvidence) return null;
 
   return (
@@ -31,21 +31,11 @@ export const GettingStartedCard = React.memo(({ onboarding, onDismiss }) => {
         transition={{ duration: 0.3 }}
         className="mb-4"
       >
-        <Card className="relative">
-          <div className="flex items-center justify-between mb-4">
+        <Card>
+          <div className="mb-4">
             <span className="text-[11px] font-black uppercase tracking-[0.2em] text-neutral-400">
               GETTING STARTED
             </span>
-            {onDismiss && (
-              <button
-                type="button"
-                onClick={onDismiss}
-                aria-label="Dismiss getting started"
-                className="p-1 text-neutral-500 hover:text-neutral-300 transition-colors touch-manipulation"
-              >
-                <X size={16} strokeWidth={2} />
-              </button>
-            )}
           </div>
 
           <div className="space-y-3">

@@ -963,35 +963,37 @@ object SmokingCalculator {
     }
 
     /**
-     * Derives onboarding / first-week guidance state from real product state
-     * (item 27). No Firestore schema changes — this is a pure read over
-     * configs, logs, dayDocs, and activeCounts. Kotlin + JS parity.
+     * Derives onboarding state from real product state (item 10).
+     * No Firestore schema changes — this is a pure read over configs, logs,
+     * dayDocs, and activeCounts. Kotlin + JS parity.
      *
-     * Stages (item 10):
-     * 0 — no trackers
-     * 1 — tracker exists, no tracking evidence
-     * 2 — current-day activity exists but little/no history (not yet complete)
-     * 3 — first completed tracking day (has history)
-     * 4 — fully established (enough historical data)
+     * OnboardingState has two fields:
+     * - hasTracker: whether at least one tracker is configured (stage 0 is
+     *   handled by the existing empty dashboard, not the Getting Started card)
+     * - hasTrackingEvidence: whether real tracking data exists
      *
-     * "Tracking evidence" = at least one persisted tracking record (in logs)
-     * OR a non-zero active count for the current tracking day. Explicit
-     * zero-consumption days count as evidence (PR #45 semantics).
+     * The card auto-hides when hasTrackingEvidence is true.
+     *
+     * "Tracking evidence" = any persisted tracking record:
+     * - activeCounts is non-empty (live current-day counts, including zero —
+     *   PR #45: a zero-valued count is explicit tracking, not a default)
+     * - any day document exists (current or historical)
+     * - any log entry exists
      *
      * @param configs all tracker configs
-     * @param logs historical log entries (day-close records)
+     * @param logs historical log entries (day-close records, manual entries)
      * @param dayDocs day documents (includes current-day open doc)
      * @param activeCounts live current-day counts by tracker id
      * @param trackingDay the current tracking date string (YYYY-MM-DD)
      */
     data class OnboardingState(
-        val stage: Int,
         val hasTracker: Boolean,
-        val hasTrackingEvidence: Boolean,
-        val hasHistory: Boolean,
-        /** True when at least one completed (archived/closed) day exists. */
-        val hasCompletedDay: Boolean
-    )
+        val hasTrackingEvidence: Boolean
+    ) {
+        /** True when the Getting Started card should be visible. */
+        val showGettingStarted: Boolean
+            get() = hasTracker && !hasTrackingEvidence
+    }
 
     fun getFirstWeekGuidance(
         configs: List<TrackerConfig>,
@@ -1001,40 +1003,18 @@ object SmokingCalculator {
         trackingDay: String
     ): OnboardingState {
         val hasTracker = configs.isNotEmpty()
-        if (!hasTracker) {
-            return OnboardingState(stage = 0, hasTracker = false, hasTrackingEvidence = false, hasHistory = false, hasCompletedDay = false)
-        }
 
-        // Tracking evidence = any persisted tracking record.
-        // Includes: active counts for today, any day doc (open or closed),
-        // or any history log. Explicit zero-consumption days count (PR #45).
-        val hasActiveCount = activeCounts.values.any { it > 0 }
-        val currentDayDoc = dayDocs.find { it.date == trackingDay }
-        val hasCurrentDayDoc = currentDayDoc != null && currentDayDoc.counts.isNotEmpty()
-        val hasHistoricalDoc = dayDocs.any { it.date != trackingDay && it.counts.isNotEmpty() }
+        // Presence semantics: a non-empty map IS tracking evidence (PR #45).
+        // Explicit zero consumption is real tracking state, not a default.
+        val hasActiveEvidence = activeCounts.isNotEmpty()
+        val hasCurrentDayDoc = dayDocs.any { it.date == trackingDay && it.counts.isNotEmpty() }
+        val hasHistoricalDoc = dayDocs.any { it.date != trackingDay }
         val hasLogEvidence = logs.isNotEmpty()
-        val hasCompletedDay = dayDocs.any { it.date != trackingDay && it.status == "closed" } || hasLogEvidence
-        val hasTrackingEvidence = hasActiveCount || hasCurrentDayDoc || hasHistoricalDoc || hasLogEvidence
-
-        // Stage 4: enough historical data — multiple complete periods or
-        // multiple tracked days. Reuse the same "complete month" threshold
-        // that InsightsScreen already uses.
-        val trackedDays = dayDocs.count { it.status == "closed" } + logs.count { it.origin == "DAY_RESET" }
-        val hasHistory = trackedDays >= 1
-
-        val stage = when {
-            !hasTrackingEvidence -> 1
-            !hasHistory -> 2
-            trackedDays >= 7 -> 4
-            else -> 3
-        }
+        val hasTrackingEvidence = hasActiveEvidence || hasCurrentDayDoc || hasHistoricalDoc || hasLogEvidence
 
         return OnboardingState(
-            stage = stage,
-            hasTracker = true,
-            hasTrackingEvidence = hasTrackingEvidence,
-            hasHistory = hasHistory,
-            hasCompletedDay = hasCompletedDay
+            hasTracker = hasTracker,
+            hasTrackingEvidence = hasTrackingEvidence
         )
     }
 }

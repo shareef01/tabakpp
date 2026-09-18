@@ -656,55 +656,57 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
     const today = '2024-05-20';
     const cig = { id: 'c1', limit: 10, type: 'CIGARETTE', isPrimaryTracked: true };
 
-    it('no trackers → stage 0', () => {
+    it('no trackers → hasTracker=false', () => {
       const state = SmokingCalculator.getFirstWeekGuidance([], [], [], {}, today);
-      expect(state.stage).toBe(0);
       expect(state.hasTracker).toBe(false);
       expect(state.hasTrackingEvidence).toBe(false);
+      expect(state.showGettingStarted).toBe(false);
     });
 
-    it('tracker exists, no evidence → stage 1', () => {
+    it('tracker/no data → showGettingStarted=true', () => {
       const state = SmokingCalculator.getFirstWeekGuidance([cig], [], [], {}, today);
-      expect(state.stage).toBe(1);
       expect(state.hasTracker).toBe(true);
       expect(state.hasTrackingEvidence).toBe(false);
-      expect(state.hasHistory).toBe(false);
+      expect(state.showGettingStarted).toBe(true);
     });
 
-    it('tracker + current-day active count → stage 2', () => {
+    it('trackcer + positive active count → evidence=true, card hidden', () => {
       const state = SmokingCalculator.getFirstWeekGuidance([cig], [], [], { c1: 3 }, today);
-      expect(state.stage).toBe(2);
       expect(state.hasTrackingEvidence).toBe(true);
-      expect(state.hasHistory).toBe(false);
+      expect(state.showGettingStarted).toBe(false);
     });
 
-    it('tracker + zero current-day doc → evidence=true, stage 2 (PR #45 semantics)', () => {
+    it('tracker + zero-only activeCounts map → evidence=true (PR #45 presence semantics)', () => {
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], [], { c1: 0 }, today);
+      expect(state.hasTrackingEvidence).toBe(true);
+      expect(state.showGettingStarted).toBe(false);
+    });
+
+    it('tracker + zero current-day dayDoc → evidence=true (explicit zero is tracking)', () => {
       const dayDocs = [{ date: today, counts: { c1: 0 }, status: 'open' }];
       const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
       expect(state.hasTrackingEvidence).toBe(true);
-      expect(state.stage).toBe(2);
+      expect(state.showGettingStarted).toBe(false);
     });
 
-    it('tracker + one completed day → stage 3', () => {
+    it('tracker + historical dayDoc → evidence=true', () => {
       const dayDocs = [{ date: '2024-05-19', counts: { c1: 5 }, status: 'closed' }];
       const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
-      expect(state.stage).toBe(3);
-      expect(state.hasHistory).toBe(true);
-      expect(state.hasCompletedDay).toBe(true);
+      expect(state.hasTrackingEvidence).toBe(true);
+      expect(state.showGettingStarted).toBe(false);
     });
 
-    it('tracker + 7+ closed days → stage 4', () => {
-      const dayDocs = Array.from({ length: 7 }, (_, i) => (
-        { date: `2024-05-${String(i + 1).padStart(2, '0')}`, counts: { c1: 3 }, status: 'closed' }
-      ));
-      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
-      expect(state.stage).toBe(4);
+    it('tracker + zero manual log → evidence=true', () => {
+      const logs = [{ logDate: today, counts: { c1: 0 }, origin: 'MANUAL_ENTRY' }];
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], logs, [], {}, today);
+      expect(state.hasTrackingEvidence).toBe(true);
+      expect(state.showGettingStarted).toBe(false);
     });
 
-    it('tracker + zero active count, no history → stage 1 (no evidence)', () => {
-      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], [], { c1: 0 }, today);
-      expect(state.stage).toBe(1);
+    it('empty activeCounts → no evidence (Case B)', () => {
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], [], {}, today);
       expect(state.hasTrackingEvidence).toBe(false);
+      expect(state.showGettingStarted).toBe(true);
     });
   });
 });
