@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tabakpp.app.composeapp.theme.*
 import com.tabakpp.app.composeapp.ui.components.*
+import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.viewmodels.RegistryViewModel
 import kotlinx.coroutines.delay
 
@@ -48,6 +49,9 @@ fun TrackScreen(
     val activeCounts by viewModel.activeCounts.collectAsStateWithLifecycle()
     val metrics by viewModel.metrics.collectAsStateWithLifecycle()
     val configs by viewModel.configs.collectAsStateWithLifecycle()
+    val logs by viewModel.logs.collectAsStateWithLifecycle()
+    val dayDocs by viewModel.dayDocs.collectAsStateWithLifecycle()
+    val trackingDay by viewModel.trackingDay.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val endingDay by viewModel.endingDay.collectAsStateWithLifecycle()
 
@@ -58,6 +62,17 @@ fun TrackScreen(
 
     var lastLoggedTrackerId by remember { mutableStateOf<String?>(null) }
     var undoPillVisible by remember { mutableStateOf(false) }
+
+    // Derive onboarding state from real product state (item 27 — no schema change).
+    val onboardingState = SmokingCalculator.getFirstWeekGuidance(
+        configs = configs,
+        logs = logs,
+        dayDocs = dayDocs,
+        activeCounts = activeCounts,
+        trackingDay = trackingDay
+    )
+
+    var gettingStartedDismissed by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(undoPillVisible, lastLoggedTrackerId) {
         if (undoPillVisible) {
@@ -97,6 +112,9 @@ fun TrackScreen(
                     viewModel.decrement(id)
                 },
                 metrics = metrics,
+                onboarding = onboardingState,
+                onboardingDismissed = gettingStartedDismissed,
+                onDismissGettingStarted = { gettingStartedDismissed = true },
                 endingDay = endingDay,
                 onEndDayClick = { showEndDayConfirm = true },
                 bottomPadding = innerPadding.calculateBottomPadding(),
@@ -252,6 +270,9 @@ private fun TrackerGrid(
     onIncrement: (com.tabakpp.app.data.TrackerConfig) -> Unit,
     onDecrement: (String) -> Unit,
     metrics: com.tabakpp.app.domain.SmokingCalculator.GlobalMetrics?,
+    onboarding: com.tabakpp.app.domain.SmokingCalculator.OnboardingState?,
+    onboardingDismissed: Boolean,
+    onDismissGettingStarted: () -> Unit,
     endingDay: Boolean,
     onEndDayClick: () -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
@@ -285,6 +306,19 @@ private fun TrackerGrid(
                 bottom = bottomPadding
             )
         ) {
+            // Getting Started card — state-driven, disappears once tracking evidence exists.
+            onboarding?.let {
+                if (!it.hasTrackingEvidence && !onboardingDismissed) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        GettingStartedCard(
+                            onboarding = it,
+                            modifier = Modifier.padding(top = 4.dp),
+                            onDismiss = onDismissGettingStarted
+                        )
+                    }
+                }
+            }
+
             itemsIndexed(configs, key = { _, item -> item.id }) { index, config ->
                 Box(modifier = Modifier.tabakCardEnter(index)) {
                     TrackerCard(

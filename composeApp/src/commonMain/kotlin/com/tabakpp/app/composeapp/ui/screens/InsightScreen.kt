@@ -272,7 +272,7 @@ private fun EmptyInsightsCard() {
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                "No historical data yet.",
+                text = "Insights become more useful as you build history.",
                 style = TabakTypography.labelMedium,
                 color = TextMuted,
                 textAlign = TextAlign.Center

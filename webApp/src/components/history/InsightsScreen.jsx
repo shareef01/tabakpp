@@ -153,7 +153,7 @@ export const InsightsScreen = React.memo(({
             <BarChart3 size={48} strokeWidth={1} className="text-neutral-600" />
             <h3 className="text-lg font-black text-white">No insights yet</h3>
             <p className="text-sm text-neutral-500 max-w-sm">
-              Keep tracking to build your monthly trends. Your consumption,
+              Insights become more useful as you build history. Your consumption,
               spending, and reduction data will appear here as it accumulates.
             </p>
           </div>

@@ -651,4 +651,60 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       });
     });
   });
+
+  describe('getFirstWeekGuidance (onboarding state)', () => {
+    const today = '2024-05-20';
+    const cig = { id: 'c1', limit: 10, type: 'CIGARETTE', isPrimaryTracked: true };
+
+    it('no trackers → stage 0', () => {
+      const state = SmokingCalculator.getFirstWeekGuidance([], [], [], {}, today);
+      expect(state.stage).toBe(0);
+      expect(state.hasTracker).toBe(false);
+      expect(state.hasTrackingEvidence).toBe(false);
+    });
+
+    it('tracker exists, no evidence → stage 1', () => {
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], [], {}, today);
+      expect(state.stage).toBe(1);
+      expect(state.hasTracker).toBe(true);
+      expect(state.hasTrackingEvidence).toBe(false);
+      expect(state.hasHistory).toBe(false);
+    });
+
+    it('tracker + current-day active count → stage 2', () => {
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], [], { c1: 3 }, today);
+      expect(state.stage).toBe(2);
+      expect(state.hasTrackingEvidence).toBe(true);
+      expect(state.hasHistory).toBe(false);
+    });
+
+    it('tracker + zero current-day doc → evidence=true, stage 2 (PR #45 semantics)', () => {
+      const dayDocs = [{ date: today, counts: { c1: 0 }, status: 'open' }];
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
+      expect(state.hasTrackingEvidence).toBe(true);
+      expect(state.stage).toBe(2);
+    });
+
+    it('tracker + one completed day → stage 3', () => {
+      const dayDocs = [{ date: '2024-05-19', counts: { c1: 5 }, status: 'closed' }];
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
+      expect(state.stage).toBe(3);
+      expect(state.hasHistory).toBe(true);
+      expect(state.hasCompletedDay).toBe(true);
+    });
+
+    it('tracker + 7+ closed days → stage 4', () => {
+      const dayDocs = Array.from({ length: 7 }, (_, i) => (
+        { date: `2024-05-${String(i + 1).padStart(2, '0')}`, counts: { c1: 3 }, status: 'closed' }
+      ));
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
+      expect(state.stage).toBe(4);
+    });
+
+    it('tracker + zero active count, no history → stage 1 (no evidence)', () => {
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], [], { c1: 0 }, today);
+      expect(state.stage).toBe(1);
+      expect(state.hasTrackingEvidence).toBe(false);
+    });
+  });
 });
