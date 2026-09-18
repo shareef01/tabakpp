@@ -456,6 +456,28 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
         ],
         { c1: 1 }, '2024-01-02'
       )).toBe(4); // today + Jan 1 + Dec 31 + Dec 30 = 4
+
+      // 13. today tracked zero via dayDoc with zero counts → today still counts
+      // A days/{today} document exists (user opened the app / interacted) but
+      // counts are zero because they adjusted back down. Presence, not positive
+      // sum, marks today as tracked.
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [], {}, '2024-07-14',
+        [
+          { date: '2024-07-13', counts: { c1: 3 }, trackerSnapshots: {}, aggregateCredit: null, status: 'closed' },
+          { date: '2024-07-14', counts: {}, trackerSnapshots: {}, aggregateCredit: null, status: 'open' }
+        ]
+      )).toBe(2);
+
+      // 13b. today tracked zero via activeCounts with zero values → today counts
+      // activeCounts is non-empty (has entries), so today is "tracked" even though
+      // all values are zero — the in-memory active session was started.
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [], { c1: 0 }, '2024-07-14',
+        [
+          { date: '2024-07-13', counts: { c1: 3 }, trackerSnapshots: {}, aggregateCredit: null, status: 'closed' }
+        ]
+      )).toBe(2);
     });
   });
 
