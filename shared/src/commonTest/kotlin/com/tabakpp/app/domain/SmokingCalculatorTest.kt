@@ -429,25 +429,40 @@ class SmokingCalculatorTest {
         )
         assertEquals(4, SmokingCalculator.calculateTrackingStreak(yearBoundaryLogs, mapOf("c1" to 1.0), "2024-01-02"))
 
-        // 13. today tracked zero via dayDoc with zero counts → today still counts
-        // A days/{today} document exists (user opened the app / interacted) but
-        // counts are zero because they adjusted back down. Presence, not positive
-        // sum, marks today as tracked.
-        assertEquals(2, SmokingCalculator.calculateTrackingStreak(
-            emptyList(),
-            emptyMap(),
-            "2024-07-14",
-            listOf(DayDocument("2024-07-13", mapOf("c1" to 3.0), emptyMap()), DayDocument("2024-07-14", emptyMap(), emptyMap()))
+        // --- Micro-fix: zero-only activeCounts bailout regression tests ---
+
+        // Case A — zero active map, no history: today counts, streak = 1
+        assertEquals(1, SmokingCalculator.calculateTrackingStreak(
+            emptyList(), mapOf("c1" to 0.0), "2026-09-18"
         ))
 
-        // 13b. today tracked zero via activeCounts with zero values → today counts
-        // activeCounts is non-empty (has entries), so today is "tracked" even though
-        // all values are zero — the in-memory active session was started.
-        assertEquals(2, SmokingCalculator.calculateTrackingStreak(
-            emptyList(),
-            mapOf("c1" to 0.0),
-            "2024-07-14",
-            listOf(DayDocument("2024-07-13", mapOf("c1" to 3.0), emptyMap()))
+        // Case B — zero active + stale history: today counts, yesterday missing, streak = 1
+        assertEquals(1, SmokingCalculator.calculateTrackingStreak(
+            listOf(LogEntry("l1", "2026-09-16", mapOf("c1" to 5.0))),
+            mapOf("c1" to 0.0), "2026-09-18"
+        ))
+
+        // Case C — empty active + stale history: no today evidence, streak = 0
+        assertEquals(0, SmokingCalculator.calculateTrackingStreak(
+            listOf(LogEntry("l1", "2026-09-16", mapOf("c1" to 5.0))),
+            emptyMap(), "2026-09-18"
+        ))
+
+        // Case D — persisted zero current dayDoc: today counts, streak = 1
+        assertEquals(1, SmokingCalculator.calculateTrackingStreak(
+            emptyList(), emptyMap(), "2026-09-18",
+            listOf(DayDocument("2026-09-18", mapOf("c1" to 0.0), emptyMap()))
+        ))
+
+        // Case E — zero manual log today: today counts, streak = 1
+        assertEquals(1, SmokingCalculator.calculateTrackingStreak(
+            listOf(LogEntry("l1", "2026-09-18", mapOf("c1" to 0.0), origin = "MANUAL_ENTRY")),
+            emptyMap(), "2026-09-18"
+        ))
+
+        // Case F — no evidence at all: streak = 0
+        assertEquals(0, SmokingCalculator.calculateTrackingStreak(
+            emptyList(), emptyMap(), "2026-09-18"
         ))
     }
 

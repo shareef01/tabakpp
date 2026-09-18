@@ -334,11 +334,11 @@ export const SmokingCalculator = {
     if (!trackingDay) return 0;
     const logged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs);
     const loggedDates = Object.keys(logged).sort().reverse();
-    const sessionOpen = SmokingCalculator.hasOpenSession(activeCounts);
-    if (loggedDates.length === 0 && !sessionOpen) return 0;
+    const hasTodayEvidence = Object.prototype.hasOwnProperty.call(logged, trackingDay) || Object.keys(activeCounts || {}).length > 0;
+    if (loggedDates.length === 0 && !hasTodayEvidence) return 0;
     const yesterday = shiftDate(trackingDay, -1);
     const mostRecent = loggedDates[0];
-    if (mostRecent && mostRecent < yesterday && !sessionOpen) return 0;
+    if (mostRecent && mostRecent < yesterday && !hasTodayEvidence) return 0;
 
     let streak = 0
     let cursor = trackingDay
