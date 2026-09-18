@@ -708,5 +708,26 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(state.hasTrackingEvidence).toBe(false);
       expect(state.showGettingStarted).toBe(true);
     });
+
+    it('empty current-day dayDoc → evidence=true (Case A: tracker deletion)', () => {
+      const dayDocs = [{ date: today, counts: {} }];
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
+      expect(state.hasTrackingEvidence).toBe(true);
+      expect(state.showGettingStarted).toBe(false);
+    });
+
+    it('empty historical dayDoc → evidence=true (Case C)', () => {
+      const dayDocs = [{ date: '2024-05-19', counts: {} }];
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
+      expect(state.hasTrackingEvidence).toBe(true);
+      expect(state.showGettingStarted).toBe(false);
+    });
+
+    it('empty dayDoc for different date → evidence=true', () => {
+      const dayDocs = [{ date: '2024-05-15', counts: {} }];
+      const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
+      expect(state.hasTrackingEvidence).toBe(true);
+      expect(state.showGettingStarted).toBe(false);
+    });
   });
 });
