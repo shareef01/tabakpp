@@ -194,6 +194,12 @@ object SmokingCalculator {
      * regardless of whether the day stayed within target. Deliberately
      * separate from [calculateStreak] (the goal streak) so "I tracked
      * consistently" and "I stayed on target" never collapse into one number.
+     *
+     * A day qualifies based on PRESENCE of a record (a day-doc, a log entry,
+     * or a non-empty activeCounts map), not on positive sum. This correctly
+     * distinguishes "tracked zero" (user interacted or explicitly logged 0)
+     * from "untracked/missing" (no record at all) — a day with a zero-count
+     * dayDoc or a zero-count manual entry still counts as tracked.
      */
     fun calculateTrackingStreak(
         logs: List<LogEntry>,
@@ -205,8 +211,6 @@ object SmokingCalculator {
         val logged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs)
         val loggedDates = logged.keys.sortedDescending()
         val sessionOpen = hasOpenSession(activeCounts)
-        fun sumOf(c: Map<String, Double>?) = (c ?: emptyMap()).values.sumOf { max(0.0, it) }
-
         if (loggedDates.isEmpty() && !sessionOpen) return 0
         val yesterday = try {
             LocalDate.parse(trackingDay).minus(1, DateTimeUnit.DAY).toString()
@@ -224,8 +228,11 @@ object SmokingCalculator {
         }
         for (i in 0 until 366) {
             val cursorStr = cursor.toString()
-            val dayTotal = if (cursorStr == trackingDay) sumOf(logged[cursorStr]) + sumOf(activeCounts) else sumOf(logged[cursorStr])
-            val hasEntry = if (cursorStr == trackingDay) dayTotal > 0 else logged.containsKey(cursorStr)
+            val hasEntry = if (cursorStr == trackingDay) {
+                logged.containsKey(cursorStr) || activeCounts.isNotEmpty()
+            } else {
+                logged.containsKey(cursorStr)
+            }
             if (!hasEntry) break
             streak++
             cursor = try {

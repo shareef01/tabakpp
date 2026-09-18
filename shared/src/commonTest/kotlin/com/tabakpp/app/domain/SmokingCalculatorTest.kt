@@ -428,6 +428,27 @@ class SmokingCalculatorTest {
             LogEntry("l3", "2023-12-30", mapOf("c1" to 3.0))
         )
         assertEquals(4, SmokingCalculator.calculateTrackingStreak(yearBoundaryLogs, mapOf("c1" to 1.0), "2024-01-02"))
+
+        // 13. today tracked zero via dayDoc with zero counts → today still counts
+        // A days/{today} document exists (user opened the app / interacted) but
+        // counts are zero because they adjusted back down. Presence, not positive
+        // sum, marks today as tracked.
+        assertEquals(2, SmokingCalculator.calculateTrackingStreak(
+            emptyList(),
+            emptyMap(),
+            "2024-07-14",
+            listOf(DayDocument("2024-07-13", mapOf("c1" to 3.0), emptyMap()), DayDocument("2024-07-14", emptyMap(), emptyMap()))
+        ))
+
+        // 13b. today tracked zero via activeCounts with zero values → today counts
+        // activeCounts is non-empty (has entries), so today is "tracked" even though
+        // all values are zero — the in-memory active session was started.
+        assertEquals(2, SmokingCalculator.calculateTrackingStreak(
+            emptyList(),
+            mapOf("c1" to 0.0),
+            "2024-07-14",
+            listOf(DayDocument("2024-07-13", mapOf("c1" to 3.0), emptyMap()))
+        ))
     }
 
     @Test
