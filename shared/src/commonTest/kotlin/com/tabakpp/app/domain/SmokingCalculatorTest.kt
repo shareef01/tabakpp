@@ -479,4 +479,72 @@ class SmokingCalculatorTest {
         assertEquals(1, SmokingCalculator.calculateStreak(withFuture, configs, emptyMap(), "2024-05-20"))
         assertEquals(false, SmokingCalculator.isBackfillDateAllowed("2099-01-01", "2024-05-20"))
     }
+
+    @Test
+    fun testGetGoalStatus_aggregateUnderAtOver() {
+        val cig = TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE, isPrimaryTracked = true)
+        val ryo = TrackerConfig("c2", "RYO", 5, 2, TrackerType.RYO_ROLL, isPrimaryTracked = true)
+        val simple = TrackerConfig("s1", "Simple", 3, 3, TrackerType.SIMPLE, isPrimaryTracked = true)
+
+        // 1. under target
+        val under = SmokingCalculator.getGoalStatus(mapOf("c1" to 7.0), listOf(cig))!!
+        assertEquals("under", under.status)
+        assertEquals(3.0, under.belowTarget, 1e-9)
+        assertEquals(0, under.overTrackers)
+
+        // 2. exactly at target
+        val at = SmokingCalculator.getGoalStatus(mapOf("c1" to 10.0), listOf(cig))!!
+        assertEquals("at", at.status)
+        assertEquals(0, at.overTrackers)
+
+        // 3. over target
+        val over = SmokingCalculator.getGoalStatus(mapOf("c1" to 12.0), listOf(cig))!!
+        assertEquals("over", over.status)
+        assertEquals(2.0, over.aboveTarget, 1e-9)
+        assertEquals(1, over.overTrackers)
+
+        // 4. zero target / zero actual -> at
+        val zeroAt = SmokingCalculator.getGoalStatus(mapOf("c1" to 0.0), listOf(TrackerConfig("c1", "Z", 0, 1, TrackerType.CIGARETTE)))!!
+        assertEquals("at", zeroAt.status)
+
+        // 5. zero target / positive actual -> over
+        val zeroOver = SmokingCalculator.getGoalStatus(mapOf("c1" to 1.0), listOf(TrackerConfig("c1", "Z", 0, 1, TrackerType.CIGARETTE)))!!
+        assertEquals("over", zeroOver.status)
+        assertEquals(1, zeroOver.overTrackers)
+
+        // 6. multiple trackers all under
+        val multiUnder = SmokingCalculator.getGoalStatus(mapOf("c1" to 5.0, "c2" to 2.0), listOf(cig, ryo))!!
+        assertEquals("under", multiUnder.status)
+        assertEquals(8.0, multiUnder.belowTarget, 1e-9)
+
+        // 7. one over, one under -> aggregate over
+        val mixed = SmokingCalculator.getGoalStatus(mapOf("c1" to 11.0, "c2" to 2.0), listOf(cig, ryo))!!
+        assertEquals("over", mixed.status)
+        assertEquals(1, mixed.overTrackers)
+
+        // 8. all exactly at
+        val allAt = SmokingCalculator.getGoalStatus(mapOf("c1" to 10.0, "c2" to 5.0), listOf(cig, ryo))!!
+        assertEquals("at", allAt.status)
+
+        // 9. fractional actual
+        val frac = SmokingCalculator.getGoalStatus(mapOf("c1" to 2.5), listOf(TrackerConfig("c1", "Cig", 5, 1, TrackerType.CIGARETTE)))!!
+        assertEquals("under", frac.status)
+        assertEquals(2.5, frac.belowTarget, 1e-9)
+
+        // 10. no trackers -> null
+        assertEquals(null, SmokingCalculator.getGoalStatus(emptyMap(), emptyList()))
+
+        // 11. only SIMPLE (no smoking) falls back to isPrimaryTracked
+        val simpleUnder = SmokingCalculator.getGoalStatus(mapOf("s1" to 2.0), listOf(simple))!!
+        assertEquals("under", simpleUnder.status)
+        assertEquals(1.0, simpleUnder.belowTarget, 1e-9)
+    }
+
+    @Test
+    fun testGetGlobalMetrics_includesGoalStatus() {
+        val configs = listOf(TrackerConfig("c1", "Cig", 10, 1, TrackerType.CIGARETTE, isPrimaryTracked = true))
+        val m = SmokingCalculator.getGlobalMetrics(emptyList(), configs, mapOf("c1" to 7.0), "2024-05-20")
+        assertEquals("under", m.goalStatus?.status)
+        assertEquals(3.0, m.goalStatus?.belowTarget ?: -1.0, 1e-9)
+    }
 }

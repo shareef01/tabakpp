@@ -49,6 +49,20 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
   const quotaSub = isOver ? `${aboveTarget} over target` : isAtLimit ? 'At target' : 'Usage';
   const quotaWarning = isOver || isAtLimit || progress >= 0.8;
 
+  // Today's aggregate goal state — per-tracker worst state, neutral copy (item 5).
+  const gs = m.goalStatus;
+  let goalText = 'No target';
+  if (gs) {
+    if (gs.status === 'over') {
+      goalText = gs.overTrackers === 1 ? '1 above target' : `${gs.overTrackers} above target`;
+    } else if (gs.status === 'at') {
+      goalText = 'At target';
+    } else {
+      const below = Math.round(gs.belowTarget);
+      goalText = below === 1 ? '1 below target' : `${below} below target`;
+    }
+  }
+
   return (
     <Card className="overflow-hidden bg-bg-card p-0" noPadding>
       <div className="grid grid-cols-2 lg:grid-cols-6 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
@@ -58,6 +72,22 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           value={Math.max(0, (m.limit || 0) - (m.count || 0))}
           sub="Units"
           accent
+        />
+        <MetricColumn
+          icon={Target}
+          label="TODAY'S GOAL"
+          value={goalText}
+          accent={m.goalStatus?.status === 'over'}
+          warning={m.goalStatus?.status === 'at'}
+          title={
+            m.goalStatus
+              ? m.goalStatus.status === 'over'
+                ? `${m.goalStatus.overTrackers} tracker(s) above target`
+                : m.goalStatus.status === 'at'
+                ? 'All trackers at target'
+                : `${Math.round(m.goalStatus.belowTarget)} below target`
+              : 'No trackers with targets'
+          }
         />
         <MetricColumn
           icon={Wallet}

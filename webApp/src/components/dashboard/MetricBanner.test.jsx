@@ -44,4 +44,38 @@ describe('MetricBanner tracking streak', () => {
     expect(screen.getByText('365')).toBeTruthy();
     expect(screen.getByText('730')).toBeTruthy();
   });
+
+  it('renders daily goal status — under target', () => {
+    const m = makeMetrics({
+      count: 7, limit: 10,
+      goalStatus: { status: 'under', belowTarget: 3, aboveTarget: 0, overTrackers: 0 },
+    });
+    render(<MetricBanner m={m} onEndDay={vi.fn()} />);
+    expect(screen.getByText("TODAY'S GOAL")).toBeTruthy();
+    expect(screen.getByText('3 below target')).toBeTruthy();
+  });
+
+  it('renders daily goal status — at target', () => {
+    const m = makeMetrics({
+      count: 10, limit: 10,
+      goalStatus: { status: 'at', belowTarget: 0, aboveTarget: 0, overTrackers: 0 },
+    });
+    render(<MetricBanner m={m} onEndDay={vi.fn()} />);
+    // "At target" appears in the goal column AND the daily-use sub-label
+    expect(screen.getAllByText('At target').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders daily goal status — over target', () => {
+    const m = makeMetrics({
+      count: 12, limit: 10,
+      goalStatus: { status: 'over', belowTarget: 0, aboveTarget: 2, overTrackers: 1 },
+    });
+    render(<MetricBanner m={m} onEndDay={vi.fn()} />);
+    expect(screen.getByText('1 above target')).toBeTruthy();
+  });
+
+  it('renders no-target fallback when goalStatus is null', () => {
+    render(<MetricBanner m={makeMetrics({ goalStatus: null })} onEndDay={vi.fn()} />);
+    expect(screen.getByText('No target')).toBeTruthy();
+  });
 });

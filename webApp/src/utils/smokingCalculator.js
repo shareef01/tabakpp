@@ -214,6 +214,14 @@ export const SmokingCalculator = {
    *   at     — actual == target ("limit reached", not "over")
    *   over   — actual > target ("N above target")
    */
+  /**
+   * Zero-target-safe goal status (item 4/5). A target of 0 is a legitimate
+   * goal ("none today"), not a meaningless denominator — so this never
+   * expresses status as a percentage of target. Three states only:
+   *   under  — actual < target
+   *   at     — actual == target ("limit reached", not "over")
+   *   over   — actual > target ("N above target")
+   */
   getLimitStatus: (actual, target) => {
     const a = Math.max(0, actual || 0);
     const t = Math.max(0, target || 0);
@@ -225,6 +233,40 @@ export const SmokingCalculator = {
     };
   },
 
+  /**
+   * Aggregate daily goal status across multiple trackers — per-tracker, never
+   * pooled (item 7). Each participating tracker is evaluated individually via
+   * getLimitStatus, then the worst state is selected: "over" dominates
+   * "at" dominates "under".
+   *
+   * Uses the same smoking-first / isPrimaryTracked fallback as calculateStreak.
+   * Returns null when there are no participating trackers (no meaningful
+   * target), so the UI can defer to empty-state behavior (item 20).
+   */
+  getGoalStatus: (counts, configs) => {
+    const all = configs || [];
+    const smoking = all.filter((c) => SMOKING_TYPES.includes(c.type));
+    const goalConfigs = smoking.length > 0 ? smoking : all.filter((c) => c.isPrimaryTracked !== false);
+    if (goalConfigs.length === 0) return null;
+    let worst = 'under';
+    let totalAbove = 0;
+    let totalBelow = 0;
+    let overCount = 0;
+    goalConfigs.forEach((c) => {
+      const ls = SmokingCalculator.getLimitStatus(
+        Math.max(0, (counts || {})[c.id] || 0),
+        Math.max(0, c.limit || 0)
+      );
+      if (ls.status === 'over') {
+        worst = 'over'; totalAbove += ls.aboveTarget; overCount++;
+      } else if (ls.status === 'at') {
+        if (worst !== 'over') worst = 'at';
+      } else if (worst !== 'over' && worst !== 'at') {
+        worst = 'under'; totalBelow += ls.belowTarget;
+      }
+    });
+    return { status: worst, aboveTarget: totalAbove, belowTarget: totalBelow, overTrackers: overCount };
+  },
   /**
    * Reduction vs. a user-set baseline (item 3) — deliberately independent of
    * `target`. Returns null when no baseline is set so callers can render the
@@ -518,6 +560,7 @@ export const SmokingCalculator = {
       streak = SmokingCalculator.calculateStreak(logs, configs, activeCounts, trackingDay, dayDocs);
       trackingStreak = SmokingCalculator.calculateTrackingStreak(logs, activeCounts, trackingDay, dayDocs);
     } catch { /* keep 0 */ }
+    const goalStatus = SmokingCalculator.getGoalStatus(sessionCounts, configs);
 
     let savedLifetime = 0;
     Object.values(logged).forEach((dayCounts) => {
@@ -564,6 +607,7 @@ export const SmokingCalculator = {
       progress: limit > 0 ? count / limit : 0,
       lifeLost,
       recovered,
+      goalStatus,
       activeCounts: sessionCounts,
       hasOpenSession: SmokingCalculator.hasOpenSession(sessionCounts)
     };
