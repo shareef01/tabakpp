@@ -210,15 +210,15 @@ object SmokingCalculator {
         if (trackingDay.isBlank()) return 0
         val logged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs)
         val loggedDates = logged.keys.sortedDescending()
-        val sessionOpen = hasOpenSession(activeCounts)
-        if (loggedDates.isEmpty() && !sessionOpen) return 0
+        val hasTodayEvidence = logged.containsKey(trackingDay) || activeCounts.isNotEmpty()
+        if (loggedDates.isEmpty() && !hasTodayEvidence) return 0
         val yesterday = try {
             LocalDate.parse(trackingDay).minus(1, DateTimeUnit.DAY).toString()
         } catch (_: Exception) {
             ""
         }
         val mostRecent = loggedDates.firstOrNull()
-        if (mostRecent != null && yesterday.isNotEmpty() && mostRecent < yesterday && !sessionOpen) return 0
+        if (mostRecent != null && yesterday.isNotEmpty() && mostRecent < yesterday && !hasTodayEvidence) return 0
 
         var streak = 0
         var cursor = try {
