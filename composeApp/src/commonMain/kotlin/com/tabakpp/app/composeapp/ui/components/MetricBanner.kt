@@ -105,6 +105,13 @@ fun MetricBanner(
                         valueColor = SuccessColor,
                         modifier = Modifier.weight(1f)
                     )
+                    MetricItem(
+                        label = "TRACKING",
+                        value = "${metrics.trackingStreak}",
+                        suffix = if (metrics.trackingStreak == 1) "DAY" else "DAYS",
+                        valueColor = accentColor,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
