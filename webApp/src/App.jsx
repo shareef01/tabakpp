@@ -64,6 +64,7 @@ const lazyWithRetry = (componentImport) => lazy(async () => {
 const AuthScreen = lazyWithRetry(() => import('./components/auth/AuthScreen').then(m => ({ default: m.AuthScreen })));
 const TrackerCard = lazyWithRetry(() => import('./components/dashboard/TrackerCard').then(m => ({ default: m.TrackerCard })));
 const MetricBanner = lazyWithRetry(() => import('./components/dashboard/MetricBanner').then(m => ({ default: m.MetricBanner })));
+import { GettingStartedCard } from './components/dashboard/GettingStartedCard';
 const HistoryScreen = lazyWithRetry(() => import('./components/history/HistoryScreen').then(m => ({ default: m.HistoryScreen })));
 const SettingsScreen = lazyWithRetry(() => import('./components/settings/SettingsScreen').then(m => ({ default: m.SettingsScreen })));
 
@@ -185,6 +186,7 @@ const AppContent = () => {
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [showEndDayConfirm, setShowEndDayConfirm] = useState(false);
   const [protocolToDelete, setProtocolToDelete] = useState(null);
+  const [gettingStartedDismissed, setGettingStartedDismissed] = useState(false);
 
   // Tracking day in LOCAL time with the user's day-start hour (Android
   // parity) — recomputed live so a tab left open rolls over correctly.
@@ -204,6 +206,11 @@ const AppContent = () => {
     increment, decrement, endDay, reorder, addProtocol, updateProtocol, deleteProtocol,
     createManualEntry, deleteLog, restoreLog, updateHistoricalLog, updateHistoricalDay, updateAvatar
   } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, avatar: null };
+
+  // Derive onboarding state from real product state (item 27 — no schema change).
+  const onboardingState = SmokingCalculator.getFirstWeekGuidance(
+    configs, logs, dayDocs, metrics.activeCounts || {}, today
+  );
 
   const [bootstrapError, setBootstrapError] = useState(null);
 
@@ -375,6 +382,12 @@ const AppContent = () => {
                         <DashboardSkeleton widgetSize={settings.widgetSize} />
                       ) : (
                         <>
+                          {onboardingState && !onboardingState.hasTrackingEvidence && !gettingStartedDismissed && (
+                            <GettingStartedCard
+                              onboarding={onboardingState}
+                              onDismiss={() => setGettingStartedDismissed(true)}
+                            />
+                          )}
                           {configs.length ? <div className={cn('transition-all duration-500 ease-out', gridClasses)}>
                             {[...configs].sort((a,b)=>a.order-b.order).map((c, i) => (
                               <TrackerCard
