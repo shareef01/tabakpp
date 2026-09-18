@@ -2,7 +2,7 @@ import React from 'react';
 import { cn } from '../../utils/utils';
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { Card } from '../Common';
-import { Target, Zap, Activity, Wallet, Award, Sun, Loader2 } from 'lucide-react';
+import { Target, Zap, Activity, Wallet, Award, TrendingUp, Sun, Loader2 } from 'lucide-react';
 
 const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, className, title }) => (
   <div title={title} className={cn("flex flex-col items-center justify-center gap-1.5 px-3 py-4 md:px-5 md:py-5 transition-colors duration-300 group/metric", className)}>
@@ -51,7 +51,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
 
   return (
     <Card className="overflow-hidden bg-bg-card p-0" noPadding>
-      <div className="grid grid-cols-2 lg:grid-cols-5 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
+      <div className="grid grid-cols-2 lg:grid-cols-6 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
         <MetricColumn
           icon={Target}
           label="Remaining"
@@ -72,6 +72,13 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           value={`${m.streak || 0}`}
           sub={m.streak === 1 ? 'Day' : 'Days'}
           title="Consecutive days within target — a different measure from days tracked"
+        />
+        <MetricColumn
+          icon={TrendingUp}
+          label="Tracking"
+          value={`${m.trackingStreak || 0}`}
+          sub={m.trackingStreak === 1 ? 'Day' : 'Days'}
+          title="Consecutive days you recorded activity — consistency, not goal success"
         />
         <MetricColumn
           icon={Award}
