@@ -113,25 +113,32 @@ class MetricBannerTest {
     }
 
     @Test
-    fun goalStatus_underTarget_showsBelowTarget() {
-        val gs = SmokingCalculator.GoalStatus("under", belowTarget = 3.0, aboveTarget = 0.0, overTrackers = 0)
+    fun goalStatus_underTarget_showsWithinTargets() {
+        val gs = SmokingCalculator.GoalStatus(status = "under", belowTarget = 3.0, aboveTarget = 0.0, overTrackers = 0, atTrackers = 0, underTrackers = 1, totalTrackers = 1)
         setBanner(metrics(count = 7, limit = 10, goalStatus = gs))
         rule.onNodeWithText("TODAY'S GOAL").assertIsDisplayed()
-        rule.onNodeWithText("3 below target").assertIsDisplayed()
+        rule.onNodeWithText("Within today's targets").assertIsDisplayed()
     }
 
     @Test
-    fun goalStatus_atTarget_showsAtTarget() {
-        val gs = SmokingCalculator.GoalStatus("at", belowTarget = 0.0, aboveTarget = 0.0, overTrackers = 0)
+    fun goalStatus_atTarget_showsWithinTargets() {
+        val gs = SmokingCalculator.GoalStatus(status = "at", belowTarget = 0.0, aboveTarget = 0.0, overTrackers = 0, atTrackers = 1, underTrackers = 0, totalTrackers = 1)
         setBanner(metrics(count = 10, limit = 10, goalStatus = gs))
-        rule.onNodeWithText("At target").assertIsDisplayed()
+        rule.onNodeWithText("Within today's targets").assertIsDisplayed()
     }
 
     @Test
-    fun goalStatus_overTarget_showsAboveTarget() {
-        val gs = SmokingCalculator.GoalStatus("over", belowTarget = 0.0, aboveTarget = 2.0, overTrackers = 1)
+    fun goalStatus_overTarget_showsTrackerCount() {
+        val gs = SmokingCalculator.GoalStatus(status = "over", belowTarget = 0.0, aboveTarget = 2.0, overTrackers = 1, atTrackers = 0, underTrackers = 0, totalTrackers = 1)
         setBanner(metrics(count = 12, limit = 10, goalStatus = gs))
-        rule.onNodeWithText("1 above target").assertIsDisplayed()
+        rule.onNodeWithText("1 tracker above target").assertIsDisplayed()
+    }
+
+    @Test
+    fun goalStatus_overTarget_showsMultipleTrackers() {
+        val gs = SmokingCalculator.GoalStatus(status = "over", belowTarget = 0.0, aboveTarget = 5.0, overTrackers = 3, atTrackers = 0, underTrackers = 0, totalTrackers = 3)
+        setBanner(metrics(count = 12, limit = 10, goalStatus = gs))
+        rule.onNodeWithText("3 trackers above target").assertIsDisplayed()
     }
 
     @Test

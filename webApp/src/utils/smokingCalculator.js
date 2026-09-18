@@ -248,24 +248,24 @@ export const SmokingCalculator = {
     const smoking = all.filter((c) => SMOKING_TYPES.includes(c.type));
     const goalConfigs = smoking.length > 0 ? smoking : all.filter((c) => c.isPrimaryTracked !== false);
     if (goalConfigs.length === 0) return null;
-    let worst = 'under';
+    let overCount = 0;
+    let atCount = 0;
+    let underCount = 0;
     let totalAbove = 0;
     let totalBelow = 0;
-    let overCount = 0;
     goalConfigs.forEach((c) => {
       const ls = SmokingCalculator.getLimitStatus(
         Math.max(0, (counts || {})[c.id] || 0),
         Math.max(0, c.limit || 0)
       );
-      if (ls.status === 'over') {
-        worst = 'over'; totalAbove += ls.aboveTarget; overCount++;
-      } else if (ls.status === 'at') {
-        if (worst !== 'over') worst = 'at';
-      } else if (worst !== 'over' && worst !== 'at') {
-        worst = 'under'; totalBelow += ls.belowTarget;
-      }
+      totalAbove += ls.aboveTarget;
+      totalBelow += ls.belowTarget;
+      if (ls.status === 'over') overCount++;
+      else if (ls.status === 'at') atCount++;
+      else underCount++;
     });
-    return { status: worst, aboveTarget: totalAbove, belowTarget: totalBelow, overTrackers: overCount };
+    const status = overCount > 0 ? 'over' : atCount > 0 ? 'at' : 'under';
+    return { status, aboveTarget: totalAbove, belowTarget: totalBelow, overTrackers: overCount, atTrackers: atCount, underTrackers: underCount, totalTrackers: goalConfigs.length };
   },
   /**
    * Reduction vs. a user-set baseline (item 3) — deliberately independent of
@@ -449,6 +449,21 @@ export const SmokingCalculator = {
     const m = n % 60;
     if (h <= 0) return `${m}m`;
     return `${h}h ${m}m`;
+  },
+
+  /**
+   * Format a non-negative delta for UI display — integer values without a
+   * trailing ".0", fractional values with minimal representation (1.0 -> "1",
+   * 2.5 -> "2.5", 2.25 -> "2.25"). Cross-platform parity with the Kotlin port.
+   */
+  formatGoalDelta: (value) => {
+    const v = Math.max(0, value || 0);
+    const floorVal = Math.floor(v);
+    if (v === floorVal) return String(floorVal);
+    // Trim trailing zeros: 2.50 -> "2.5", 2.250 -> "2.25"
+    let s = String(v);
+    if (s.includes('.')) s = s.replace(/\.?0+$/, '');
+    return s;
   },
 
   sumSmokingUnits: (counts, configs) => {
