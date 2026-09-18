@@ -303,6 +303,41 @@ object SmokingCalculator {
         )
     }
 
+    /**
+     * Aggregate daily goal status across multiple trackers — per-tracker, never
+     * pooled (item 7). Each participating tracker is evaluated individually via
+     * [getLimitStatus], then the worst state is selected: over dominates
+     * at dominates under. This prevents one tracker going over while another
+     * is under from collapsing into within targets.
+     *
+     * Uses [getStreakConfigs] for tracker selection so the daily goal
+     * uses the same smoking-first / isPrimaryTracked fallback contract as
+     * [calculateStreak].
+     *
+     * Returns null when there are no participating trackers (no meaningful
+     * target to evaluate), so the UI can defer to empty-state behavior (item 20)
+     * rather than fabricating "0 below target".
+     */
+    data class GoalStatus(val status: String, val aboveTarget: Double, val belowTarget: Double, val overTrackers: Int)
+
+    fun getGoalStatus(counts: Map<String, Double>, configs: List<TrackerConfig>): GoalStatus? {
+        val goalConfigs = getStreakConfigs(configs)
+        if (goalConfigs.isEmpty()) return null
+        var worst = "under"
+        var totalAbove = 0.0
+        var totalBelow = 0.0
+        var overCount = 0
+        for (c in goalConfigs) {
+            val ls = getLimitStatus(max(0.0, counts[c.id] ?: 0.0), max(0, c.limit).toDouble())
+            when (ls.status) {
+                "over" -> { worst = "over"; totalAbove += ls.aboveTarget; overCount++ }
+                "at" -> { if (worst != "over") worst = "at" }
+                "under" -> { if (worst != "over" && worst != "at") { worst = "under"; totalBelow += ls.belowTarget } }
+            }
+        }
+        return GoalStatus(worst, totalAbove, totalBelow, overCount)
+    }
+
     data class Reduction(val baseline: Double, val actual: Double, val avoided: Double, val percent: Double?)
 
     /**
@@ -545,6 +580,7 @@ object SmokingCalculator {
 
         val xp = calculateXP(logs, streak)
         val rank = getRank(xp)
+        val goalStatus = getGoalStatus(sessionCounts, configs)
 
         return GlobalMetrics(
             count = primaryCount.toInt(),
@@ -562,6 +598,7 @@ object SmokingCalculator {
             progress = if (primaryLimit > 0) primaryCount / primaryLimit else 0.0,
             lifeLost = lifeLost,
             recovered = recovered,
+            goalStatus = goalStatus,
             hasOpenSession = hasOpenSession(activeCounts),
             xp = xp,
             rank = rank
@@ -602,6 +639,8 @@ object SmokingCalculator {
         val progress: Double,
         val lifeLost: Int,
         val recovered: Int,
+        /** Today's aggregate goal status (under/at/over), computed per-tracker via [getGoalStatus]. Null when no trackers participate. */
+        val goalStatus: GoalStatus? = null,
         val hasOpenSession: Boolean = false,
         val xp: Int = 0,
         val rank: String = "Apprentice"

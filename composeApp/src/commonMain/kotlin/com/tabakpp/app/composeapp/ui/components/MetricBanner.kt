@@ -78,6 +78,11 @@ fun MetricBanner(
                         valueColor = if (isOverLimit) ErrorColor else Color.White,
                         modifier = Modifier.weight(1f)
                     )
+                    GoalStatusItem(
+                        goalStatus = metrics.goalStatus,
+                        accentColor = accentColor,
+                        modifier = Modifier.weight(1f)
+                    )
                     SpentMetricItem(
                         label = "SPENT TODAY",
                         spent = metrics.spentToday,
@@ -234,6 +239,45 @@ private fun MetricItem(
             }
         }
     }
+}
+
+/**
+ * Today's aggregate goal status — communicates under/at/over in neutral text.
+ * Uses domain-level GoalStatus (per-tracker worst state, not pooled) so the
+ * UI contains no arithmetic. Color is semantic: accent (under), amber (at),
+ * danger (over) — never relies on color alone to convey state.
+ */
+@Composable
+private fun GoalStatusItem(
+    goalStatus: SmokingCalculator.GoalStatus?,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val goalColor = when (goalStatus?.status) {
+        "over" -> ErrorColor
+        "at" -> WarningColor
+        else -> accentColor
+    }
+    val goalText = when (goalStatus) {
+        null -> "No target set"
+        else -> when (goalStatus.status) {
+            "over" -> {
+                val n = goalStatus.overTrackers
+                if (n == 1) "1 above target" else "$n above target"
+            }
+            "at" -> "At target"
+            else -> {
+                val below = goalStatus.belowTarget.toInt()
+                if (below == 1) "1 below target" else "$below below target"
+            }
+        }
+    }
+    MetricItem(
+        label = "TODAY'S GOAL",
+        value = goalText,
+        valueColor = goalColor,
+        modifier = modifier
+    )
 }
 
 @Composable
