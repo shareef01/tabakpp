@@ -516,6 +516,92 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
     });
   });
 
+  describe('getGoalStatus (daily aggregate under/at/over)', () => {
+    const cig = { id: 'c1', limit: 10, type: 'CIGARETTE', isPrimaryTracked: true };
+    const ryo = { id: 'c2', limit: 5, type: 'RYO_ROLL', isPrimaryTracked: true };
+    const simple = { id: 's1', limit: 3, type: 'SIMPLE', isPrimaryTracked: true };
+
+    it('under target', () => {
+      const gs = SmokingCalculator.getGoalStatus({ c1: 7 }, [cig]);
+      expect(gs.status).toBe('under');
+      expect(gs.belowTarget).toBe(3);
+      expect(gs.overTrackers).toBe(0);
+    });
+
+    it('exactly at target', () => {
+      const gs = SmokingCalculator.getGoalStatus({ c1: 10 }, [cig]);
+      expect(gs.status).toBe('at');
+      expect(gs.belowTarget).toBe(0);
+      expect(gs.overTrackers).toBe(0);
+    });
+
+    it('over target', () => {
+      const gs = SmokingCalculator.getGoalStatus({ c1: 12 }, [cig]);
+      expect(gs.status).toBe('over');
+      expect(gs.aboveTarget).toBe(2);
+      expect(gs.overTrackers).toBe(1);
+    });
+
+    it('zero target / zero actual → at target', () => {
+      const zeroCig = { ...cig, limit: 0 };
+      const gs = SmokingCalculator.getGoalStatus({ c1: 0 }, [zeroCig]);
+      expect(gs.status).toBe('at');
+      expect(gs.overTrackers).toBe(0);
+    });
+
+    it('zero target / positive actual → over target', () => {
+      const zeroCig = { ...cig, limit: 0 };
+      const gs = SmokingCalculator.getGoalStatus({ c1: 1 }, [zeroCig]);
+      expect(gs.status).toBe('over');
+      expect(gs.overTrackers).toBe(1);
+      expect(gs.aboveTarget).toBe(1);
+    });
+
+    it('multiple trackers all under', () => {
+      const gs = SmokingCalculator.getGoalStatus({ c1: 5, c2: 2 }, [cig, ryo]);
+      expect(gs.status).toBe('under');
+      expect(gs.belowTarget).toBe(8);
+      expect(gs.overTrackers).toBe(0);
+    });
+
+    it('one tracker over, one under → aggregate is over', () => {
+      const gs = SmokingCalculator.getGoalStatus({ c1: 11, c2: 2 }, [cig, ryo]);
+      expect(gs.status).toBe('over');
+      expect(gs.overTrackers).toBe(1);
+      expect(gs.aboveTarget).toBe(1);
+    });
+
+    it('all exactly at', () => {
+      const gs = SmokingCalculator.getGoalStatus({ c1: 10, c2: 5 }, [cig, ryo]);
+      expect(gs.status).toBe('at');
+      expect(gs.overTrackers).toBe(0);
+    });
+
+    it('fractional actual', () => {
+      const gs = SmokingCalculator.getGoalStatus({ c1: 2.5 }, [{ ...cig, limit: 5 }]);
+      expect(gs.status).toBe('under');
+      expect(gs.belowTarget).toBe(2.5);
+    });
+
+    it('no trackers → null', () => {
+      expect(SmokingCalculator.getGoalStatus({}, [])).toBeNull();
+    });
+
+    it('only SIMPLE trackers (no smoking) falls back to isPrimaryTracked', () => {
+      const gs = SmokingCalculator.getGoalStatus({ s1: 2 }, [simple]);
+      expect(gs.status).toBe('under');
+      expect(gs.belowTarget).toBe(1);
+    });
+
+    it('getGlobalMetrics includes goalStatus', () => {
+      const configs = [cig];
+      const m = SmokingCalculator.getGlobalMetrics([], configs, { c1: 7 }, '2024-05-20');
+      expect(m.goalStatus).not.toBeNull();
+      expect(m.goalStatus.status).toBe('under');
+      expect(m.goalStatus.belowTarget).toBe(3);
+    });
+  });
+
   describe('mergeDayDocsIntoLogged (dated daily-document overlay)', () => {
     it('adds day-doc counts additively onto legacy logged counts', () => {
       const logged = { '2024-07-13': { c1: 2 } };

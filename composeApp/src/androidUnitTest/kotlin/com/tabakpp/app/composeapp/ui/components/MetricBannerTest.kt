@@ -30,10 +30,12 @@ class MetricBannerTest {
         progress: Double = 0.35,
         spent: Double = 4.51,
         hasOpen: Boolean = true,
+        goalStatus: SmokingCalculator.GoalStatus? = null,
     ) = SmokingCalculator.GlobalMetrics(
         count = count, limit = limit, streak = streak, trackingStreak = trackingStreak,
         spentToday = spent, budgetLeftToday = 0.0, saved = 0.0, savedLifetime = 0.0,
         progress = progress, lifeLost = 0, recovered = 0, hasOpenSession = hasOpen,
+        goalStatus = goalStatus,
     )
 
     private fun setBanner(m: SmokingCalculator.GlobalMetrics, onEndDay: () -> Unit = {}) {
@@ -108,5 +110,33 @@ class MetricBannerTest {
         setBanner(metrics(streak = 365, trackingStreak = 730, progress = 0.1))
         rule.onNodeWithText("365").assertIsDisplayed()
         rule.onNodeWithText("730").assertIsDisplayed()
+    }
+
+    @Test
+    fun goalStatus_underTarget_showsBelowTarget() {
+        val gs = SmokingCalculator.GoalStatus("under", belowTarget = 3.0, aboveTarget = 0.0, overTrackers = 0)
+        setBanner(metrics(count = 7, limit = 10, goalStatus = gs))
+        rule.onNodeWithText("TODAY'S GOAL").assertIsDisplayed()
+        rule.onNodeWithText("3 below target").assertIsDisplayed()
+    }
+
+    @Test
+    fun goalStatus_atTarget_showsAtTarget() {
+        val gs = SmokingCalculator.GoalStatus("at", belowTarget = 0.0, aboveTarget = 0.0, overTrackers = 0)
+        setBanner(metrics(count = 10, limit = 10, goalStatus = gs))
+        rule.onNodeWithText("At target").assertIsDisplayed()
+    }
+
+    @Test
+    fun goalStatus_overTarget_showsAboveTarget() {
+        val gs = SmokingCalculator.GoalStatus("over", belowTarget = 0.0, aboveTarget = 2.0, overTrackers = 1)
+        setBanner(metrics(count = 12, limit = 10, goalStatus = gs))
+        rule.onNodeWithText("1 above target").assertIsDisplayed()
+    }
+
+    @Test
+    fun goalStatus_null_showsNoTarget() {
+        setBanner(metrics(count = 7, limit = 20, goalStatus = null))
+        rule.onNodeWithText("No target set").assertIsDisplayed()
     }
 }
