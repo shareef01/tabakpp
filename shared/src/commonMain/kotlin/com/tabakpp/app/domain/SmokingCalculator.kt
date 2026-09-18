@@ -977,7 +977,8 @@ object SmokingCalculator {
      * "Tracking evidence" = any persisted tracking record:
      * - activeCounts is non-empty (live current-day counts, including zero —
      *   PR #45: a zero-valued count is explicit tracking, not a default)
-     * - any day document exists (current or historical)
+     * - any day document exists (current or historical, even if counts are
+     *   empty after tracker deletion — the doc itself is evidence)
      * - any log entry exists
      *
      * @param configs all tracker configs
@@ -1006,11 +1007,12 @@ object SmokingCalculator {
 
         // Presence semantics: a non-empty map IS tracking evidence (PR #45).
         // Explicit zero consumption is real tracking state, not a default.
+        // Any persisted day document — even with empty counts after tracker
+        // deletion — proves the user already tracked that day.
         val hasActiveEvidence = activeCounts.isNotEmpty()
-        val hasCurrentDayDoc = dayDocs.any { it.date == trackingDay && it.counts.isNotEmpty() }
-        val hasHistoricalDoc = dayDocs.any { it.date != trackingDay }
+        val hasDayDocEvidence = dayDocs.isNotEmpty()
         val hasLogEvidence = logs.isNotEmpty()
-        val hasTrackingEvidence = hasActiveEvidence || hasCurrentDayDoc || hasHistoricalDoc || hasLogEvidence
+        val hasTrackingEvidence = hasActiveEvidence || hasDayDocEvidence || hasLogEvidence
 
         return OnboardingState(
             hasTracker = hasTracker,

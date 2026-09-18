@@ -629,5 +629,25 @@ class SmokingCalculatorTest {
         val trulyEmpty = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), emptyList(), emptyMap(), today)
         assertEquals(false, trulyEmpty.hasTrackingEvidence)
         assertEquals(true, trulyEmpty.showGettingStarted)
+
+        // 9. Persisted current-day dayDoc with empty counts → evidence=true
+        // (Case A: tracker deletion can leave counts = {} while the doc persists)
+        val emptyDayDoc = DayDocument(date = today, counts = emptyMap(), status = "open")
+        val hasEmptyDay = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), listOf(emptyDayDoc), emptyMap(), today)
+        assertEquals(true, hasEmptyDay.hasTrackingEvidence)
+        assertEquals(false, hasEmptyDay.showGettingStarted)
+
+        // 10. Persisted historical dayDoc with empty counts → evidence=true
+        // (Case C: empty historical doc is still historical tracking state)
+        val emptyHistorical = DayDocument(date = "2024-05-19", counts = emptyMap(), status = "closed")
+        val hasEmptyHistory = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), listOf(emptyHistorical), emptyMap(), today)
+        assertEquals(true, hasEmptyHistory.hasTrackingEvidence)
+        assertEquals(false, hasEmptyHistory.showGettingStarted)
+
+        // 11. Empty dayDoc for a different date → evidence=true (any doc counts)
+        val emptyOtherDay = DayDocument(date = "2024-05-15", counts = emptyMap(), status = "closed")
+        val hasEmptyOther = SmokingCalculator.getFirstWeekGuidance(listOf(cig), emptyList(), listOf(emptyOtherDay), emptyMap(), today)
+        assertEquals(true, hasEmptyOther.hasTrackingEvidence)
+        assertEquals(false, hasEmptyOther.showGettingStarted)
     }
 }
