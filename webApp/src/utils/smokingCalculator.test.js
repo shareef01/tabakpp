@@ -457,27 +457,37 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
         { c1: 1 }, '2024-01-02'
       )).toBe(4); // today + Jan 1 + Dec 31 + Dec 30 = 4
 
-      // 13. today tracked zero via dayDoc with zero counts → today still counts
-      // A days/{today} document exists (user opened the app / interacted) but
-      // counts are zero because they adjusted back down. Presence, not positive
-      // sum, marks today as tracked.
-      expect(SmokingCalculator.calculateTrackingStreak(
-        [], {}, '2024-07-14',
-        [
-          { date: '2024-07-13', counts: { c1: 3 }, trackerSnapshots: {}, aggregateCredit: null, status: 'closed' },
-          { date: '2024-07-14', counts: {}, trackerSnapshots: {}, aggregateCredit: null, status: 'open' }
-        ]
-      )).toBe(2);
+      // --- Micro-fix: zero-only activeCounts bailout regression tests ---
 
-      // 13b. today tracked zero via activeCounts with zero values → today counts
-      // activeCounts is non-empty (has entries), so today is "tracked" even though
-      // all values are zero — the in-memory active session was started.
+      // Case A — zero active map, no history: today counts, streak = 1
+      expect(SmokingCalculator.calculateTrackingStreak([], { c1: 0 }, '2026-09-18')).toBe(1);
+
+      // Case B — zero active + stale history: today counts, yesterday missing, streak = 1
       expect(SmokingCalculator.calculateTrackingStreak(
-        [], { c1: 0 }, '2024-07-14',
-        [
-          { date: '2024-07-13', counts: { c1: 3 }, trackerSnapshots: {}, aggregateCredit: null, status: 'closed' }
-        ]
-      )).toBe(2);
+        [{ logDate: '2026-09-16', counts: { c1: 5 } }],
+        { c1: 0 }, '2026-09-18'
+      )).toBe(1);
+
+      // Case C — empty active + stale history: no today evidence, streak = 0
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [{ logDate: '2026-09-16', counts: { c1: 5 } }],
+        {}, '2026-09-18'
+      )).toBe(0);
+
+      // Case D — persisted zero current dayDoc: today counts, streak = 1
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [], {}, '2026-09-18',
+        [{ date: '2026-09-18', counts: { c1: 0 }, trackerSnapshots: {}, aggregateCredit: null, status: 'open' }]
+      )).toBe(1);
+
+      // Case E — zero manual log today: today counts, streak = 1
+      expect(SmokingCalculator.calculateTrackingStreak(
+        [{ logDate: '2026-09-18', counts: { c1: 0 }, origin: 'MANUAL_ENTRY' }],
+        {}, '2026-09-18'
+      )).toBe(1);
+
+      // Case F — no evidence at all: streak = 0
+      expect(SmokingCalculator.calculateTrackingStreak([], {}, '2026-09-18')).toBe(0);
     });
   });
 
