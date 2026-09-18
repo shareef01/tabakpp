@@ -256,7 +256,7 @@ fun HistoryScreen(
                 if (logs.isEmpty()) {
                     item {
                         Text(
-                            "No sessions yet. End a tracking day or add a manual entry.",
+                            "Your tracked days will appear here.",
                             color = TextMuted,
                             modifier = Modifier.padding(16.dp)
                         )

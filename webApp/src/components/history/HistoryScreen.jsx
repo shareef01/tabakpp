@@ -617,7 +617,7 @@ export const HistoryScreen = React.memo(({
               );
             }) : (
               <div className="py-14 px-6 text-center">
-                <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">No sessions yet</p>
+                <p className="text-xs font-black uppercase tracking-[0.2em] text-neutral-400">Your tracked days will appear here</p>
                 <p className="mt-2 text-xs text-neutral-400">
                   Track a day or add a manual entry.
                 </p>
