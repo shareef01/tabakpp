@@ -1,14 +1,21 @@
 package com.tabakpp.app.composeapp.ui.components
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,22 +32,21 @@ import com.tabakpp.app.domain.SmokingCalculator
 /**
  * State-driven Getting Started card.
  *
- * Derives its checklist from [SmokingCalculator.OnboardingState] (item 27) — no
+ * Derives its checklist from [SmokingCalculator.OnboardingState] — no
  * separate onboarding-persisted flag. Disappears automatically once tracking
- * evidence exists (stage >= 2). Optionally dismissible via onDismiss.
+ * evidence exists.
  *
  * Shows:
  *   ✓ Tracker created
  *   ✓ Daily target set
  *   ○ Record your first activity
  *
- * Plus a hint line explaining what the target means (item 12).
+ * Plus a hint line explaining what the target means.
  */
 @Composable
 fun GettingStartedCard(
     onboarding: SmokingCalculator.OnboardingState,
     modifier: Modifier = Modifier,
-    onDismiss: (() -> Unit)? = null,
 ) {
     if (onboarding.hasTrackingEvidence) return
 
@@ -57,30 +63,14 @@ fun GettingStartedCard(
             border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "GETTING STARTED",
-                        style = TabakTypography.labelSmall.copy(
-                            fontWeight = FontWeight.Black,
-                            letterSpacing = 2.sp,
-                            color = TextPrimary
-                        )
+                Text(
+                    "GETTING STARTED",
+                    style = TabakTypography.labelSmall.copy(
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 2.sp,
+                        color = TextPrimary
                     )
-                    onDismiss?.let {
-                        IconButton(onClick = it, modifier = Modifier.size(40.dp)) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Dismiss",
-                                tint = TextMuted,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                }
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
 

@@ -63,7 +63,7 @@ fun TrackScreen(
     var lastLoggedTrackerId by remember { mutableStateOf<String?>(null) }
     var undoPillVisible by remember { mutableStateOf(false) }
 
-    // Derive onboarding state from real product state (item 27 — no schema change).
+    // Derive onboarding state from real product state.
     val onboardingState = SmokingCalculator.getFirstWeekGuidance(
         configs = configs,
         logs = logs,
@@ -71,8 +71,6 @@ fun TrackScreen(
         activeCounts = activeCounts,
         trackingDay = trackingDay
     )
-
-    var gettingStartedDismissed by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(undoPillVisible, lastLoggedTrackerId) {
         if (undoPillVisible) {
@@ -113,8 +111,6 @@ fun TrackScreen(
                 },
                 metrics = metrics,
                 onboarding = onboardingState,
-                onboardingDismissed = gettingStartedDismissed,
-                onDismissGettingStarted = { gettingStartedDismissed = true },
                 endingDay = endingDay,
                 onEndDayClick = { showEndDayConfirm = true },
                 bottomPadding = innerPadding.calculateBottomPadding(),
@@ -271,8 +267,6 @@ private fun TrackerGrid(
     onDecrement: (String) -> Unit,
     metrics: com.tabakpp.app.domain.SmokingCalculator.GlobalMetrics?,
     onboarding: com.tabakpp.app.domain.SmokingCalculator.OnboardingState?,
-    onboardingDismissed: Boolean,
-    onDismissGettingStarted: () -> Unit,
     endingDay: Boolean,
     onEndDayClick: () -> Unit,
     bottomPadding: androidx.compose.ui.unit.Dp,
@@ -308,12 +302,11 @@ private fun TrackerGrid(
         ) {
             // Getting Started card — state-driven, disappears once tracking evidence exists.
             onboarding?.let {
-                if (!it.hasTrackingEvidence && !onboardingDismissed) {
+                if (it.showGettingStarted) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
                         GettingStartedCard(
                             onboarding = it,
-                            modifier = Modifier.padding(top = 4.dp),
-                            onDismiss = onDismissGettingStarted
+                            modifier = Modifier.padding(top = 4.dp)
                         )
                     }
                 }

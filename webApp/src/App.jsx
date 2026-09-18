@@ -186,7 +186,6 @@ const AppContent = () => {
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
   const [showEndDayConfirm, setShowEndDayConfirm] = useState(false);
   const [protocolToDelete, setProtocolToDelete] = useState(null);
-  const [gettingStartedDismissed, setGettingStartedDismissed] = useState(false);
 
   // Tracking day in LOCAL time with the user's day-start hour (Android
   // parity) — recomputed live so a tab left open rolls over correctly.
@@ -382,11 +381,8 @@ const AppContent = () => {
                         <DashboardSkeleton widgetSize={settings.widgetSize} />
                       ) : (
                         <>
-                          {onboardingState && !onboardingState.hasTrackingEvidence && !gettingStartedDismissed && (
-                            <GettingStartedCard
-                              onboarding={onboardingState}
-                              onDismiss={() => setGettingStartedDismissed(true)}
-                            />
+                          {onboardingState?.showGettingStarted && (
+                            <GettingStartedCard onboarding={onboardingState} />
                           )}
                           {configs.length ? <div className={cn('transition-all duration-500 ease-out', gridClasses)}>
                             {[...configs].sort((a,b)=>a.order-b.order).map((c, i) => (
