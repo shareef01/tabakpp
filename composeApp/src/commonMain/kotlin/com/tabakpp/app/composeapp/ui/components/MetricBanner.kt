@@ -246,6 +246,10 @@ private fun MetricItem(
  * Uses domain-level GoalStatus (per-tracker worst state, not pooled) so the
  * UI contains no arithmetic. Color is semantic: accent (under), amber (at),
  * danger (over) — never relies on color alone to convey state.
+ *
+ * Aggregate wording uses tracker-count semantics (item 6): "N tracker(s) above
+ * target" rather than pooled deltas, since tracker types may be heterogeneous.
+ * "Within today's targets" covers both "all at" and "mixed at+under" states.
  */
 @Composable
 private fun GoalStatusItem(
@@ -263,13 +267,10 @@ private fun GoalStatusItem(
         else -> when (goalStatus.status) {
             "over" -> {
                 val n = goalStatus.overTrackers
-                if (n == 1) "1 above target" else "$n above target"
+                if (n == 1) "1 tracker above target" else "$n trackers above target"
             }
-            "at" -> "At target"
-            else -> {
-                val below = goalStatus.belowTarget.toInt()
-                if (below == 1) "1 below target" else "$below below target"
-            }
+            "at", "under" -> "Within today's targets"
+            else -> "No target set"
         }
     }
     MetricItem(
