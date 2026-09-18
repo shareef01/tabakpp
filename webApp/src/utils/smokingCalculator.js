@@ -821,19 +821,21 @@ export const SmokingCalculator = {
    * "Tracking evidence" = any persisted tracking record:
    * - activeCounts is non-empty (live current-day counts, including zero —
    *   PR #45: a zero-valued count is explicit tracking, not a default)
-   * - any day document exists (current or historical)
+   * - any day document exists (current or historical, even if counts are
+   *   empty after tracker deletion — the doc itself is evidence)
    * - any log entry exists
    */
-  getFirstWeekGuidance: (configs, logs, dayDocs, activeCounts, trackingDay) => {
+  getFirstWeekGuidance: (configs, logs, dayDocs, activeCounts, _trackingDay) => {
     const hasTracker = (configs || []).length > 0;
 
     // Presence semantics: a non-empty map IS tracking evidence (PR #45).
+    // Any persisted day document — even with empty counts after tracker
+    // deletion — proves the user already tracked that day.
     const hasActiveEvidence =
       activeCounts !== null && activeCounts !== undefined && Object.keys(activeCounts).length > 0;
-    const hasCurrentDayDoc = (dayDocs || []).some(d => d.date === trackingDay && Object.keys(d.counts || {}).length > 0);
-    const hasHistoricalDoc = (dayDocs || []).some(d => d.date !== trackingDay);
+    const hasDayDocEvidence = (dayDocs || []).length > 0;
     const hasLogEvidence = (logs || []).length > 0;
-    const hasTrackingEvidence = hasActiveEvidence || hasCurrentDayDoc || hasHistoricalDoc || hasLogEvidence;
+    const hasTrackingEvidence = hasActiveEvidence || hasDayDocEvidence || hasLogEvidence;
 
     return {
       hasTracker,
