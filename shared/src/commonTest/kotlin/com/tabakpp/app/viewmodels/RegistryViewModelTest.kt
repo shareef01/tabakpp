@@ -29,6 +29,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -131,8 +132,9 @@ private class FakeLocalSettings : LocalSettings {
     override fun putString(key: String, value: String) { map[key] = value }
 }
 
-private class FakeNetworkObserver : NetworkObserver {
-    override val isOnline: StateFlow<Boolean> = MutableStateFlow(true)
+private class FakeNetworkObserver(var online: Boolean = true) : NetworkObserver {
+    override val isOnline: StateFlow<Boolean> = MutableStateFlow(online)
+    fun goOffline() { online = false; (isOnline as MutableStateFlow).value = false }
 }
 
 // --- tests ----------------------------------------------------------------
@@ -152,15 +154,16 @@ class RegistryViewModelTest {
     private fun build(
         auth: FakeAuthRepository = FakeAuthRepository(user),
         reg: FakeRegistryRepository = FakeRegistryRepository(),
-    ): Pair<RegistryViewModel, FakeRegistryRepository> {
-        val vm = RegistryViewModel(auth, reg, FakeLocalSettings(), FakeNetworkObserver())
+        networkObserver: FakeNetworkObserver = FakeNetworkObserver(),
+    ): Triple<RegistryViewModel, FakeRegistryRepository, FakeNetworkObserver> {
+        val vm = RegistryViewModel(auth, reg, FakeLocalSettings(), networkObserver)
         scheduler.runCurrent() // let Eagerly authUser + init collectors settle (loop stays parked)
-        return vm to reg
+        return Triple(vm, reg, networkObserver)
     }
 
     @Test
     fun increment_withUser_incrementsByOne() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         vm.increment("cig")
         scheduler.runCurrent()
         assertEquals(1, reg.liveCounterCalls.size)
@@ -173,7 +176,7 @@ class RegistryViewModelTest {
 
     @Test
     fun increment_withoutUser_isNoop() {
-        val (vm, reg) = build(auth = FakeAuthRepository(null))
+        val (vm, reg, _) = build(auth = FakeAuthRepository(null))
         vm.increment("cig")
         scheduler.runCurrent()
         assertTrue(reg.liveCounterCalls.isEmpty())
@@ -181,7 +184,7 @@ class RegistryViewModelTest {
 
     @Test
     fun decrement_atZero_isNoop() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 0.0))
         scheduler.runCurrent()
         vm.decrement("cig")
@@ -191,7 +194,7 @@ class RegistryViewModelTest {
 
     @Test
     fun decrement_aboveZero_decrementsByOne() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 3.0))
         scheduler.runCurrent()
         vm.decrement("cig")
@@ -202,7 +205,7 @@ class RegistryViewModelTest {
 
     @Test
     fun endDay_togglesEndingDayAndCallsCloseDay() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         val gate = CompletableDeferred<Unit>()
         reg.closeDayGate = gate
 
@@ -220,7 +223,7 @@ class RegistryViewModelTest {
 
     @Test
     fun endDay_repositoryError_setsErrorAndResetsEndingDay() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.failWith = RuntimeException("boom")
         vm.endDay()
         scheduler.runCurrent()
@@ -230,7 +233,7 @@ class RegistryViewModelTest {
 
     @Test
     fun increment_repositoryError_setsError() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.failWith = RuntimeException("boom")
         vm.increment("cig")
         scheduler.runCurrent()
@@ -239,7 +242,7 @@ class RegistryViewModelTest {
 
     @Test
     fun addTracker_blankName_isNoop() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         vm.addTracker(TrackerConfig(id = "", name = "   ", limit = 5, order = 0))
         scheduler.runCurrent()
         assertTrue(reg.addConfigCalls.isEmpty())
@@ -247,7 +250,7 @@ class RegistryViewModelTest {
 
     @Test
     fun addTracker_validName_sanitizesAndAssignsNextOrder() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         bg.launch { vm.configs.collect {} } // subscribe so configs.value reflects the fake
         reg.configsFlow.value = listOf(
             TrackerConfig(id = "a", name = "A", limit = 10, order = 0),
@@ -267,7 +270,7 @@ class RegistryViewModelTest {
 
     @Test
     fun addTracker_coercesBaselineIntoBounds() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         vm.addTracker(TrackerConfig(id = "", name = "Cig", limit = 10, order = 0, baseline = 99_999))
         scheduler.runCurrent()
         assertEquals(10_000, reg.addConfigCalls.first().second.baseline)
@@ -275,7 +278,7 @@ class RegistryViewModelTest {
 
     @Test
     fun clearError_resetsError() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.failWith = RuntimeException("boom")
         vm.increment("cig")
         scheduler.runCurrent()
@@ -286,7 +289,7 @@ class RegistryViewModelTest {
 
     @Test
     fun increment_bumpsActiveCountsOptimisticallyBeforeWriteSettles() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent() // overlay follows the server: cig = 2
         reg.liveCounterGate = CompletableDeferred() // keep the write in flight
@@ -298,7 +301,7 @@ class RegistryViewModelTest {
 
     @Test
     fun increment_rollsBackOptimisticBumpOnFailure() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent()
         reg.failWith = RuntimeException("denied")
@@ -312,7 +315,7 @@ class RegistryViewModelTest {
 
     @Test
     fun serverSnapshot_whileWriteInFlight_mergesWithPendingDelta() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent()
         reg.liveCounterGate = CompletableDeferred()
@@ -334,7 +337,7 @@ class RegistryViewModelTest {
 
     @Test
     fun burstTaps_doNotSnapBackOnStaleServerSnapshot() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 2.0))
         scheduler.runCurrent()
         reg.liveCounterGate = CompletableDeferred()
@@ -356,7 +359,7 @@ class RegistryViewModelTest {
 
     @Test
     fun deleteTracker_passesCurrentTrackingDateForLiveCleanup() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         vm.deleteTracker("cig")
         scheduler.runCurrent()
         assertEquals(1, reg.deleteConfigCalls.size)
@@ -368,7 +371,7 @@ class RegistryViewModelTest {
 
     @Test
     fun updateAvatar_delegatesToRepository() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         vm.updateAvatar("data:new")
         scheduler.runCurrent()
         assertEquals(listOf<Pair<String, String?>>("u1" to "data:new"), reg.updateAvatarCalls)
@@ -376,7 +379,7 @@ class RegistryViewModelTest {
 
     @Test
     fun avatar_reflectsProfileExtraFlow_notTheProfileDocument() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.avatarFlow.value = ProfileExtra(avatar = "data:x")
         bg.launch { vm.avatar.collect {} }
         scheduler.runCurrent()
@@ -385,7 +388,7 @@ class RegistryViewModelTest {
 
     @Test
     fun updateDayRecord_delegatesToUpdateHistoricalDay() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         vm.updateDayRecord("2026-07-10", mapOf("cig" to 5.0))
         scheduler.runCurrent()
         assertEquals(1, reg.updateHistoricalDayCalls.size)
@@ -394,7 +397,7 @@ class RegistryViewModelTest {
 
     @Test
     fun updateProfile_chainsOffLastSubmitted_soRapidEditsDoNotClobber() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.profileFlow.value = UserProfile(name = "Alice", accent = "#FF5F5F")
         scheduler.runCurrent()
         reg.profileSettingsGate = CompletableDeferred()
@@ -421,7 +424,7 @@ class RegistryViewModelTest {
 
     @Test
     fun updateProfile_withNullProfile_isNoop() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         // profileFlow stays null — must not seed UserProfile() defaults
         vm.updateProfile { it.copy(accent = "#000000") }
         scheduler.runCurrent()
@@ -430,7 +433,7 @@ class RegistryViewModelTest {
 
     @Test
     fun scenarioA_snapshotArrivesBeforeMutationCompletes_doesNotDoubleCount() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
         scheduler.runCurrent()
         assertEquals(5.0, vm.activeCounts.value["cig"])
@@ -458,7 +461,7 @@ class RegistryViewModelTest {
 
     @Test
     fun scenarioB_mutationCompletesBeforeSnapshot_doesNotDownwardFlicker() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
         scheduler.runCurrent()
         assertEquals(5.0, vm.activeCounts.value["cig"])
@@ -484,7 +487,7 @@ class RegistryViewModelTest {
 
     @Test
     fun scenarioC_twoFastIncrementsBeforeAcknowledgement() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
         scheduler.runCurrent()
 
@@ -516,7 +519,7 @@ class RegistryViewModelTest {
 
     @Test
     fun scenarioD_overlappingIncrementAndDecrement() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
         scheduler.runCurrent()
 
@@ -538,7 +541,7 @@ class RegistryViewModelTest {
 
     @Test
     fun scenarioH_mutationFailureCleanlyRollsBack() {
-        val (vm, reg) = build()
+        val (vm, reg, _) = build()
         reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 5.0))
         scheduler.runCurrent()
 
@@ -549,5 +552,190 @@ class RegistryViewModelTest {
         // Rolled back to 5.0
         assertEquals(5.0, vm.activeCounts.value["cig"])
         assertNotNull(vm.error.value)
+    }
+
+    // --- item 30: transaction offline guard ---
+
+    @Test
+    fun increment_knownOffline_doesNotCreatePendingOpAndShowsOfflineError() {
+        val (vm, reg, net) = build()
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+
+        net.goOffline()
+        vm.increment("cig") // should be blocked
+        scheduler.runCurrent()
+
+        assertTrue(reg.liveCounterCalls.isEmpty())
+        assertNotNull(vm.error.value)
+        assertTrue(vm.error.value!!.contains("internet"))
+    }
+
+    @Test
+    fun decrement_knownOffline_doesNotMoveCountAndShowsOfflineError() {
+        val (vm, reg, net) = build()
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 5.0))
+        scheduler.runCurrent()
+
+        net.goOffline()
+        vm.decrement("cig")
+        scheduler.runCurrent()
+
+        assertTrue(reg.liveCounterCalls.isEmpty())
+        assertNotNull(vm.error.value)
+        assertTrue(vm.error.value!!.contains("internet"))
+    }
+
+    @Test
+    fun reportedOnline_transactionFailure_rollsBackOptimisticCountAndShowsRollbackError() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 5.0))
+        scheduler.runCurrent()
+
+        reg.failWith = RuntimeException("denied") // no matching mapper code → fallback
+        vm.increment("cig")
+        scheduler.runCurrent()
+
+        // Optimistic bump then rollback
+        assertEquals(5.0, vm.activeCounts.value["cig"])
+        assertNotNull(vm.error.value)
+        assertTrue(vm.error.value!!.contains("was restored"))
+    }
+
+    @Test
+    fun rapidOps_mixedSuccessFailure_successPreserved() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+
+        // op1: success
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1.0, vm.activeCounts.value["cig"])
+
+        // op2: failure
+        reg.failWith = RuntimeException("denied")
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1.0, vm.activeCounts.value["cig"]) // rolled back
+
+        // op3: success
+        reg.failWith = null
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(2.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun successfulIncrementalTransaction_noFalseErrorFromDelayedListener() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+        assertEquals(0.0, vm.activeCounts.value["cig"])
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        // Write succeeds; listener delay must not surface an error.
+        assertEquals(1.0, vm.activeCounts.value["cig"])
+        assertNull(vm.error.value)
+    }
+
+    // --- item 31: Undo failure handling ---
+
+    @Test
+    fun undoneIncrement_undoFails_countRemains() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+
+        // Increment succeeds
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1.0, vm.activeCounts.value["cig"])
+
+        // Undo = decrement; make it fail
+        reg.failWith = RuntimeException("denied") // no matching mapper code → fallback
+        vm.undoIncrement("cig")
+        scheduler.runCurrent()
+
+        // Original increment remains, error shown
+        assertEquals(1.0, vm.activeCounts.value["cig"])
+        assertNotNull(vm.error.value)
+        assertTrue(vm.error.value!!.contains("was restored"))
+    }
+
+    // --- item 32: end-day success/failure distinction ---
+
+    @Test
+    fun endDay_knownOffline_dialogStaysOpen_errorShown() {
+        val (vm, reg, net) = build()
+        val gate = CompletableDeferred<Unit>()
+        reg.closeDayGate = gate
+
+        net.goOffline()
+        vm.endDay()
+        scheduler.runCurrent()
+
+        // closeDay must NOT be called while offline
+        assertTrue(reg.closeDayCalls.isEmpty())
+        assertNotNull(vm.error.value)
+        assertTrue(vm.error.value!!.contains("internet"))
+        assertFalse(vm.endingDay.value) // never started
+    }
+
+    @Test
+    fun endDay_backendFailure_dialogStaysOpen_spinnerClears() {
+        val (vm, reg, net) = build()
+        val gate = CompletableDeferred<Unit>()
+        reg.closeDayGate = gate
+        reg.failWith = RuntimeException("boom")
+
+        vm.endDay()
+        scheduler.runCurrent()
+        assertTrue(vm.endingDay.value) // spinner showing
+
+        gate.complete(Unit)
+        scheduler.runCurrent()
+
+        assertFalse(vm.endingDay.value) // spinner cleared
+        assertNotNull(vm.error.value)
+        assertTrue(reg.closeDayCalls.isEmpty()) // repo threw, no call recorded
+    }
+
+    @Test
+    fun endDay_success_emitsSuccessAndCloses() {
+        val (vm, reg, _) = build()
+        val gate = CompletableDeferred<Unit>()
+        reg.closeDayGate = gate
+
+        vm.endDay()
+        scheduler.runCurrent()
+        assertTrue(vm.endingDay.value)
+
+        val results = mutableListOf<Boolean>()
+        bg.launch { vm.endDayResult.collect { results.add(it) } }
+        scheduler.runCurrent()
+
+        gate.complete(Unit)
+        scheduler.runCurrent()
+
+        assertFalse(vm.endingDay.value)
+        assertEquals(1, reg.closeDayCalls.size)
+        assertTrue(results.any { it }) // emitted true (success)
+    }
+
+    // --- item 33: plain-write behavior (add tracker does NOT require online) ---
+
+    @Test
+    fun addTracker_knownOffline_isAllowedAsLocalPendingWrite() {
+        val (vm, reg, net) = build()
+        net.goOffline()
+
+        vm.addTracker(TrackerConfig(id = "", name = "Cigarettes", limit = 10, order = 0))
+        scheduler.runCurrent()
+
+        assertEquals(1, reg.addConfigCalls.size)
+        // No error because plain writes are queued locally
+        assertNull(vm.error.value)
     }
 }

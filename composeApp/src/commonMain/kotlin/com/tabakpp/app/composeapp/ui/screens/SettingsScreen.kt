@@ -73,6 +73,7 @@ fun SettingsScreen(
     val configToEdit = configs.firstOrNull { it.id == configToEditId }
     val configToDelete = configs.firstOrNull { it.id == configToDeleteId }
     var showAddTrackerSheet by rememberSaveable { mutableStateOf(false) }
+    var savingTracker by remember { mutableStateOf(false) }
     var showLogoutConfirm by rememberSaveable { mutableStateOf(false) }
     var showDeleteAccount by rememberSaveable { mutableStateOf(false) }
     var showPrivacyNotice by rememberSaveable { mutableStateOf(false) }
@@ -512,33 +513,37 @@ fun SettingsScreen(
 
     if (configToEdit != null) {
         ModalBottomSheet(
-            onDismissRequest = { configToEditId = null },
+            onDismissRequest = { if (!savingTracker) configToEditId = null },
             containerColor = Color(0xFF0F0F12)
         ) {
             TrackerForm(
                 initialConfig = configToEdit,
                 accentColor = accentColor,
                 onSave = { 
+                    savingTracker = true
                     viewModel.updateTracker(it)
                     configToEditId = null
                 },
-                onDismiss = { configToEditId = null }
+                onDismiss = { configToEditId = null },
+                saving = savingTracker
             )
         }
     }
 
     if (showAddTrackerSheet) {
         ModalBottomSheet(
-            onDismissRequest = { showAddTrackerSheet = false },
+            onDismissRequest = { if (!savingTracker) showAddTrackerSheet = false },
             containerColor = Color(0xFF0F0F12)
         ) {
             TrackerForm(
                 accentColor = accentColor,
                 onSave = { config ->
+                    savingTracker = true
                     viewModel.addTracker(config)
                     showAddTrackerSheet = false
                 },
-                onDismiss = { showAddTrackerSheet = false }
+                onDismiss = { if (!savingTracker) showAddTrackerSheet = false },
+                saving = savingTracker
             )
         }
     }

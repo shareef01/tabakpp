@@ -89,7 +89,7 @@ const OfflineBanner = ({ isOffline }) => (
       >
         <div className="flex items-center justify-center py-2 gap-3 text-amber-500">
           <AlertCircle size={14} strokeWidth={3} />
-          <span className="text-[12px] font-black uppercase tracking-[0.2em]">You're offline — changes may fail until you're back online</span>
+          <span className="text-[12px] font-black uppercase tracking-[0.2em]">Offline — live tracking requires a connection</span>
         </div>
       </motion.div>
     )}
@@ -201,10 +201,10 @@ const AppContent = () => {
 
   const {
     configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings,
-    avatar, registryError, clearRegistryError,
+    avatar, registryError, clearRegistryError, configsHasPendingWrites,
     increment, decrement, endDay, reorder, addProtocol, updateProtocol, deleteProtocol,
     createManualEntry, deleteLog, restoreLog, updateHistoricalLog, updateHistoricalDay, updateAvatar
-  } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, avatar: null };
+  } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, avatar: null, configsHasPendingWrites: false };
 
   // Derive onboarding state from real product state (item 27 — no schema change).
   const onboardingState = SmokingCalculator.getFirstWeekGuidance(
@@ -394,6 +394,7 @@ const AppContent = () => {
                                 onDec={handleDecrement}
                                 index={i}
                                 globalSize={settings.widgetSize}
+                                isPending={configsHasPendingWrites}
                               />
                             ))}
                           </div> : (
@@ -503,9 +504,9 @@ const AppContent = () => {
               isOpen={showEndDayConfirm}
               onClose={() => setShowEndDayConfirm(false)}
               onConfirm={async () => {
-                setShowEndDayConfirm(false);
                 try {
                   await endDay();
+                  setShowEndDayConfirm(false);
                 } catch { /* registryError set in hook */ }
               }}
               title="Close tracking day?"

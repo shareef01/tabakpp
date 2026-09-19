@@ -54,10 +54,12 @@ fun TrackScreen(
     val trackingDay by viewModel.trackingDay.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val endingDay by viewModel.endingDay.collectAsStateWithLifecycle()
+    val endDayResult = viewModel.endDayResult
 
     val accentColor = LocalAccentColor.current
     val reducedMotion = LocalReducedMotion.current
     var showAddTrackerSheet by rememberSaveable { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
     var showEndDayConfirm by rememberSaveable { mutableStateOf(false) }
 
     var lastLoggedTrackerId by remember { mutableStateOf<String?>(null) }
@@ -170,10 +172,16 @@ fun TrackScreen(
             TrackerForm(
                 accentColor = accentColor,
                 onSave = { config ->
+                    saving = true
                     viewModel.addTracker(config)
+                    // Close the sheet immediately — the local listener will pick up
+                    // the new config (plain write, visible at LOCAL_PENDING).
+                    // If the write is rejected, the listener removes it and the error
+                    // surfaces via Snackbar. This avoids hanging while offline (item 35).
                     showAddTrackerSheet = false
                 },
-                onDismiss = { showAddTrackerSheet = false }
+                onDismiss = { showAddTrackerSheet = false },
+                saving = saving
             )
         }
     }
@@ -190,10 +198,15 @@ fun TrackScreen(
         )
     }
 
-    // Close the dialog once the archive operation finishes
-    LaunchedEffect(endingDay) {
-        if (!endingDay) {
-            showEndDayConfirm = false
+    // Close the dialog only on success — on failure it must stay open
+    // so the user can retry (item 13). Previously, endingDay == false fired
+    // on both success and failure, so the dialog always closed.
+    LaunchedEffect(Unit) {
+        endDayResult.collect { success ->
+            if (success) {
+                showEndDayConfirm = false
+            }
+            // On failure, dialog stays open; error is already surfaced via Snackbar.
         }
     }
 }
