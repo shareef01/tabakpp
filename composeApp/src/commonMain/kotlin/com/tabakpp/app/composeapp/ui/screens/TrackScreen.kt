@@ -59,6 +59,7 @@ fun TrackScreen(
     val accentColor = LocalAccentColor.current
     val reducedMotion = LocalReducedMotion.current
     var showAddTrackerSheet by rememberSaveable { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
     var showEndDayConfirm by rememberSaveable { mutableStateOf(false) }
 
     var lastLoggedTrackerId by remember { mutableStateOf<String?>(null) }
@@ -171,6 +172,7 @@ fun TrackScreen(
             TrackerForm(
                 accentColor = accentColor,
                 onSave = { config ->
+                    saving = true
                     viewModel.addTracker(config)
                     // Close the sheet immediately — the local listener will pick up
                     // the new config (plain write, visible at LOCAL_PENDING).
@@ -178,7 +180,8 @@ fun TrackScreen(
                     // surfaces via Snackbar. This avoids hanging while offline (item 35).
                     showAddTrackerSheet = false
                 },
-                onDismiss = { showAddTrackerSheet = false }
+                onDismiss = { showAddTrackerSheet = false },
+                saving = saving
             )
         }
     }

@@ -36,7 +36,8 @@ fun TrackerForm(
     initialConfig: TrackerConfig? = null,
     accentColor: Color,
     onSave: (TrackerConfig) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    saving: Boolean = false
 ) {
     var name by rememberSaveable(initialConfig?.id) { mutableStateOf(initialConfig?.name ?: "") }
     var limit by rememberSaveable(initialConfig?.id) { mutableStateOf(initialConfig?.limit?.toString() ?: "20") }
@@ -243,10 +244,10 @@ fun TrackerForm(
             modifier = Modifier.fillMaxWidth().height(60.dp).tabakPressScale().border(1.dp, accentColor.copy(alpha = 0.4f), MaterialTheme.shapes.small),
             shape = MaterialTheme.shapes.small,
             colors = ButtonDefaults.buttonColors(containerColor = accentColor.copy(alpha = 0.12f), contentColor = accentColor),
-            enabled = InputSanitizer.trackerName(name).isNotBlank()
+            enabled = !saving && InputSanitizer.trackerName(name).isNotBlank()
         ) {
             Text(
-                if (initialConfig == null) "SAVE COUNTER" else "UPDATE COUNTER",
+                if (saving) "Saving…" else if (initialConfig == null) "SAVE COUNTER" else "UPDATE COUNTER",
                 style = TabakTypography.labelMedium.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp)
             )
         }
