@@ -8,9 +8,10 @@ import org.koin.android.ext.koin.androidContext
 class TabakApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        // Both build types use DebugAppCheckProviderFactory (register the device
-        // token in Console → App Check), so App Check is left unenforced.
-        // See SETUP_GUIDE.md → "Why App Check is not enforced".
+        // App Check provider selection is build-variant-aware via source sets:
+        //   debug   → src/debug/.../AppCheckInstaller.kt → DebugAppCheckProviderFactory
+        //   release → src/release/.../AppCheckInstaller.kt → PlayIntegrityAppCheckProviderFactory
+        // Enforcement remains off in Firebase Console; see SETUP_GUIDE.md → "Why App Check is not enforced".
         FirebaseApp.initializeApp(this)
         AppCheckInstaller.install()
         initKoin {
