@@ -187,8 +187,8 @@ Enforcing becomes the right call once Android can attest for real — that means
 Full Firebase, signing, and App Check notes: **[SETUP_GUIDE.md](SETUP_GUIDE.md)**
 
 ```bash
-# Web
-cd webApp && npm install && npm run dev
+# Web — use Node 22 (see .nvmrc) and npm 10.9.8 (declared in package.json)
+cd webApp && npm ci && npm run dev
 
 # Android — open in Android Studio, add google-services.json, run androidApp
 # Or install a signed APK from GitHub Releases (tag v*)

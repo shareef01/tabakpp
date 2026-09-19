@@ -78,9 +78,15 @@ jobs:
           java-version: "21"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
+          node-version: "22.23.2"
           cache: npm
           cache-dependency-path: webApp/package-lock.json
+      - name: Pin npm to canonical version
+        run: npm install -g npm@10.9.8
+      - name: Verify toolchain versions
+        run: |
+          node --version
+          npm --version
       - name: Install locked dependencies
         working-directory: webApp
         run: npm ci
