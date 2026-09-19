@@ -113,12 +113,12 @@ firebase apps:sdkconfig ANDROID <ANDROID_APP_ID> --project tabakpp-ff036 -o andr
 
 ### Web App Check (recommended on Spark)
 1. In Firebase Console → App Check, register the web app with **reCAPTCHA Enterprise**.
-   The web application uses `ReCaptchaEnterpriseProvider`.
+   The web application uses `ReCaptchaEnterpriseProvider` (`webApp/src/firebase.js`).
 2. Add to `webApp/.env.local`:
    ```
    VITE_FIREBASE_APPCHECK_SITE_KEY=your_recaptcha_enterprise_site_key
    ```
-3. For local dev, either register a debug token (`VITE_FIREBASE_APPCHECK_DEBUG_TOKEN=...`) or leave unset — App Check only initializes when the site key is present. Never save tokens in repository log files.
+3. For local dev, either register a debug token (`VITE_FIREBASE_APPCHECK_DEBUG_TOKEN=...`) or leave unset — App Check only initializes when the site key is present. In `DEV` mode, `FIREBASE_APPCHECK_DEBUG_TOKEN` is set to `true` (auto-register). In `PROD` mode, if the site key is missing, an error is logged and App Check stays disabled (graceful failure — no crash). Never save tokens in repository log files.
 4. Console → App Check → APIs — leave **Cloud Firestore** and **Firebase
    Authentication** on **Unenforce**. Read why below before changing it.
 
@@ -139,16 +139,18 @@ before that. The reason is a hard conflict with how Android ships:
   Firestore to Enforced rejects unattested requests from *every* client. There
   is no way to enforce for web only, and Android needs both Firestore and
   Authentication to function.
-- **Android cannot attest per-install.** Release APKs use
-  `DebugAppCheckProviderFactory`, which mints a random secret per install that
-  must be pasted into Console → App Check → Manage debug tokens by hand.
+- **Release APKs cannot attest via Play Integrity without a Play Console link.**
+  `androidApp/src/release/AppCheckInstaller.kt` now uses
+  `PlayIntegrityAppCheckProviderFactory`, but Play Integrity requires a Play
+  Console app entry linked to the Firebase Cloud project (see upgrade path
+  below). This app ships via GitHub Releases only — there is no Play Console
+  entry, so release APKs cannot produce verifiable Play Integrity tokens.
 
 With enforcement on, that combination meant **anyone who downloaded the APK
-from Releases could not sign in** — their token was not on the allow list and
-they had no way to add it. It also meant a reinstall (or clearing app data)
-regenerated the token and silently broke sign-in on the maintainer's own device.
-A download that cannot work is worse than an unattested one, so enforcement is
-off.
+from Releases could not sign in** — Play Integrity had no app entry to verify
+against. Debug builds still use `DebugAppCheckProviderFactory`, which mints a
+random secret per install that must be pasted into Console → App Check →
+Manage debug tokens by hand (for local development only).
 
 What carries the load instead:
 
@@ -157,14 +159,16 @@ What carries the load instead:
   referrer on web, constraining which applications and domains Google APIs will accept requests from.
 
 App Check still initializes on both clients, so tokens flow and the metrics in
-Console stay meaningful. Turning enforcement back on is a one-line API call —
-but only makes sense **after** Android can attest for real.
+Console stay meaningful. The release source set now requests Play Integrity
+tokens (which will fail gracefully without a Play Console link). Turning
+enforcement back on requires completing the Play Console setup below and
+verifying release clients report verified in App Check metrics first.
 
 **That means Play Integrity** (below), which attests without a per-device allow
-list. Do that first, verify release installs report verified in App Check
-metrics, then enforce.
+list once the Play Console link exists. Do that first, verify release installs
+report verified in App Check metrics, then enforce.
 
-**Upgrade path (if this ever ships properly).** Contrary to a common
+**Upgrade path.** Contrary to a common
 misconception, Play Integrity *does* support apps distributed outside Google
 Play — the blocker is configuration, not the distribution channel. To switch:
 
@@ -176,15 +180,13 @@ Play — the blocker is configuration, not the distribution channel. To switch:
    set **PLAY_RECOGNIZED** to not required, **LICENSED** to not required, and
    minimum device integrity to **Device integrity**. Non-Play apps can never
    receive `PLAY_RECOGNIZED`, which is why the default config fails for sideloads.
-4. Swap `DebugAppCheckProviderFactory` for `PlayIntegrityAppCheckProviderFactory`
-   in `androidApp/src/release/.../AppCheckInstaller.kt` and add the
-   `firebase-appcheck-playintegrity` dependency.
+4. ✅ **DONE** — `androidApp/src/release/.../AppCheckInstaller.kt` now uses
+   `PlayIntegrityAppCheckProviderFactory` and the `firebase-appcheck-playintegrity`
+   dependency is declared. Source-set separation (src/debug vs src/release) is
+   the structural guarantee: debug builds still use `DebugAppCheckProviderFactory`.
 5. Watch App Check metrics until release clients report verified, *then* enforce.
 
-### Android App Check (current: debug provider)
-Both debug and release builds use **DebugAppCheckProviderFactory**
-(`AppCheckInstaller`). With enforcement off this is effectively inert, so the
-setup below is only worth doing if you want App Check metrics.
+### Android App Check (current: Play Integrity in release, debug in dev)
 
 1. Add your release and debug **SHA-1 / SHA-256** under Project settings → Your
    apps → Android (also add the release SHA-1 to the Android API key
