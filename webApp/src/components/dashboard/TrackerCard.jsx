@@ -1,6 +1,6 @@
 import React, { useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Minus } from 'lucide-react';
+import { Plus, Minus, Loader2 } from 'lucide-react';
 import { cn } from '../../utils/utils';
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { CigaretteGauge } from '../gauges/Gauges';
@@ -52,7 +52,7 @@ const TONE = {
  * and assistive-tech activation (Switch Access, screen readers dispatch a
  * synthetic `click`) working exactly as before, with less code.
  */
-export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index, globalSize = 'MEDIUM' }) => {
+export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index, globalSize = 'MEDIUM', isPending = false }) => {
   const limit = Math.max(0, config?.limit ?? 1);
   const baseline = config?.baseline;
   const { status, aboveTarget, belowTarget } = SmokingCalculator.getLimitStatus(count, limit);
@@ -89,9 +89,14 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
           <span className="text-[11px] md:text-xs font-black uppercase tracking-[0.16em] text-white/85 truncate">
             {config?.name || 'Tracker'}
           </span>
-          <span className="shrink-0 text-[10px] md:text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 px-2 py-0.5 rounded bg-white/[0.04] border border-white/[0.06]">
-            {limit}/day
-          </span>
+          <div className="shrink-0 flex items-center gap-1">
+            {isPending && (
+              <Loader2 size={12} className="animate-spin text-accent" strokeWidth={2.5} aria-label="Syncing…" />
+            )}
+            <span className="text-[10px] md:text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 px-2 py-0.5 rounded bg-white/[0.04] border border-white/[0.06]">
+              {limit}/day
+            </span>
+          </div>
         </div>
 
         <div className="w-full flex justify-center">

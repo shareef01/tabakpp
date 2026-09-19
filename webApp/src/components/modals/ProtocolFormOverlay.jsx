@@ -88,7 +88,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        onClick={onClose}
+        onClick={() => { if (!saving) onClose(); }}
         className="absolute inset-0 bg-black/90 backdrop-blur-2xl"
       />
 
@@ -109,7 +109,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
             <h3 className={UI.LABEL}>Registry</h3>
             <span className="text-2xl font-black tracking-tighter uppercase text-white block leading-none">{title}</span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close counter form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-400 hover:text-white transition-all">
+          <button type="button" onClick={() => { if (!saving) onClose(); }} aria-label="Close counter form" className={`w-12 h-12 rounded-2xl flex items-center justify-center text-neutral-400 hover:text-white transition-all ${saving ? 'opacity-50 pointer-events-none' : ''}`}>
             <X size={20} strokeWidth={3} />
           </button>
         </div>

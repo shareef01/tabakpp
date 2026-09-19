@@ -41,6 +41,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
   const [loading, setLoading] = useState(!!user);
   const [isEndingDay, setIsEndingDay] = useState(false);
   const [registryError, setRegistryError] = useState(null);
+  const [configsHasPendingWrites, setConfigsHasPendingWrites] = useState(false);
   /**
    * IN-FLIGHT MUTATION LEDGER (H-01 fix)
    * Tracks pending mutations with explicit date and tracker association.
@@ -104,6 +105,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       setLifetimeAggregates(cleared.lifetimeAggregates);
       setProfileSettings(cleared.profileSettings);
       setAvatar(cleared.avatar);
+      setConfigsHasPendingWrites(false);
       pendingOpsRef.current = [];
       latestServerCountsRef.current = {};
       setLoading(false);
@@ -119,6 +121,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     setLifetimeAggregates(null);
     setProfileSettings(null);
     setAvatar(null);
+    setConfigsHasPendingWrites(false);
     setLoading(true);
     setRegistryError(null);
     latestServerCountsRef.current = {};
@@ -197,10 +200,11 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       onListenerError
     );
 
-    const unsubConfigs = RegistryService.subscribeToConfigs(user.uid, (data) => {
+    const unsubConfigs = RegistryService.subscribeToConfigs(user.uid, (data, metadata) => {
       setConfigs(data);
       setLoading(false);
       setRegistryError(null);
+      setConfigsHasPendingWrites(metadata ? metadata.hasPendingWrites : false);
     }, onListenerError);
 
     const unsubLogs = RegistryService.subscribeToLogs(user.uid, (data) => {
@@ -358,8 +362,20 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     }
   }, []);
 
+  const requireOnline = useCallback((_actionName) => {
+    if (!isOnlineRef.current) {
+      const err = new Error('Connect to the internet to update this count.');
+      err.code = 'offline';
+      setRegistryError('Connect to the internet to update this count.');
+      throw err;
+    }
+  }, []);
+  const isOnlineRef = useRef(isOnline);
+  isOnlineRef.current = isOnline;
+
   const increment = useCallback(async (id) => {
     if (!user) return;
+    requireOnline('increment');
     const trackingDate = todayRef.current;
     const currentServer = latestServerCountsRef.current[id] || 0;
     let expectedBase = currentServer;
@@ -390,12 +406,14 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     } catch (e) {
       pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.id !== op.id);
       publishCounterOverlay();
+      setRegistryError('Could not save that change. Your count was restored.');
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError]);
 
   const decrement = useCallback(async (id) => {
     if (!user || (activeCountsRef.current[id] || 0) <= 0) return;
+    requireOnline('decrement');
     const trackingDate = todayRef.current;
     const currentServer = latestServerCountsRef.current[id] || 0;
     let expectedBase = currentServer;
@@ -426,9 +444,10 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     } catch (e) {
       pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.id !== op.id);
       publishCounterOverlay();
+      setRegistryError('Could not save that change. Your count was restored.');
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError]);
 
   /**
    * "Close day" — a UX affordance only (see registryService.closeDay). It
@@ -437,6 +456,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
    */
   const endDay = useCallback(async () => {
     if (!user || isEndingDayRef.current) return;
+    requireOnline('endDay');
     setIsEndingDay(true);
     try {
       await runMutation(
@@ -446,50 +466,56 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
     } finally {
       setIsEndingDay(false);
     }
-  }, [user?.uid, today, runMutation]);
+  }, [user?.uid, today, runMutation, requireOnline]);
 
   const updateHistoricalLog = useCallback(async (logId, counts) => {
     if (!user) return;
+    requireOnline('updateHistoricalLog');
     return runMutation(
       () => RegistryService.updateHistoricalLog(user.uid, logId, counts, effectiveUnitPrice),
       'Could not update history.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline]);
 
   const updateHistoricalDay = useCallback(async (date, counts) => {
     if (!user) return;
+    requireOnline('updateHistoricalDay');
     return runMutation(
       () => RegistryService.updateHistoricalDay(user.uid, date, counts),
       'Could not update history.'
     );
-  }, [user?.uid, runMutation]);
+  }, [user?.uid, runMutation, requireOnline]);
 
   const deleteLog = useCallback(async (logId) => {
     if (!user) return;
+    requireOnline('deleteLog');
     return runMutation(
       () => RegistryService.deleteLog(user.uid, logId, effectiveUnitPrice),
       'Could not delete entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline]);
 
   const restoreLog = useCallback(async (log) => {
     if (!user) return;
+    requireOnline('restoreLog');
     return runMutation(
       () => RegistryService.restoreLog(user.uid, log, effectiveUnitPrice),
       'Could not restore entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline]);
 
   const createManualEntry = useCallback(async (date, counts) => {
     if (!user) return;
+    requireOnline('createManualEntry');
     return runMutation(
       () => RegistryService.createManualEntry(user.uid, date, counts, effectiveUnitPrice, today),
       'Could not create entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, today, runMutation]);
+  }, [user?.uid, effectiveUnitPrice, today, runMutation, requireOnline]);
 
   const reorder = useCallback(async (id, dir) => {
     if (!user) return;
+    requireOnline('reorder');
     const idx = configs.findIndex(x => x.id === id);
     const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
     if (targetIdx < 0 || targetIdx >= configs.length) return;
@@ -497,7 +523,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
       () => RegistryService.reorderConfigs(user.uid, configs[idx], configs[targetIdx]),
       'Could not reorder trackers.'
     );
-  }, [user?.uid, configs, runMutation]);
+  }, [user?.uid, configs, runMutation, requireOnline]);
 
   const addProtocol = useCallback(async (data) => {
     if (!user) return;
@@ -517,11 +543,12 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
 
   const deleteProtocol = useCallback(async (id) => {
     if (!user) return;
+    requireOnline('deleteProtocol');
     return runMutation(
       () => RegistryService.deleteProtocol(user.uid, id, todayRef.current),
       'Could not delete tracker.'
     );
-  }, [user?.uid, runMutation]);
+  }, [user?.uid, runMutation, requireOnline]);
 
   const updateAvatar = useCallback(async (nextAvatar) => {
     if (!user) return;
@@ -533,7 +560,7 @@ export const useRegistry = (user, today, unitPrice = 0.5) => {
 
   return {
     configs, logs, dayDocs, metrics, loading, isEndingDay, isOnline, profileSettings,
-    avatar: avatarValue, registryError,
+    avatar: avatarValue, registryError, configsHasPendingWrites,
     clearRegistryError: () => setRegistryError(null),
     increment, decrement, endDay, updateHistoricalLog, updateHistoricalDay, deleteLog, restoreLog,
     createManualEntry, reorder, addProtocol, updateProtocol, deleteProtocol, updateAvatar
