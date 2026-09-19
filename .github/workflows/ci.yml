@@ -90,6 +90,8 @@ jobs:
       - name: Install locked dependencies
         working-directory: webApp
         run: npm ci
+      - name: Validate lockfile integrity
+        run: python3 .github/scripts/validate-lockfile.py
       - name: Lint, test, and build
         working-directory: webApp
         run: npm run lint && npm run audit:prod && npm run coverage && npm run build

@@ -9,7 +9,7 @@ This document contains instructions to set up the **T++** project on a new devel
 - **Node.js** — LTS 22 (use the version in `.nvmrc`, currently `22.23.2`; run `nvm use` or `fnm use` to load it)
 - **npm** — `npm@10.9.8` (declared via `packageManager` in `webApp/package.json`; Corepack or `npm install -g npm@10.9.8` will select it automatically)
 
-> The Web lockfile (`webApp/package-lock.json`) is generated with npm 10.9.8. New npm majors (e.g. npm 11) can emit dependency-tree metadata that the audit endpoint rejects with HTTP 400. Always use the canonical npm version when regenerating the lockfile.
+> The Web lockfile (`webApp/package-lock.json`) is generated with npm 10.9.8. npm 11.11.0+ on Linux writes `libc` metadata for platform-specific optional dependencies (e.g. `@rollup/rollup-linux-*`) that the npm audit endpoint has rejected with HTTP 400. Always use the canonical npm version when regenerating the lockfile.
 
 ## 2. Clone the Repository
 Run the following command in your terminal:
