@@ -504,9 +504,9 @@ const AppContent = () => {
               isOpen={showEndDayConfirm}
               onClose={() => setShowEndDayConfirm(false)}
               onConfirm={async () => {
-                setShowEndDayConfirm(false);
                 try {
                   await endDay();
+                  setShowEndDayConfirm(false);
                 } catch { /* registryError set in hook */ }
               }}
               title="Close tracking day?"
