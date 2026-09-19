@@ -143,8 +143,8 @@ export const RegistryService = {
       collection(db, 'users', uid, 'configs'),
       orderBy('order', 'asc')
     );
-    return onSnapshot(q, (s) => {
-      onSuccess(s.docs.map(withDocId));
+    return onSnapshot(q, { includeMetadataChanges: true }, (s) => {
+      onSuccess(s.docs.map(withDocId), s.metadata);
     }, onError);
   },
 

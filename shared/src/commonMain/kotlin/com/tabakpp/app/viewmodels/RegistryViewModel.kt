@@ -86,6 +86,14 @@ class RegistryViewModel(
     private val _endingDay = MutableStateFlow(false)
     val endingDay = _endingDay.asStateFlow()
 
+    /**
+     * End-day outcome — emitted after [endDay] completes so the UI can distinguish
+     * success from failure and close/retain the confirmation dialog accordingly.
+     * Null when no end-day operation is in progress.
+     */
+    private val _endDayResult = MutableSharedFlow<Boolean>()
+    val endDayResult = _endDayResult.asSharedFlow()
+
     // IN-FLIGHT MUTATION LEDGER (H-01 fix: parity with Web useRegistry.js)
     // Tracks in-flight mutations explicitly by trackingDate and trackerId.
     // Authoritative baseline is exclusively from realtime Firestore listener snapshots.
@@ -346,6 +354,10 @@ class RegistryViewModel(
 
     fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
         val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to update this count.")
+            return
+        }
         val trackingDate = trackingDay.value
         val price = userProfile.value?.unitPrice ?: 0.5
         val currentServer = latestServerCounts[trackerId] ?: 0.0
@@ -377,7 +389,7 @@ class RegistryViewModel(
             } catch (e: Exception) {
                 pendingOps.removeAll { it.id == op.id }
                 publishCounterOverlay()
-                setError(e, "Could not update the counter. Try again.")
+                setError(e, "Could not save that change. Your count was restored.")
             }
         }
     }
@@ -389,6 +401,10 @@ class RegistryViewModel(
     fun decrement(trackerId: String) {
         val uid = authUser.value?.uid ?: return
         if ((_activeCounts.value[trackerId] ?: 0.0) <= 0.0) return // Prevent negative counts
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to update this count.")
+            return
+        }
         val trackingDate = trackingDay.value
         val price = userProfile.value?.unitPrice ?: 0.5
         val currentServer = latestServerCounts[trackerId] ?: 0.0
@@ -419,7 +435,7 @@ class RegistryViewModel(
             } catch (e: Exception) {
                 pendingOps.removeAll { it.id == op.id }
                 publishCounterOverlay()
-                setError(e, "Could not update the counter. Try again.")
+                setError(e, "Could not save that change. Your count was restored.")
             }
         }
     }
@@ -433,12 +449,19 @@ class RegistryViewModel(
     fun endDay() {
         val uid = authUser.value?.uid ?: return
         val td = trackingDay.value
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to end the tracking day.")
+            viewModelScope.launch { _endDayResult.emit(false) }
+            return
+        }
         viewModelScope.launch {
             _endingDay.value = true
             try {
                 registryRepository.closeDay(uid, td)
+                _endDayResult.emit(true)
             } catch (e: Exception) {
                 setError(e, "Could not close the tracking day. Try again.")
+                _endDayResult.emit(false)
             } finally {
                 _endingDay.value = false
             }
@@ -447,6 +470,10 @@ class RegistryViewModel(
 
     fun createManualEntry(date: String, counts: Map<String, Double>) {
         val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to save this entry.")
+            return
+        }
         // Backfill cannot run forward. Firestore rules only check the YYYY-MM-DD
         // pattern, so this is the last enforcement point before the write (the
         // web guards in RegistryService.createManualEntry for the same reason).
@@ -465,6 +492,10 @@ class RegistryViewModel(
 
     fun deleteLog(log: LogEntry, onSuccess: () -> Unit = {}) {
         val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to delete this entry.")
+            return
+        }
         viewModelScope.launch {
             try {
                 registryRepository.deleteLog(uid, log.id)
@@ -477,6 +508,10 @@ class RegistryViewModel(
 
     fun restoreLog(log: LogEntry) {
         val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to restore this entry.")
+            return
+        }
         viewModelScope.launch {
             try {
                 registryRepository.restoreLog(uid, log)
@@ -527,6 +562,10 @@ class RegistryViewModel(
 
     fun deleteTracker(configId: String) {
         val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to delete this tracker.")
+            return
+        }
         val trackingDate = trackingDay.value
         viewModelScope.launch {
             try {
@@ -552,6 +591,10 @@ class RegistryViewModel(
 
     private fun reorderTracker(configId1: String, order1: Int, configId2: String, order2: Int) {
         val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to reorder trackers.")
+            return
+        }
         viewModelScope.launch {
             try {
                 registryRepository.reorderConfigs(uid, configId1, order1, configId2, order2)
@@ -563,6 +606,10 @@ class RegistryViewModel(
 
     fun updateLog(logId: String, counts: Map<String, Double>) {
         val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to save this change.")
+            return
+        }
         viewModelScope.launch {
             try {
                 registryRepository.updateHistoricalLog(uid, logId, counts)
@@ -575,6 +622,10 @@ class RegistryViewModel(
     /** Edit a closed `days/{date}` record — the dated-model equivalent of [updateLog]. */
     fun updateDayRecord(date: String, counts: Map<String, Double>) {
         val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to save this change.")
+            return
+        }
         viewModelScope.launch {
             try {
                 registryRepository.updateHistoricalDay(uid, date, counts)
