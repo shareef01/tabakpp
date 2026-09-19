@@ -130,13 +130,12 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 
 dependencies {
     implementation(platform(libs.firebase.bom))
-    // Debug provider in both build types; App Check stays unenforced as a result.
-    // Switching to Play Integrity needs a Play Console link, not a code change
-    // alone — SETUP_GUIDE.md → "Why App Check is not enforced".
     implementation(libs.firebase.appcheck.debug)
+    implementation(libs.firebase.appcheck.playintegrity)
     implementation(project(":composeApp"))
     implementation(project(":shared"))
     implementation(libs.androidx.activity.compose)
     implementation(libs.koin.android)
     implementation(libs.androidx.core.splashscreen)
+    testImplementation(kotlin("test"))
 }
