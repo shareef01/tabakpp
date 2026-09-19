@@ -7,9 +7,14 @@ This document contains instructions to set up the **T++** project on a new devel
 - **JDK 17** or higher
 - **Xcode** (only for experimental iOS work; no reproducible host project is committed yet)
 - **Node.js** — LTS 22 (use the version in `.nvmrc`, currently `22.23.2`; run `nvm use` or `fnm use` to load it)
-- **npm** — `npm@10.9.8` (declared via `packageManager` in `webApp/package.json`; Corepack or `npm install -g npm@10.9.8` will select it automatically)
+- **npm** — `npm@10.9.8`. The `packageManager` field in `webApp/package.json` declares this version (Corepack can use it automatically if enabled via `corepack enable`). Without Corepack, install it globally: `npm install -g npm@10.9.8`.
 
 > The Web lockfile (`webApp/package-lock.json`) is generated with npm 10.9.8. npm 11.11.0+ on Linux writes `libc` metadata for platform-specific optional dependencies (e.g. `@rollup/rollup-linux-*`) that the npm audit endpoint has rejected with HTTP 400. Always use the canonical npm version when regenerating the lockfile.
+
+To intentionally update dependencies:
+1. Use the canonical toolchain (Node 22.23.2, npm 10.9.8).
+2. Run `npm install` (not `npm ci`) in `webApp/`.
+3. Verify: `npm ci`, `npm run audit:prod`, `npm run coverage`, `npm run build`, and `git diff -- webApp/package-lock.json` — review the diff before committing.
 
 ## 2. Clone the Repository
 Run the following command in your terminal:
