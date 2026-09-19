@@ -41,3 +41,5 @@ appcheck.txt
 .reasonix/
 .claude/
 .firebase/
+*.pyc
+__pycache__/

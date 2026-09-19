@@ -293,7 +293,7 @@ fun OfflineBanner(isOffline: Boolean) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "You're offline — some changes may fail until you're back online",
+                    "Offline — live tracking requires a connection",
                     style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp),
                     color = WarningColor
                 )
