@@ -228,8 +228,18 @@ jobs:
           sha256sum "tabakpp-${VERSION}.apk" > "tabakpp-${VERSION}.apk.sha256"
           cd ..
 
+      - name: Verify release notes file exists
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [ ! -f ".github/release-notes/v${VERSION}.md" ]; then
+            echo "Error: Release notes file .github/release-notes/v${VERSION}.md not found."
+            echo "Create release notes before publishing v${VERSION}."
+            exit 1
+          fi
+
       # Create the version tag ONLY after the APK builds and passes signature
-      # verification. If signing or build fails, no tag is created.
+      # verification AND the release notes file exists. If signing or build or
+      # notes validation fails, no tag is created.
       - name: Create annotated version tag
         run: |
           VERSION="${{ github.event.inputs.version }}"
@@ -243,10 +253,10 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: v${{ github.event.inputs.version }}
+          body_path: .github/release-notes/${{ github.event.inputs.version }}.md
           files: |
             dist/tabakpp-${{ github.event.inputs.version }}.apk
             dist/tabakpp-${{ github.event.inputs.version }}.apk.sha256
-          generate_release_notes: true
           fail_on_unmatched_files: true
 
       - name: Cleanup decoded credentials
