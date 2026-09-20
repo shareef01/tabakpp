@@ -228,17 +228,6 @@ jobs:
           sha256sum "tabakpp-${VERSION}.apk" > "tabakpp-${VERSION}.apk.sha256"
           cd ..
 
-      # Create the version tag ONLY after the APK builds and passes signature
-      # verification. If signing or build fails, no tag is created.
-      - name: Create annotated version tag
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          RELEASE_SHA=$(git rev-parse HEAD)
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${VERSION}" "${RELEASE_SHA}" -m "Release v${VERSION}"
-          git push origin "v${VERSION}"
-
       - name: Verify release notes file exists
         run: |
           VERSION="${{ github.event.inputs.version }}"
@@ -247,6 +236,18 @@ jobs:
             echo "Create release notes before publishing v${VERSION}."
             exit 1
           fi
+
+      # Create the version tag ONLY after the APK builds and passes signature
+      # verification AND the release notes file exists. If signing or build or
+      # notes validation fails, no tag is created.
+      - name: Create annotated version tag
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          RELEASE_SHA=$(git rev-parse HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}" "${RELEASE_SHA}" -m "Release v${VERSION}"
+          git push origin "v${VERSION}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
