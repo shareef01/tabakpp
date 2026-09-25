@@ -21,6 +21,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -61,6 +62,12 @@ class FirebaseRegistryRepositoryTest {
 
     @Before
     fun setup() {
+        // Force IPv4 before any Firebase operations.
+        // The Android emulator's IPv6 routing to 10.0.2.2 (host loopback)
+        // is unreliable on CI runners — connections via IPv6 source (::)
+        // fail with ENETUNREACH. TestTabakApp.onCreate() also sets this,
+        // but it's not reliably used by AndroidJUnitRunner, so we set it here too.
+        System.setProperty("java.net.preferIPv4Stack", "true")
         runBlocking {
             Log.d(TAG, "=== Setting up test ===")
 
@@ -85,12 +92,12 @@ class FirebaseRegistryRepositoryTest {
 
             var uid: String? = null
             try {
-                val authResult = Firebase.auth.signInAnonymously()
+                val authResult = withTimeout(30000) { Firebase.auth.signInAnonymously() }
                 uid = authResult.user?.uid
                 Log.d(TAG, "Signed in as: $uid")
             } catch (e: Exception) {
                 uid = Firebase.auth.currentUser?.uid
-                Log.d(TAG, "Sign-in result: uid=$uid, err=${e.message}")
+                Log.w(TAG, "signInAnonymously failed (30s timeout): ${e.message}")
             }
 
             if (uid.isNullOrEmpty()) uid = TEST_UID
