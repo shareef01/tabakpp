@@ -42,7 +42,7 @@ jobs:
         run: npm install -g npm@10.9.8
 
       - name: Install Firebase CLI
-        run: npm install -g firebase-tools
+        run: npm install -g firebase-tools@15.24.0
 
       - name: Install web dependencies
         working-directory: webApp
@@ -101,7 +101,7 @@ jobs:
           # Start Firebase emulators in the background
           firebase emulators:start --config firebase.json --only firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
           FIREBASE_PID=$!
-          trap 'kill $FIREBASE_PID 2>/dev/null; pkill -f "firebase.*emulator" 2>/dev/null; pkill -f cloud-firestore 2>/dev/null' EXIT
+          trap 'kill $FIREBASE_PID 2>/dev/null; pkill -f "firebase.*emulator" 2>/dev/null; pkill -f cloud-firestore 2>/dev/null; pkill -f "adb.*logcat" 2>/dev/null' EXIT
 
           # Wait for Firestore emulator readiness (30 retries × 2s = 60s max)
           for i in $(seq 1 30); do
@@ -112,18 +112,56 @@ jobs:
             sleep 2
           done
 
-          # Fail fast if emulator never came up
+          # Wait for Auth emulator readiness (30 retries × 2s = 60s max)
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:9099 > /dev/null 2>&1; then
+              echo "Auth emulator is ready"
+              break
+            fi
+            sleep 2
+          done
+
+          # Fail fast if emulators never came up
           if ! curl -s http://localhost:8080 > /dev/null 2>&1; then
             echo "::error::Firestore emulator failed to start"
             cat firebase-emulator.log
             exit 1
           fi
+          if ! curl -s http://localhost:9099 > /dev/null 2>&1; then
+            echo "::error::Auth emulator failed to start"
+            cat firebase-emulator.log
+            exit 1
+          fi
 
-          # Run Android instrumentation tests (no || true — failures propagate)
-          ./gradlew :androidApp:connectedDebugAndroidTest \
+          # Capture logcat during test execution — critical for diagnosing hangs
+          adb logcat -c
+          ( adb logcat -v threadtime > test-logcat.log 2>&1 ) &
+          LOGCAT_PID=$!
+
+          # Run Android instrumentation tests
+          # timeout_seconds=120: per-test timeout catches hanging @Before/setup
+          # `timeout 20m`: hard kill if tests hang beyond 20 min (well under 45m job limit)
+          TEST_EXIT=0
+          timeout -k 30s 20m ./gradlew :androidApp:connectedDebugAndroidTest \
             -Pandroid.testInstrumentationRunnerArguments.class=com.tabakpp.app.firestore.FirebaseRegistryRepositoryTest \
             --no-daemon \
-            -Pandroid.testInstrumentationRunnerArguments.debug=false
+            -Pandroid.testInstrumentationRunnerArguments.debug=false \
+            -Pandroid.testInstrumentationRunnerArguments.timeout=120 \
+            || TEST_EXIT=$?
+
+          # Stop logcat capture
+          kill "$LOGCAT_PID" 2>/dev/null || true
+
+          if [ "$TEST_EXIT" -ne 0 ]; then
+            echo "::error::Instrumentation tests failed (exit code: $TEST_EXIT)"
+            echo "=== Firebase emulator log ==="
+            cat firebase-emulator.log
+            echo "=== Test logcat (last 200 lines) ==="
+            tail -200 test-logcat.log 2>/dev/null || echo "No logcat available"
+            exit "$TEST_EXIT"
+          fi
+
+          echo "Instrumentation tests passed"
           SCRIPT
           chmod +x ci-run-tests.sh
 
@@ -150,3 +188,6 @@ jobs:
           path: |
             androidApp/build/outputs/androidTest-results/
             webApp/test-results/
+            # Debug artifacts from the test job only
+            firebase-emulator.log
+            test-logcat.log
