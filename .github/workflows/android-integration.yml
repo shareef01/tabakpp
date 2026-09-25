@@ -89,9 +89,17 @@ jobs:
       - name: Clear stale Android test results
         run: rm -rf androidApp/build/outputs/androidTest-results/
 
-      # Write the instrumentation test runner as a standalone script so it
-      # executes in a single shell (the emulator-runner action runs each line
-      # of `script` as a separate sh -c, which breaks PID/trap/loops).
+      # Pre-build the test APKs BEFORE booting the emulator. The Gradle build
+      # (Kotlin compile + dex) is CPU-intensive and running it concurrently
+      # with the Android emulator causes the emulator to crash
+      # ('cmd: Can't find service: package' / system_server restart).
+      # With APKs pre-built, connectedDebugAndroidTest skips straight to
+      # install + run, eliminating the build-vs-emulator resource contention.
+      - name: Pre-build test APKs
+        run: |
+          ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest \
+            --no-daemon \
+            --quiet
       - name: Create instrumentation test script
         run: |
           cat > ci-run-tests.sh <<'SCRIPT'
@@ -133,14 +141,20 @@ jobs:
             exit 1
           fi
 
+          # Wait for the emulator to be fully ready (service manager online)
+          adb wait-for-device
+          # Give system_server additional time to finish starting all services
+          # after sys.boot_completed (services like 'package' can lag behind)
+          sleep 15
+
           # Capture logcat during test execution — critical for diagnosing hangs
           adb logcat -c
           ( adb logcat -v threadtime > test-logcat.log 2>&1 ) &
           LOGCAT_PID=$!
 
           # Run Android instrumentation tests
-          # timeout_seconds=120: per-test timeout catches hanging @Before/setup
-          # `timeout 20m`: hard kill if tests hang beyond 20 min (well under 45m job limit)
+          # timeout=120: per-test timeout (via AndroidJUnitRunner) catches hanging @Before/setup
+          # `timeout -k 30s 20m`: hard kill if tests hang beyond 20 min (well under 45m job limit)
           TEST_EXIT=0
           timeout -k 30s 20m ./gradlew :androidApp:connectedDebugAndroidTest \
             -Pandroid.testInstrumentationRunnerArguments.class=com.tabakpp.app.firestore.FirebaseRegistryRepositoryTest \
