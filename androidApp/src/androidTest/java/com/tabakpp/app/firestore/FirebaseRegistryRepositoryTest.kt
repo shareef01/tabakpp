@@ -139,8 +139,8 @@ class FirebaseRegistryRepositoryTest {
     }
 
     private suspend fun <T> withRetry(
-        maxRetries: Int = 3,
-        delayMs: Long = 1000,
+        maxRetries: Int = 5,
+        delayMs: Long = 2000,
         block: suspend () -> T
     ): T {
         var lastException: Exception? = null
@@ -278,6 +278,11 @@ class FirebaseRegistryRepositoryTest {
             "$failures failed, $abortedFailures ABORTED")
         results.forEach { r -> Log.d(TAG, "  $r") }
 
+        // Give the Firestore emulator's gRPC channel time to recover from the
+        // concurrent transaction burst before reading the final count.
+        // Under contention, the emulator can transiently return PERMISSION_DENIED
+        // (a channel-level gRPC error, not a rules violation).
+        delay(3000)
         val actualCount = getCountsRetry(uid, TEST_DATE)
         Log.d(TAG, "Final count: $actualCount (expected: ${5.0 + expectedFinal}, successes: $successes)")
 
