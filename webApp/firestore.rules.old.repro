@@ -1,0 +1,520 @@
+rules_version = '2';
+// Deploy: firebase deploy --only firestore:rules
+//
+// App Check is integrated on both clients but enforcement is DELIBERATELY OFF —
+// do not turn it on in the Console as a "hardening" pass. Android release APKs
+// use the debug provider (Play Integrity needs a Play Console link), so
+// enforcing would break every APK downloaded from GitHub Releases. These rules
+// plus API-key restrictions are the security boundary. See README → Security
+// and SETUP_GUIDE.md for the upgrade path.
+//
+// SCHEMA (v2 — dated daily-document model):
+//   users/{uid}                    profile + settings + lifetimeAggregates rollup.
+//     Legacy `activeCounts`/`avatar` fields are still ACCEPTED here (never
+//     required) so an out-of-date Android APK — this app has no forced-update
+//     mechanism — keeps working during the rollout. Updated clients never
+//     write `activeCounts`/`avatar` here; see `days` and `meta` below.
+//   users/{uid}/configs/{id}       trackers — target ("limit"), price, and now
+//     an optional `baseline` (item 3 — first-class reduction reference).
+//   users/{uid}/days/{YYYY-MM-DD}  THE fix for item 1: every count always
+//     belongs to an explicit tracking date decided at write time, never to a
+//     dateless mutable bucket. Also carries a per-tracker historical
+//     trackerSnapshots stamp (item 2) so editing/deleting/repricing a
+//     tracker later can never change what an old day meant. On a closed day,
+//     rules freeze `trackerSnapshots`, `status`, `date`,
+//     `foldedIntoLifetime`, and `legacyMigrationApplied` (see validDayUpdate,
+//     line 433). `counts` and `aggregateCredit` remain writable by the
+//     authenticated owner — the application-layer `updateHistoricalDay`
+//     path additionally reconciles `lifetimeAggregates`.
+//   users/{uid}/logs/{id}          legacy ledger: manual backfill entries
+//     (still written here) and pre-migration day archives (`{date}_DAY`,
+//     no longer created by updated clients, but still readable).
+//   users/{uid}/meta/{id}          low-frequency profile extras (avatar) —
+//     split out so a large, rarely-changing blob never rides along on a
+//     high-frequency write (item 12). Today the only doc id used is `profile`.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isNumber(v) {
+      return v is int || v is float;
+    }
+
+    // Web JS numbers are floats; Android may write ints. Accept whole numbers either way.
+    function isWholeNumber(v) {
+      return isNumber(v) && v % 1 == 0;
+    }
+
+    function boundNumber(v, maxAbs) {
+      return isNumber(v) && v >= -maxAbs && v <= maxAbs;
+    }
+
+    function isDateString(v) {
+      return v is string && v.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+    }
+
+    function validLifetimeAggregates(a) {
+      return a is map
+        && a.keys().hasOnly(['saved', 'wasted', 'smokingUnits', 'baselineSaved'])
+        && (!('saved' in a) || boundNumber(a.saved, 100000000))
+        && (!('wasted' in a) || boundNumber(a.wasted, 100000000))
+        && (!('smokingUnits' in a) || (isNumber(a.smokingUnits) && a.smokingUnits >= 0 && a.smokingUnits <= 100000000))
+        // Baseline savings (item 3) share the same bounds as `saved` — both are
+        // non-negative money/units accumulations over a lifetime.
+        && (!('baselineSaved' in a) || (isNumber(a.baselineSaved) && a.baselineSaved >= -100000000 && a.baselineSaved <= 100000000));
+    }
+
+    // Fresh profile bootstrap — no forged lifetime totals on create.
+    function zeroAggregates(a) {
+      return a is map
+        && a.keys().hasOnly(['saved', 'wasted', 'smokingUnits', 'baselineSaved'])
+        && (!('saved' in a) || a.saved == 0)
+        && (!('wasted' in a) || a.wasted == 0)
+        && (!('smokingUnits' in a) || a.smokingUnits == 0)
+        && (!('baselineSaved' in a) || a.baselineSaved == 0);
+    }
+
+    // Dynamic tracker ids — bound size, keys, and each numeric value (matches
+    // InputSanitizer.counts). Rules forbid recursion, so lists are unrolled.
+    function validCountValue(v) {
+      return isWholeNumber(v) && v >= 0 && v <= 10000;
+    }
+
+    function validCountKey(k) {
+      return k is string
+        && k.size() >= 1
+        && k.size() <= 64
+        && k.matches('^[A-Za-z0-9_-]+$');
+    }
+
+    function validCountEntries(keys, vals) {
+      let n = vals.size();
+      return n <= 50
+        && keys.size() == n
+        && (n < 1 || (validCountKey(keys[0]) && validCountValue(vals[0])))
+        && (n < 2 || (validCountKey(keys[1]) && validCountValue(vals[1])))
+        && (n < 3 || (validCountKey(keys[2]) && validCountValue(vals[2])))
+        && (n < 4 || (validCountKey(keys[3]) && validCountValue(vals[3])))
+        && (n < 5 || (validCountKey(keys[4]) && validCountValue(vals[4])))
+        && (n < 6 || (validCountKey(keys[5]) && validCountValue(vals[5])))
+        && (n < 7 || (validCountKey(keys[6]) && validCountValue(vals[6])))
+        && (n < 8 || (validCountKey(keys[7]) && validCountValue(vals[7])))
+        && (n < 9 || (validCountKey(keys[8]) && validCountValue(vals[8])))
+        && (n < 10 || (validCountKey(keys[9]) && validCountValue(vals[9])))
+        && (n < 11 || (validCountKey(keys[10]) && validCountValue(vals[10])))
+        && (n < 12 || (validCountKey(keys[11]) && validCountValue(vals[11])))
+        && (n < 13 || (validCountKey(keys[12]) && validCountValue(vals[12])))
+        && (n < 14 || (validCountKey(keys[13]) && validCountValue(vals[13])))
+        && (n < 15 || (validCountKey(keys[14]) && validCountValue(vals[14])))
+        && (n < 16 || (validCountKey(keys[15]) && validCountValue(vals[15])))
+        && (n < 17 || (validCountKey(keys[16]) && validCountValue(vals[16])))
+        && (n < 18 || (validCountKey(keys[17]) && validCountValue(vals[17])))
+        && (n < 19 || (validCountKey(keys[18]) && validCountValue(vals[18])))
+        && (n < 20 || (validCountKey(keys[19]) && validCountValue(vals[19])))
+        && (n < 21 || (validCountKey(keys[20]) && validCountValue(vals[20])))
+        && (n < 22 || (validCountKey(keys[21]) && validCountValue(vals[21])))
+        && (n < 23 || (validCountKey(keys[22]) && validCountValue(vals[22])))
+        && (n < 24 || (validCountKey(keys[23]) && validCountValue(vals[23])))
+        && (n < 25 || (validCountKey(keys[24]) && validCountValue(vals[24])))
+        && (n < 26 || (validCountKey(keys[25]) && validCountValue(vals[25])))
+        && (n < 27 || (validCountKey(keys[26]) && validCountValue(vals[26])))
+        && (n < 28 || (validCountKey(keys[27]) && validCountValue(vals[27])))
+        && (n < 29 || (validCountKey(keys[28]) && validCountValue(vals[28])))
+        && (n < 30 || (validCountKey(keys[29]) && validCountValue(vals[29])))
+        && (n < 31 || (validCountKey(keys[30]) && validCountValue(vals[30])))
+        && (n < 32 || (validCountKey(keys[31]) && validCountValue(vals[31])))
+        && (n < 33 || (validCountKey(keys[32]) && validCountValue(vals[32])))
+        && (n < 34 || (validCountKey(keys[33]) && validCountValue(vals[33])))
+        && (n < 35 || (validCountKey(keys[34]) && validCountValue(vals[34])))
+        && (n < 36 || (validCountKey(keys[35]) && validCountValue(vals[35])))
+        && (n < 37 || (validCountKey(keys[36]) && validCountValue(vals[36])))
+        && (n < 38 || (validCountKey(keys[37]) && validCountValue(vals[37])))
+        && (n < 39 || (validCountKey(keys[38]) && validCountValue(vals[38])))
+        && (n < 40 || (validCountKey(keys[39]) && validCountValue(vals[39])))
+        && (n < 41 || (validCountKey(keys[40]) && validCountValue(vals[40])))
+        && (n < 42 || (validCountKey(keys[41]) && validCountValue(vals[41])))
+        && (n < 43 || (validCountKey(keys[42]) && validCountValue(vals[42])))
+        && (n < 44 || (validCountKey(keys[43]) && validCountValue(vals[43])))
+        && (n < 45 || (validCountKey(keys[44]) && validCountValue(vals[44])))
+        && (n < 46 || (validCountKey(keys[45]) && validCountValue(vals[45])))
+        && (n < 47 || (validCountKey(keys[46]) && validCountValue(vals[46])))
+        && (n < 48 || (validCountKey(keys[47]) && validCountValue(vals[47])))
+        && (n < 49 || (validCountKey(keys[48]) && validCountValue(vals[48])))
+        && (n < 50 || (validCountKey(keys[49]) && validCountValue(vals[49])));
+    }
+
+    function validCountMap(counts) {
+      return counts is map
+        && counts.size() <= 50
+        && validCountEntries(counts.keys(), counts.values());
+    }
+
+    // trackerSnapshots (item 2): one stamped historical config per tracker
+    // touched that day.
+    //
+    // Deliberately CHEAPER than validCountMap/validSnapshotValue-with-hasOnly
+    // would be: Firestore charges a hard, non-negotiable cap of 1000
+    // evaluated sub-expressions per rules decision, and a full per-field
+    // `hasOnly` + type-checked validator here — combined with validCountMap
+    // already running in the same `validDayShape` call — measurably exceeded
+    // it in the emulator even for a single-entry map (see git history for the
+    // failing version). Only the two numeric fields that could otherwise be
+    // used to forge financial totals (`target`, `unitPrice`) are bounds-
+    // checked; this repo's Spark/no-Cloud-Functions threat model already
+    // accepts that an owner can misstate their own non-identity data (see
+    // isMutationOnlyUpdate's comment above) — the properties that must stay
+    // strict are cross-user isolation and overall map/size bounds, both of
+    // which this still enforces. Bounded to 8 trackers/day — a `days` doc's
+    // per-write cost has to leave headroom for a SECOND document (usually
+    // `users/{uid}`) validated in the same transaction commit, since the
+    // 1000-expression budget is charged per commit, not per document.
+    function validSnapshotValue(v) {
+      return v is map
+        && v.size() <= 7
+        && (!('target' in v) || (isWholeNumber(v.target) && v.target >= 0 && v.target <= 10000))
+        && (!('baseline' in v) || v.baseline == null || (isWholeNumber(v.baseline) && v.baseline >= 0 && v.baseline <= 10000))
+        && (!('unitPrice' in v) || v.unitPrice == null || (isNumber(v.unitPrice) && v.unitPrice >= 0 && v.unitPrice <= 1000));
+    }
+
+    function validSnapshotEntries(keys, vals) {
+      let n = vals.size();
+      return n <= 8
+        && keys.size() == n
+        && (n < 1 || (validCountKey(keys[0]) && validSnapshotValue(vals[0])))
+        && (n < 2 || (validCountKey(keys[1]) && validSnapshotValue(vals[1])))
+        && (n < 3 || (validCountKey(keys[2]) && validSnapshotValue(vals[2])))
+        && (n < 4 || (validCountKey(keys[3]) && validSnapshotValue(vals[3])))
+        && (n < 5 || (validCountKey(keys[4]) && validSnapshotValue(vals[4])))
+        && (n < 6 || (validCountKey(keys[5]) && validSnapshotValue(vals[5])))
+        && (n < 7 || (validCountKey(keys[6]) && validSnapshotValue(vals[6])))
+        && (n < 8 || (validCountKey(keys[7]) && validSnapshotValue(vals[7])));
+    }
+
+    function validSnapshotMap(m) {
+      return m is map
+        && m.size() <= 8
+        && validSnapshotEntries(m.keys(), m.values());
+    }
+
+    // Day-doc counts get their OWN, smaller-bounded map validator rather than
+    // reusing the shared 50-slot validCountMap (legacy `activeCounts`/`logs`
+    // keep that bound) — again purely to leave commit-level expression
+    // headroom now that a `days` write is often paired with a `users/{uid}`
+    // write in the same transaction (endDay/updateHistoricalDay/migration).
+    function validDayCountEntries(keys, vals) {
+      let n = vals.size();
+      return n <= 25
+        && keys.size() == n
+        && (n < 1 || (validCountKey(keys[0]) && validCountValue(vals[0])))
+        && (n < 2 || (validCountKey(keys[1]) && validCountValue(vals[1])))
+        && (n < 3 || (validCountKey(keys[2]) && validCountValue(vals[2])))
+        && (n < 4 || (validCountKey(keys[3]) && validCountValue(vals[3])))
+        && (n < 5 || (validCountKey(keys[4]) && validCountValue(vals[4])))
+        && (n < 6 || (validCountKey(keys[5]) && validCountValue(vals[5])))
+        && (n < 7 || (validCountKey(keys[6]) && validCountValue(vals[6])))
+        && (n < 8 || (validCountKey(keys[7]) && validCountValue(vals[7])))
+        && (n < 9 || (validCountKey(keys[8]) && validCountValue(vals[8])))
+        && (n < 10 || (validCountKey(keys[9]) && validCountValue(vals[9])))
+        && (n < 11 || (validCountKey(keys[10]) && validCountValue(vals[10])))
+        && (n < 12 || (validCountKey(keys[11]) && validCountValue(vals[11])))
+        && (n < 13 || (validCountKey(keys[12]) && validCountValue(vals[12])))
+        && (n < 14 || (validCountKey(keys[13]) && validCountValue(vals[13])))
+        && (n < 15 || (validCountKey(keys[14]) && validCountValue(vals[14])))
+        && (n < 16 || (validCountKey(keys[15]) && validCountValue(vals[15])))
+        && (n < 17 || (validCountKey(keys[16]) && validCountValue(vals[16])))
+        && (n < 18 || (validCountKey(keys[17]) && validCountValue(vals[17])))
+        && (n < 19 || (validCountKey(keys[18]) && validCountValue(vals[18])))
+        && (n < 20 || (validCountKey(keys[19]) && validCountValue(vals[19])))
+        && (n < 21 || (validCountKey(keys[20]) && validCountValue(vals[20])))
+        && (n < 22 || (validCountKey(keys[21]) && validCountValue(vals[21])))
+        && (n < 23 || (validCountKey(keys[22]) && validCountValue(vals[22])))
+        && (n < 24 || (validCountKey(keys[23]) && validCountValue(vals[23])))
+        && (n < 25 || (validCountKey(keys[24]) && validCountValue(vals[24])));
+    }
+
+    function validDayCountMap(counts) {
+      return counts is map
+        && counts.size() <= 25
+        && validDayCountEntries(counts.keys(), counts.values());
+    }
+
+    // Canonical UserProfile keys (shared Android/KMP + web).
+    // `activeCounts`/`avatar` are LEGACY — still accepted for as long as an
+    // out-of-date client may write them, but updated clients never do
+    // (see `days` and `meta` below). `schemaVersion`/`unmigratedLegacyCounts`
+    // are written once by the activeCounts->days migration.
+    function validUserKeys(data) {
+      return data.keys().hasOnly([
+        'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
+        'pouchPrice', 'estimatedYield', 'dayStartHour', 'activeCounts',
+        'lifetimeAggregates', 'smokingUnitsMigrated', 'avatar', 'createdAt', 'updatedAt',
+        'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield',
+        'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate'
+      ]);
+    }
+
+    function validSettingsShape(d) {
+      return (!('name' in d) || (d.name is string && d.name.size() <= 100))
+        && (!('accent' in d) || (d.accent is string && d.accent.matches('^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$')))
+        && (!('purchaseType' in d) || d.purchaseType in ['PACK', 'POUCH'])
+        && (!('dayStartHour' in d) || (isWholeNumber(d.dayStartHour) && d.dayStartHour >= 0 && d.dayStartHour <= 23))
+        && (!('unitPrice' in d) || (isNumber(d.unitPrice) && d.unitPrice >= 0 && d.unitPrice <= 1000))
+        && (!('unitsPerPack' in d) || (isWholeNumber(d.unitsPerPack) && d.unitsPerPack >= 1 && d.unitsPerPack <= 1000))
+        && (!('pouchPrice' in d) || (isNumber(d.pouchPrice) && d.pouchPrice >= 0 && d.pouchPrice <= 10000))
+        && (!('estimatedYield' in d) || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
+        && (!('widgetSize' in d) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
+        && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
+    }
+
+    function validUserProfile() {
+      let d = request.resource.data;
+      return validUserKeys(d)
+        && validSettingsShape(d)
+        && (!('lifetimeAggregates' in d) || validLifetimeAggregates(d.lifetimeAggregates))
+        && (!('activeCounts' in d) || validCountMap(d.activeCounts))
+        && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool)
+        && (!('schemaVersion' in d) || (isWholeNumber(d.schemaVersion) && d.schemaVersion >= 0 && d.schemaVersion <= 1000))
+        && (!('migratingLegacyCounts' in d) || validCountMap(d.migratingLegacyCounts))
+        && (!('migratingLegacyDate' in d) || isDateString(d.migratingLegacyDate));
+    }
+
+    function validCreateProfile() {
+      let d = request.resource.data;
+      return validUserProfile()
+        && (!('activeCounts' in d) || d.activeCounts.size() == 0)
+        && (!('lifetimeAggregates' in d) || zeroAggregates(d.lifetimeAggregates));
+    }
+
+    // Counter/archive path: only validate fields this write may change.
+    // Do NOT re-check avatar/name/legacy keys — a large avatar otherwise
+    // blocks every increment even though activeCounts is the only change.
+    // Kept for an out-of-date client still using the pre-days-model path;
+    // updated clients never write activeCounts (see `days` subcollection).
+    function validMutationUpdate() {
+      let d = request.resource.data;
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      // `!('activeCounts' in d)` guards the case migrateLegacyActiveCounts
+      // introduced: activeCounts: deleteField() removes the key entirely, so
+      // it is still "changed" but no longer present to validate. Referencing
+      // a missing map field inside validCountMap's unrolled checks is what
+      // was blowing Firestore's per-commit rules expression budget here.
+      return (!changed.hasAny(['activeCounts']) || !('activeCounts' in d) || validCountMap(d.activeCounts))
+        && (!changed.hasAny(['lifetimeAggregates']) || validLifetimeAggregates(d.lifetimeAggregates))
+        && (!changed.hasAny(['smokingUnitsMigrated']) || d.smokingUnitsMigrated is bool)
+        && (!changed.hasAny(['schemaVersion']) || (isWholeNumber(d.schemaVersion) && d.schemaVersion >= 0 && d.schemaVersion <= 1000))
+        // migratingLegacyCounts/-Date: only ever set together with a legacy
+        // activeCounts clear, or deleted together during cleanup — either
+        // direction is a mutation-shaped change, never a settings one.
+        && (!changed.hasAny(['migratingLegacyCounts']) || !('migratingLegacyCounts' in d) || validCountMap(d.migratingLegacyCounts))
+        && (!changed.hasAny(['migratingLegacyDate']) || !('migratingLegacyDate' in d) || isDateString(d.migratingLegacyDate));
+    }
+
+    // Settings path: validate only fields this write changes (parity with
+    // validMutationUpdate). Do NOT re-check activeCounts / aggregates / an
+    // existing oversized avatar — those would brick every settings save.
+    function validSettingsUpdate() {
+      let d = request.resource.data;
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return (!changed.hasAny(['name']) || (d.name is string && d.name.size() <= 100))
+        && (!changed.hasAny(['accent'])
+          || (d.accent is string && d.accent.matches('^#[0-9A-Fa-f]{3}([0-9A-Fa-f]{3})?$')))
+        && (!changed.hasAny(['purchaseType']) || d.purchaseType in ['PACK', 'POUCH'])
+        && (!changed.hasAny(['dayStartHour'])
+          || (isWholeNumber(d.dayStartHour) && d.dayStartHour >= 0 && d.dayStartHour <= 23))
+        && (!changed.hasAny(['unitPrice'])
+          || (isNumber(d.unitPrice) && d.unitPrice >= 0 && d.unitPrice <= 1000))
+        && (!changed.hasAny(['unitsPerPack'])
+          || (isWholeNumber(d.unitsPerPack) && d.unitsPerPack >= 1 && d.unitsPerPack <= 1000))
+        && (!changed.hasAny(['pouchPrice'])
+          || (isNumber(d.pouchPrice) && d.pouchPrice >= 0 && d.pouchPrice <= 10000))
+        && (!changed.hasAny(['estimatedYield'])
+          || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
+        && (!changed.hasAny(['widgetSize']) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
+        // `!('avatar' in d)` additionally covers `avatar: deleteField()` (used
+        // by migrateAvatarToProfileMeta/updateAvatar's legacy-field cleanup) —
+        // see validMutationUpdate's comment on why referencing a field that
+        // was just deleted, rather than guarding for its absence first, is
+        // more than a style nit here.
+        && (!changed.hasAny(['avatar'])
+          || !('avatar' in d)
+          || d.avatar == null
+          || (d.avatar is string && d.avatar.size() <= 100000));
+    }
+
+    // Spark-safe defense (no Cloud Functions): settings writes cannot touch
+    // counters/aggregates, and mutation writes cannot touch identity/economics.
+    // Owners can still forge aggregates in a dedicated mutation write on Spark;
+    // App Check + API key restrictions are the remaining mitigations.
+    // 'createdAt' is deliberately absent: it is set once at profile creation and
+    // a settings save has no business rewriting account age.
+    function isSettingsOnlyUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly([
+          'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
+          'pouchPrice', 'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt',
+          'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'
+        ]);
+    }
+
+    function isMutationOnlyUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly([
+          'activeCounts', 'lifetimeAggregates', 'smokingUnitsMigrated', 'updatedAt',
+          'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate'
+        ]);
+    }
+
+    function validLogEntry() {
+      let d = request.resource.data;
+      return d.keys().hasOnly([
+          'logDate', 'counts', 'origin', 'finalizedAt', 'clientTimestamp', 'id',
+          'isArchive', 'isManual', 'aggregateCredit'
+        ])
+        && d.keys().hasAll(['logDate', 'counts'])
+        && isDateString(d.logDate)
+        && validCountMap(d.counts)
+        && (!('origin' in d) || d.origin in ['DAY_RESET', 'MANUAL_ENTRY'])
+        && (!('isArchive' in d) || d.isArchive is bool)
+        && (!('isManual' in d) || d.isManual is bool)
+        // Same shape and bounds as the profile totals it accumulates into.
+        && (!('aggregateCredit' in d) || validLifetimeAggregates(d.aggregateCredit));
+    }
+
+    function validConfig() {
+      let d = request.resource.data;
+      return d.keys().hasOnly([
+          'name', 'limit', 'order', 'type', 'pricePerUnit', 'isFinanciallyTracked',
+          'isPrimaryTracked', 'baseline', 'createdAt', 'updatedAt', 'id'
+        ])
+        && d.keys().hasAll(['name', 'limit', 'order'])
+        && d.name is string
+        && d.name.size() <= 80
+        && isWholeNumber(d.limit)
+        && d.limit >= 0
+        && d.limit <= 10000
+        && isWholeNumber(d.order)
+        && d.order >= 0
+        && d.order <= 1000
+        && (!('type' in d) || d.type in ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING', 'SIMPLE'])
+        && (!('pricePerUnit' in d) || d.pricePerUnit == null || (isNumber(d.pricePerUnit) && d.pricePerUnit >= 0 && d.pricePerUnit <= 1000))
+        && (!('isFinanciallyTracked' in d) || d.isFinanciallyTracked is bool)
+        && (!('isPrimaryTracked' in d) || d.isPrimaryTracked is bool)
+        // Baseline (item 3): explicit reference consumption. null = "not set" —
+        // never required, never inferred.
+        && (!('baseline' in d) || d.baseline == null || (isWholeNumber(d.baseline) && d.baseline >= 0 && d.baseline <= 10000));
+    }
+
+    // Dated daily document (item 1/2 — the core data-integrity fix).
+    function validDayShape(d) {
+      return d.keys().hasOnly([
+          'date', 'counts', 'trackerSnapshots', 'aggregateCredit', 'status',
+          'foldedIntoLifetime', 'legacyMigrationApplied', 'createdAt', 'updatedAt', 'closedAt'
+        ])
+        && d.keys().hasAll(['date', 'counts'])
+        && isDateString(d.date)
+        && validDayCountMap(d.counts)
+        && (!('trackerSnapshots' in d) || validSnapshotMap(d.trackerSnapshots))
+        && (!('aggregateCredit' in d) || validLifetimeAggregates(d.aggregateCredit))
+        && (!('status' in d) || d.status in ['open', 'closed'])
+        && (!('foldedIntoLifetime' in d) || d.foldedIntoLifetime is bool)
+        && (!('legacyMigrationApplied' in d) || d.legacyMigrationApplied is bool);
+    }
+
+    function validDayCreate(dateParam) {
+      let d = request.resource.data;
+      return validDayShape(d) && d.date == dateParam;
+    }
+
+    // Update path validates only fields THIS write actually changes (same
+    // shape as validMutationUpdate/validSettingsUpdate above) rather than
+    // re-validating the whole document shape on every write — both for
+    // expression-budget headroom (see validSnapshotValue's comment) and
+    // because it is the only way an already-valid field can be left alone by
+    // a write that does not touch it.
+    function validDayUpdate(dateParam) {
+      let d = request.resource.data;
+      let before = resource.data;
+      let changed = d.diff(before).affectedKeys();
+      return d.keys().hasOnly([
+          'date', 'counts', 'trackerSnapshots', 'aggregateCredit', 'status',
+          'foldedIntoLifetime', 'legacyMigrationApplied', 'createdAt', 'updatedAt', 'closedAt'
+        ])
+        && d.date == dateParam
+        && d.date == before.date // date is the document identity — immutable
+        && (!changed.hasAny(['counts']) || validDayCountMap(d.counts))
+        // Once a day is closed, its historical config stamp is frozen — this is
+        // what makes trackerSnapshots actually immutable (item 2), not just a
+        // client convention. `counts`/`aggregateCredit` may still change (a
+        // deliberate historical correction via updateHistoricalDay), but never
+        // what the day *meant* at the time.
+        && (!changed.hasAny(['trackerSnapshots']) || (before.status != 'closed' && validSnapshotMap(d.trackerSnapshots)))
+        && (!changed.hasAny(['aggregateCredit']) || validLifetimeAggregates(d.aggregateCredit))
+        // A day cannot be reopened once closed (one-way transition).
+        && (!changed.hasAny(['status']) || (d.status in ['open', 'closed'] && before.status != 'closed'))
+        // foldedIntoLifetime/legacyMigrationApplied can only go from unset/false
+        // -> true, never back — prevents a client from re-triggering a credit.
+        && (!changed.hasAny(['foldedIntoLifetime'])
+          || (d.foldedIntoLifetime is bool && (!('foldedIntoLifetime' in before) || before.foldedIntoLifetime != true)))
+        && (!changed.hasAny(['legacyMigrationApplied'])
+          || (d.legacyMigrationApplied is bool && (!('legacyMigrationApplied' in before) || before.legacyMigrationApplied != true)));
+    }
+
+    function validMetaShape() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['avatar', 'updatedAt'])
+        && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && validCreateProfile();
+      allow update: if isOwner(userId) && (
+        (isMutationOnlyUpdate() && validMutationUpdate()) ||
+        (isSettingsOnlyUpdate() && validSettingsUpdate())
+      );
+      allow delete: if isOwner(userId);
+
+      match /configs/{configId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validConfig();
+        allow delete: if isOwner(userId);
+      }
+
+      match /logs/{logId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && validLogEntry();
+        // logDate is immutable: an edit may only re-count the day it already
+        // belongs to. Relabelling a log to another date would move counts
+        // between days while lifetimeAggregates stayed put.
+        allow update: if isOwner(userId)
+          && validLogEntry()
+          && request.resource.data.logDate == resource.data.logDate;
+        allow delete: if isOwner(userId);
+      }
+
+      match /days/{date} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && validDayCreate(date);
+        allow update: if isOwner(userId) && validDayUpdate(date);
+        // Deletion is intentionally still permitted (Spark account wipe, and
+        // an owner's general right to erase their own data) — it does not
+        // rewrite a day's meaning, only remove the record entirely.
+        allow delete: if isOwner(userId);
+      }
+
+      match /meta/{metaId} {
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId) && validMetaShape();
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    // Everything else is denied.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

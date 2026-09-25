@@ -33,6 +33,11 @@ class TestTabakApp : Application() {
     }
 
     override fun onCreate() {
+        // Force IPv4 before any Firebase/network initialization.
+        // The Android emulator's IPv6 routing to 10.0.2.2 (host loopback)
+        // is unreliable on CI runners — connections via IPv6 source (::)
+        // fail with ENETUNREACH. This property forces all sockets to use IPv4.
+        System.setProperty("java.net.preferIPv4Stack", "true")
         super.onCreate()
         Log.d(TAG, "TestTabakApp.onCreate() START")
 

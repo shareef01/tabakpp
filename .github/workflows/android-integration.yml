@@ -106,8 +106,22 @@ jobs:
           #!/bin/bash
           set -euo pipefail
 
-          # Start Firebase emulators in the background
-          firebase emulators:start --config firebase.json --only firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
+          # Start Firebase emulators in the background.
+          # Create a CI-specific config that binds emulators to 0.0.0.0 instead
+          # of 127.0.0.1, because the Android emulator's 10.0.2.2 alias for the
+          # host loopback is intermittently unreachable on CI runners (ENETUNREACH).
+          # Binding to 0.0.0.0 makes emulators reachable via any interface,
+          # including the emulator's network bridge.
+          cat > firebase.ci.json <<'JSON'
+          {
+            "emulators": {
+              "firestore": { "port": 8080, "host": "0.0.0.0" },
+              "auth": { "port": 9099, "host": "0.0.0.0" },
+              "ui": { "enabled": false }
+            }
+          }
+          JSON
+          firebase emulators:start --config firebase.ci.json --only firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
           FIREBASE_PID=$!
           trap 'kill "$FIREBASE_PID" 2>/dev/null || true; pkill -f cloud-firestore 2>/dev/null || true; kill "$LOGCAT_PID" 2>/dev/null || true' EXIT
 
@@ -146,6 +160,24 @@ jobs:
           # Give system_server additional time to finish starting all services
           # after sys.boot_completed (services like 'package' can lag behind)
           sleep 15
+
+          # Verify emulator can actually reach host's Firebase emulators via
+          # 10.0.2.2 (the Android emulator's loopback alias). On some CI runners,
+          # the emulator's network bridge or IPv6 routing is not ready even
+          # after sys.boot_completed, causing ENETUNREACH on Firestore/Auth.
+          EMULATOR_NET_OK=0
+          for i in $(seq 1 15); do
+            if adb shell "nc -z -w2 10.0.2.2 8080" 2>/dev/null; then
+              EMULATOR_NET_OK=1
+              echo "Emulator network to Firestore emulator: OK"
+              break
+            fi
+            echo "Waiting for emulator network connectivity ($i/15)..."
+            sleep 2
+          done
+          if [ "$EMULATOR_NET_OK" -eq 0 ]; then
+            echo "::warning::Emulator cannot reach 10.0.2.2:8080 after 30s — tests may fail with ENETUNREACH"
+          fi
 
           # Capture logcat during test execution — critical for diagnosing hangs
           adb logcat -c
