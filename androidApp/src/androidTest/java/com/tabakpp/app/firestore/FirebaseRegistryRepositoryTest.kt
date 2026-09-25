@@ -18,6 +18,7 @@ import dev.gitlive.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlin.test.assertEquals
@@ -137,8 +138,31 @@ class FirebaseRegistryRepositoryTest {
         return if (snap.exists) snap.data<DayDocument>() else null
     }
 
+    private suspend fun <T> withRetry(
+        maxRetries: Int = 3,
+        delayMs: Long = 1000,
+        block: suspend () -> T
+    ): T {
+        var lastException: Exception? = null
+        repeat(maxRetries) { attempt ->
+            try {
+                return block()
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < maxRetries - 1) {
+                    Log.d(TAG, "Retry $attempt/$maxRetries for getCounts: ${e.message}")
+                    delay(delayMs)
+                }
+            }
+        }
+        throw lastException!!
+    }
+
     private suspend fun getCounts(uid: String, date: String): Double =
         getDay(uid, date)?.counts?.get(TEST_TRACKER_ID) ?: 0.0
+
+    private suspend fun getCountsRetry(uid: String, date: String): Double =
+        withRetry { getCounts(uid, date) }
 
     // ============================================================
     // TEST A — New Day Lifecycle (production repository, real Firestore)
@@ -227,7 +251,7 @@ class FirebaseRegistryRepositoryTest {
             repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
         }
 
-        assertEquals(5.0, getCounts(uid, TEST_DATE), 0.001,
+        assertEquals(5.0, getCountsRetry(uid, TEST_DATE), 0.001,
             "Seed count should be 5")
 
         val results = coroutineScope {
@@ -254,7 +278,7 @@ class FirebaseRegistryRepositoryTest {
             "$failures failed, $abortedFailures ABORTED")
         results.forEach { r -> Log.d(TAG, "  $r") }
 
-        val actualCount = getCounts(uid, TEST_DATE)
+        val actualCount = getCountsRetry(uid, TEST_DATE)
         Log.d(TAG, "Final count: $actualCount (expected: ${5.0 + expectedFinal}, successes: $successes)")
 
         // Under concurrent load, Firestore transactions can abort after exhausting
