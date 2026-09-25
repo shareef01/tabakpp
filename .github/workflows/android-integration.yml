@@ -109,7 +109,7 @@ jobs:
           # Start Firebase emulators in the background
           firebase emulators:start --config firebase.json --only firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
           FIREBASE_PID=$!
-          trap 'kill $FIREBASE_PID 2>/dev/null; pkill -f "firebase.*emulator" 2>/dev/null; pkill -f cloud-firestore 2>/dev/null; pkill -f "adb.*logcat" 2>/dev/null' EXIT
+          trap 'kill "$FIREBASE_PID" 2>/dev/null || true; pkill -f cloud-firestore 2>/dev/null || true; kill "$LOGCAT_PID" 2>/dev/null || true' EXIT
 
           # Wait for Firestore emulator readiness (30 retries × 2s = 60s max)
           for i in $(seq 1 30); do
@@ -176,6 +176,7 @@ jobs:
           fi
 
           echo "Instrumentation tests passed"
+          exit 0
           SCRIPT
           chmod +x ci-run-tests.sh
 
