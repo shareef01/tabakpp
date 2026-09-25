@@ -114,6 +114,9 @@ jobs:
           # including the emulator's network bridge.
           cat > firebase.ci.json <<'JSON'
           {
+            "firestore": {
+              "rules": "firestore.rules"
+            },
             "emulators": {
               "firestore": { "port": 8080, "host": "0.0.0.0" },
               "auth": { "port": 9099, "host": "0.0.0.0" },
@@ -167,7 +170,9 @@ jobs:
           # after sys.boot_completed, causing ENETUNREACH on Firestore/Auth.
           EMULATOR_NET_OK=0
           for i in $(seq 1 15); do
-            if adb shell "nc -z -w2 10.0.2.2 8080" 2>/dev/null; then
+            # Use ping (toybox) instead of nc — nc is not installed on the Android
+            # emulator image, causing false-negative network check results.
+            if adb shell "ping -c1 -W2 10.0.2.2" 2>/dev/null; then
               EMULATOR_NET_OK=1
               echo "Emulator network to Firestore emulator: OK"
               break
