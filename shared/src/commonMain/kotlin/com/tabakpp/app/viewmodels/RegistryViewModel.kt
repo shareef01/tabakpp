@@ -108,10 +108,16 @@ class RegistryViewModel(
     )
 
     private val _activeCounts = MutableStateFlow<Map<String, Double>>(emptyMap())
-    val activeCounts: StateFlow<Map<String, Double>> = _activeCounts.asStateFlow()
+    val activeCounts = _activeCounts.asStateFlow()
     private var latestServerCounts: Map<String, Double> = emptyMap()
     private val pendingOps = mutableListOf<PendingOp>()
     private var opSequence: Long = 0L
+
+    // Serialize counter-write transactions so rapid taps cannot fire
+    // concurrent Firestore `runTransaction` calls on the same `days/{date}`
+    // document (which abort one another and surface as "Could not save that
+    // change"). Each increment/decrement must wait for the previous to land.
+    private val counterWriteMutex = Mutex()
 
     private fun nextOpId(): String =
         "${Clock.System.now().toEpochMilliseconds()}_${++opSequence}"
@@ -380,16 +386,18 @@ class RegistryViewModel(
         publishCounterOverlay()
 
         viewModelScope.launch {
-            try {
-                registryRepository.updateLiveCounter(uid, trackerId, 1.0, trackingDate, price)
-                op.settled = true
-                purgeAcknowledgedOrCanceledOps()
-                publishCounterOverlay()
-                onSuccess()
-            } catch (e: Exception) {
-                pendingOps.removeAll { it.id == op.id }
-                publishCounterOverlay()
-                setError(e, "Could not save that change. Your count was restored.")
+            counterWriteMutex.withLock {
+                try {
+                    registryRepository.updateLiveCounter(uid, trackerId, 1.0, trackingDate, price)
+                    op.settled = true
+                    purgeAcknowledgedOrCanceledOps()
+                    publishCounterOverlay()
+                    onSuccess()
+                } catch (e: Exception) {
+                    pendingOps.removeAll { it.id == op.id }
+                    publishCounterOverlay()
+                    setError(e, "Could not save that change. Your count was restored.")
+                }
             }
         }
     }
@@ -427,15 +435,17 @@ class RegistryViewModel(
         publishCounterOverlay()
 
         viewModelScope.launch {
-            try {
-                registryRepository.updateLiveCounter(uid, trackerId, -1.0, trackingDate, price)
-                op.settled = true
-                purgeAcknowledgedOrCanceledOps()
-                publishCounterOverlay()
-            } catch (e: Exception) {
-                pendingOps.removeAll { it.id == op.id }
-                publishCounterOverlay()
-                setError(e, "Could not save that change. Your count was restored.")
+            counterWriteMutex.withLock {
+                try {
+                    registryRepository.updateLiveCounter(uid, trackerId, -1.0, trackingDate, price)
+                    op.settled = true
+                    purgeAcknowledgedOrCanceledOps()
+                    publishCounterOverlay()
+                } catch (e: Exception) {
+                    pendingOps.removeAll { it.id == op.id }
+                    publishCounterOverlay()
+                    setError(e, "Could not save that change. Your count was restored.")
+                }
             }
         }
     }
@@ -457,7 +467,14 @@ class RegistryViewModel(
         viewModelScope.launch {
             _endingDay.value = true
             try {
-                registryRepository.closeDay(uid, td)
+                // Wait for any in-flight counter writes to settle so the
+                // server-side day document reflects all local increments
+                // before closeDay evaluates hasOpenSession(day.counts).
+                // Without this, a pending increment causes closeDay to
+                // read stale server counts (still 0) and throw NOTHING_TO_ARCHIVE.
+                counterWriteMutex.withLock {
+                    registryRepository.closeDay(uid, td)
+                }
                 _endDayResult.emit(true)
             } catch (e: Exception) {
                 setError(e, "Could not close the tracking day. Try again.")

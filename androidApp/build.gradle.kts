@@ -84,6 +84,8 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = resolvedVersionCode
         versionName = resolvedVersionName
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     packaging {
         resources {
@@ -110,15 +112,26 @@ android {
             )
             signingConfig = signingConfigs.findByName("release")
         }
+        getByName("debug") {
+            // testInstrumentationRunner is configured in defaultConfig
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
     lint {
         abortOnError = true
         checkReleaseBuilds = true
         warningsAsErrors = false
+    }
+    sourceSets {
+        getByName("androidTest") {
+            manifest.srcFile("src/androidTest/AndroidManifest.xml")
+        }
     }
 }
 
@@ -138,4 +151,33 @@ dependencies {
     implementation(libs.koin.android)
     implementation(libs.androidx.core.splashscreen)
     testImplementation(kotlin("test"))
+
+    // Android instrumentation test dependencies
+    androidTestImplementation(platform(libs.firebase.bom))
+    androidTestImplementation(libs.firebase.gitlive.firestore)
+    androidTestImplementation(libs.firebase.gitlive.auth)
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation("androidx.test:runner:1.6.1")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1") {
+        exclude(group = "org.hamcrest", module = "hamcrest-core")
+    }
+    androidTestImplementation(kotlin("test"))
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation("com.google.firebase:firebase-firestore")
+    androidTestImplementation("com.google.firebase:firebase-auth")
+    androidTestImplementation("androidx.test.ext:truth:1.6.0")
+    androidTestImplementation("org.hamcrest:hamcrest:2.2") {
+        because("Needed for assertThat matchers in Firestore assertions")
+    }
+}
+
+// Exclude hamcrest-core (1.3) from androidTest configs because hamcrest:2.2
+// provides the same classes in an incompatible package layout.
+// hamcrest-core comes transitively from junit:4.13.2 (via kotlin("test") and
+// androidx.test.ext:junit). We want hamcrest:2.2 exclusively.
+configurations.configureEach {
+    if (name.contains("androidTest")) {
+        exclude(group = "org.hamcrest", module = "hamcrest-core")
+    }
 }

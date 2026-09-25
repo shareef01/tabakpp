@@ -10,6 +10,7 @@
 .cxx
 google-services.json
 GoogleService-Info.plist
+settings-gradle.lockfile
 .kotlin
 .idea-modules
 node_modules/
