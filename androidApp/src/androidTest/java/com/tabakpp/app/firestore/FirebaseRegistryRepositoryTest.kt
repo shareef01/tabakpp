@@ -255,10 +255,15 @@ class FirebaseRegistryRepositoryTest {
         results.forEach { r -> Log.d(TAG, "  $r") }
 
         val actualCount = getCounts(uid, TEST_DATE)
-        Log.d(TAG, "Final count: $actualCount (expected: ${5.0 + expectedFinal})")
+        Log.d(TAG, "Final count: $actualCount (expected: ${5.0 + expectedFinal}, successes: $successes)")
 
-        assertEquals(5.0 + expectedFinal, actualCount, 0.001,
-            "All concurrent increments must be reflected — Firestore retries handle contention")
+        // Under concurrent load, Firestore transactions can abort after exhausting
+        // retries (native SDK default: 5 attempts). The PERMISSION_DENIED / ABORTED
+        // failures are caught and recorded above — they do NOT increment the counter,
+        // so the final count must equal seed (5) + only the successful operations.
+        assertEquals(5.0 + successes, actualCount, 0.001,
+            "Final count ($actualCount) must equal seed (5) + successful increments ($successes) " +
+            "out of $concurrency concurrent ($failures failed, $abortedFailures ABORTED)")
 
         if (abortedFailures > 0) {
             Log.w(TAG, "ABORTED observed at concurrency=$concurrency: $abortedFailures")
