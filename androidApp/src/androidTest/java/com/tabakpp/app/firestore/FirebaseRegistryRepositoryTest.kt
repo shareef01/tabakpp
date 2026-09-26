@@ -38,8 +38,8 @@ import org.junit.runner.RunWith
  * path against the Firestore emulator (demo-tabakpp-test).
  *
  * Emulator endpoints:
- *   - Firestore: 10.0.2.2:8080
- *   - Auth:      10.0.2.2:9099
+ *   - Firestore: 127.0.0.1:8080 (adb reverse from host 0.0.0.0:8080)
+ *   - Auth:      127.0.0.1:9099 (adb reverse from host 0.0.0.0:9099)
  * Project ID: demo-tabakpp-test
  * Auth mode: Anonymous sign-in via Auth emulator
  */

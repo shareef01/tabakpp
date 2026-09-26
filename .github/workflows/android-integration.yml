@@ -164,17 +164,21 @@ jobs:
           # after sys.boot_completed (services like 'package' can lag behind)
           sleep 15
 
-          # Verify emulator can actually reach host's Firebase emulators via
-          # 10.0.2.2 (the Android emulator's loopback alias). On some CI runners,
-          # the emulator's network bridge or IPv6 routing is not ready even
-          # after sys.boot_completed, causing ENETUNREACH on Firestore/Auth.
+          # Forward emulator's 127.0.0.1 to host's localhost for the Firebase
+          # emulator ports. The emulator's 10.0.2.2 loopback alias has unreliable
+          # IPv6 routing on CI runners — sockets source from :: (IPv6), causing
+          # ENETUNREACH. java.net.preferIPv4Stack set at runtime does NOT fix this
+          # because the JVM caches the IPv6 preference at process start. Using
+          # adb reverse routes through 127.0.0.1 (IPv4-only loopback) instead.
+          adb reverse tcp:8080 tcp:8080
+          adb reverse tcp:9099 tcp:9099
+
+          # Verify emulator can reach host's Firebase emulators via adb reverse.
           EMULATOR_NET_OK=0
           for i in $(seq 1 15); do
-            # Use ping (toybox) instead of nc — nc is not installed on the Android
-            # emulator image, causing false-negative network check results.
-            if adb shell "ping -c1 -W2 10.0.2.2" 2>/dev/null; then
+            if adb shell "ping -c1 -W2 127.0.0.1" 2>/dev/null; then
               EMULATOR_NET_OK=1
-              echo "Emulator network to Firestore emulator: OK"
+              echo "Emulator network to Firebase emulators: OK (via adb reverse)"
               break
             fi
             echo "Waiting for emulator network connectivity ($i/15)..."
