@@ -9,5 +9,7 @@ export default defineConfig({
     fileParallelism: false,
     hookTimeout: 60_000,
     testTimeout: 30_000,
+    // JUnit XML output for CI artifact collection — output dir is gitignored.
+    reporters: ['default', ['junit', { outputFile: 'test-results/results.xml' }]],
   },
 });

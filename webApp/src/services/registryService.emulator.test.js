@@ -347,4 +347,81 @@ describe('RegistryService against the real SDK and rules', () => {
     const snap = await getDoc(doc(holder.db, 'users', UID, 'meta', 'profile'));
     expect(snap.data().avatar).toBe('data:short');
   });
+
+  it('full lifecycle: new day → first counter write → second write → rapid concurrent → End Day → restart', async () => {
+    await seed();
+    const date = '2026-07-30';
+
+    // 1. Ensure day doc does NOT exist
+    expect(await dayDoc(date)).toBeUndefined();
+
+    // 2. First increment from zero (new-day creation path: set() with serverTimestamp)
+    await RegistryService.adjustCounter(UID, 'cig', 1, date, 0.5);
+    const day1 = await dayDoc(date);
+    expect(day1.counts).toEqual({ cig: 1 });
+    expect(day1.status).toBe('open');
+    // createdAt and updatedAt must be REAL timestamps, not null/missing.
+    // Firestore serverTimestamp() resolves to a Timestamp object.
+    expect(day1.createdAt).toBeDefined();
+    expect(day1.updatedAt).toBeDefined();
+
+    // 3. Second increment (existing-day path: update())
+    await RegistryService.adjustCounter(UID, 'cig', 1, date, 0.5);
+    const day2 = await dayDoc(date);
+    expect(day2.counts).toEqual({ cig: 2 });
+    expect(day2.createdAt.seconds).toBe(day1.createdAt.seconds); // createdAt unchanged
+
+    // 4. Rapid concurrent increments (10 in parallel) — must all succeed
+    await Promise.all(
+      Array.from({ length: 10 }, () => RegistryService.adjustCounter(UID, 'cig', 1, date, 0.5))
+    );
+    const day3 = await dayDoc(date);
+    expect(day3.counts.cig).toBe(12); // 2 + 10
+
+    // 5. End Day
+    await RegistryService.closeDay(UID, date);
+    const day4 = await dayDoc(date);
+    expect(day4.status).toBe('closed');
+    expect(day4.closedAt).toBeDefined();
+    expect(day4.closedAt.seconds).toBeDefined();
+    expect(day4.foldedIntoLifetime).toBe(true);
+    // 12 smoked @€1.00, limit 10 → 10 saved, 12 wasted
+    expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(12);
+    expect((await profile()).lifetimeAggregates.saved).toBeCloseTo(0);
+
+    // 6. Restart = clear and reload (simulates app restart)
+    expect(await dayDoc(date)).toMatchObject({ counts: { cig: 12 } });
+  });
+
+  it('rapid concurrent increments do not throw ABORTED errors', async () => {
+    await seed();
+    const date = '2026-07-30';
+
+    // Seed an existing open day with count 5
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users', UID, 'days', date), {
+        date,
+        counts: { cig: 5 },
+        trackerSnapshots: {
+          cig: { target: 10, unitPrice: 1, baseline: 15, type: 'CIGARETTE', order: 0, name: 'Cigarettes', isFinanciallyTracked: true, isPrimaryTracked: true, purchaseType: 'PACK', pouchPrice: 0, estimatedYield: 0, remaining: 10 }
+        },
+        aggregateCredit: { saved: 0, wasted: 5, smokingUnits: 5, baselineSaved: 15 },
+        status: 'open',
+        foldedIntoLifetime: false,
+        legacyMigrationApplied: true,
+        createdAt: { _seconds: 1750000000, _nanos: 0 },
+        updatedAt: { _seconds: 1750000000, _nanos: 0 },
+      });
+    });
+
+    // Rapid concurrent increments — the web SDK serializes these in the
+    // Firestore transaction, so no ABORTED error should be thrown.
+    const results = await Promise.allSettled(
+      Array.from({ length: 10 }, (_, i) => RegistryService.adjustCounter(UID, 'cig', 1, date, 0.5))
+    );
+    const failed = results.filter((r) => r.status === 'rejected');
+    expect(failed).toHaveLength(0);
+    const day = await dayDoc(date);
+    expect(day.counts.cig).toBe(15); // 5 + 10
+  });
 });

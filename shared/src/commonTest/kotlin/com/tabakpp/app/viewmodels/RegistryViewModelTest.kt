@@ -730,12 +730,109 @@ class RegistryViewModelTest {
     fun addTracker_knownOffline_isAllowedAsLocalPendingWrite() {
         val (vm, reg, net) = build()
         net.goOffline()
-
         vm.addTracker(TrackerConfig(id = "", name = "Cigarettes", limit = 10, order = 0))
         scheduler.runCurrent()
-
         assertEquals(1, reg.addConfigCalls.size)
-        // No error because plain writes are queued locally
+        assertNull(vm.error.value)
+    }
+
+    // --- Counter write serialization (rapid taps cannot fire concurrent transactions) --
+
+    @Test
+    fun rapidIncrements_withGate_serializeWritesInOrder() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+
+        // First increment stays in flight (gate not yet completed)
+        reg.liveCounterGate = CompletableDeferred()
+        vm.increment("cig")
+        scheduler.runCurrent()
+        // First increment is in flight (blocked on gate) — call not yet recorded
+        assertEquals(0, reg.liveCounterCalls.size)
+        assertEquals(1.0, vm.activeCounts.value["cig"]) // optimistic
+
+        // Second increment is called while the first write is still pending.
+        // Because counterWriteMutex serializes writes, the second write
+        // coroutine cannot start until the first completes.
+        vm.increment("cig")
+        scheduler.runCurrent()
+        // Second write is queued behind mutex — still not recorded
+        assertEquals(0, reg.liveCounterCalls.size)
+        assertEquals(2.0, vm.activeCounts.value["cig"]) // both pending optimistically
+
+        reg.liveCounterGate!!.complete(Unit)
+        scheduler.runCurrent()
+        // Both increments completed: first released the mutex, second acquired it
+        assertEquals(2, reg.liveCounterCalls.size)
+        assertEquals(2.0, vm.activeCounts.value["cig"])
+    }
+
+    @Test
+    fun endDay_waitsForPendingWritesBeforeClosing() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+
+        // Start an increment that stays in flight
+        reg.liveCounterGate = CompletableDeferred()
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1.0, vm.activeCounts.value["cig"]) // optimistic
+
+        // Start endDay while the increment is still in flight
+        val closeDayGate = CompletableDeferred<Unit>()
+        reg.closeDayGate = closeDayGate
+        vm.endDay()
+        scheduler.runCurrent()
+
+        // closeDay must NOT have been called yet — it's blocked on the counterWriteMutex
+        // held by the in-flight increment
+        assertTrue(vm.endingDay.value) // end-day spinner is showing (waiting for lock)
+        assertEquals(0, reg.closeDayCalls.size)
+
+        // Complete the increment — this releases the mutex, allowing endDay
+        // to acquire it and call closeDay
+        reg.liveCounterGate!!.complete(Unit)
+        scheduler.runCurrent()
+
+        // closeDay is now in flight (suspended on its gate)
+        assertEquals(0, reg.closeDayCalls.size) // not yet recorded — gate not completed
+        assertTrue(vm.endingDay.value)
+
+        // Complete closeDay
+        closeDayGate.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(1, reg.closeDayCalls.size)
+        assertFalse(vm.endingDay.value)
+    }
+
+    @Test
+    fun concurrentIncrementAndEndDay_doitNotDoubleCount() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 3.0))
+        scheduler.runCurrent()
+        assertEquals(3.0, vm.activeCounts.value["cig"])
+
+        reg.liveCounterGate = CompletableDeferred()
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(4.0, vm.activeCounts.value["cig"]) // optimistic
+
+        // Trigger endDay while increment is in flight
+        vm.endDay()
+        scheduler.runCurrent()
+
+        // Increment write completes
+        reg.liveCounterGate!!.complete(Unit)
+        scheduler.runCurrent()
+        // closeDay should have been called (after mutex released)
+        assertEquals(1, reg.closeDayCalls.size)
+
+        // Server confirms the increment
+        reg.dayFlow.value = DayDocument(date = vm.trackingDay.value, counts = mapOf("cig" to 4.0))
+        scheduler.runCurrent()
+        assertEquals(4.0, vm.activeCounts.value["cig"])
         assertNull(vm.error.value)
     }
 }
