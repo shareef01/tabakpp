@@ -96,14 +96,22 @@ class FirebaseRegistryRepositoryTest {
 
             repository = FirebaseRegistryRepository(firestore)
 
+            // Retry sign-in to handle Auth emulator cold-start delay.
             var uid: String? = null
-            try {
-                val authResult = withTimeout(30000) { Firebase.auth.signInAnonymously() }
-                uid = authResult.user?.uid
-                Log.d(TAG, "Signed in as: $uid")
-            } catch (e: Exception) {
-                uid = Firebase.auth.currentUser?.uid
-                Log.w(TAG, "signInAnonymously failed (30s timeout): ${e.message}")
+            val maxRetries = 3
+            for (attempt in 1..maxRetries) {
+                try {
+                    val authResult = withTimeout(15000) { Firebase.auth.signInAnonymously() }
+                    uid = authResult.user?.uid
+                    Log.d(TAG, "Signed in as: $uid (attempt $attempt/$maxRetries)")
+                    break
+                } catch (e: Exception) {
+                    uid = Firebase.auth.currentUser?.uid
+                    Log.w(TAG, "signInAnonymously failed (attempt $attempt/$maxRetries, 15s timeout): ${e.message}")
+                    if (attempt < maxRetries) {
+                        delay(3000)
+                    }
+                }
             }
 
             if (uid.isNullOrEmpty()) uid = TEST_UID
