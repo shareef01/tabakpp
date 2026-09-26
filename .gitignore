@@ -44,3 +44,9 @@ appcheck.txt
 .firebase/
 *.pyc
 __pycache__/
+
+# Local repro artifacts for rules investigation — keep locally, never commit
+*.rules.old.repro
+*.rules.repro.test.js
+# CI-only Firebase emulator config (created on-the-fly by workflow)
+firebase.ci.json
