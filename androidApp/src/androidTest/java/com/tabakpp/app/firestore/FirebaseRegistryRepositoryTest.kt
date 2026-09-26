@@ -22,6 +22,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.android.gms.tasks.Tasks
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -96,18 +99,39 @@ class FirebaseRegistryRepositoryTest {
 
             repository = FirebaseRegistryRepository(firestore)
 
+            // Pre-fetch App Check token to cache DNS failure for
+            // firebaseappcheck.googleapis.com (unreachable from CI emulator).
+            // Without this, each signInAnonymously attempt triggers a ~8s
+            // DNS timeout before falling back to a placeholder token.
+            // The App Check SDK caches the token after the first request,
+            // so subsequent sign-in calls reuse the cached value.
+            try {
+                Tasks.await(
+                    FirebaseAppCheck.getInstance().getToken(true),
+                    15, TimeUnit.SECONDS
+                )
+            } catch (e: Exception) {
+                Log.d(TAG, "App Check token pre-fetch failed (expected in CI): ${e.message}")
+            }
+
             // Retry sign-in to handle Auth emulator cold-start delay.
+            // The first attempt uses a 30s timeout to accommodate:
+            //   - First-time Auth SDK class loading (~10-15s bytecode verification)
+            //   - App Check placeholder token usage (cached after pre-fetch above)
+            //   - Initial token signing on the emulator (~5-10s)
+            // Subsequent attempts use 15s (classes + DNS already cached).
             var uid: String? = null
             val maxRetries = 3
             for (attempt in 1..maxRetries) {
+                val timeoutMs = if (attempt == 1) 30000L else 15000L
                 try {
-                    val authResult = withTimeout(15000) { Firebase.auth.signInAnonymously() }
+                    val authResult = withTimeout(timeoutMs) { Firebase.auth.signInAnonymously() }
                     uid = authResult.user?.uid
                     Log.d(TAG, "Signed in as: $uid (attempt $attempt/$maxRetries)")
                     break
                 } catch (e: Exception) {
                     uid = Firebase.auth.currentUser?.uid
-                    Log.w(TAG, "signInAnonymously failed (attempt $attempt/$maxRetries, 15s timeout): ${e.message}")
+                    Log.w(TAG, "signInAnonymously failed (attempt $attempt/$maxRetries, ${timeoutMs}ms timeout): ${e.message}")
                     if (attempt < maxRetries) {
                         delay(3000)
                     }
