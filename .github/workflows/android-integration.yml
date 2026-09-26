@@ -188,6 +188,18 @@ jobs:
             echo "::warning::Emulator cannot reach 10.0.2.2:8080 after 30s — tests may fail with ENETUNREACH"
           fi
 
+          # Warm up the Auth emulator's sign-in endpoint. The first
+          # signInAnonymously request to a freshly-started Auth emulator can
+          # take >30s while it initializes token-signing infrastructure on
+          # cold start. Pre-warming with a direct API call ensures the
+          # emulator is fully ready before the test suite's first @Before
+          # setup() runs. Using --max-time 90 to allow for the cold start.
+          echo "Warming up Firebase Auth emulator (sign-in cold start)..."
+          curl --max-time 90 -s -X POST "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInAnonymously?key=test" \
+            -H "Content-Type: application/json" \
+            -d '{"returnSecureToken": true}' > /dev/null 2>&1 || true
+          echo "Auth emulator warm-up complete"
+
           # Capture logcat during test execution — critical for diagnosing hangs
           adb logcat -c
           ( adb logcat -v threadtime > test-logcat.log 2>&1 ) &
