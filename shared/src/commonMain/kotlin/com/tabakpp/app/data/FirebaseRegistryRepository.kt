@@ -236,23 +236,63 @@ class FirebaseRegistryRepository(
             val trackerSnapshots = (existing?.trackerSnapshots ?: emptyMap()) +
                 (trackerId to SmokingCalculator.buildTrackerSnapshot(config))
             val credit = SmokingCalculator.computeDayCredit(counts, trackerSnapshots, defaultUnitPrice)
-            val now = nowTimestamp()
 
-            set(
-                dayRef,
-                DayDocument(
+            // Match the web RegistryService.adjustCounter: use update() for
+            // existing docs (field-level patch only) and set() for new docs.
+            //
+            // CRITICAL (item 4): Timestamp.ServerTimestamp cannot survive
+            // @Serializable data class round-tripping through
+            // BaseTimestampOrLongSerializer — it is serialized as null (see
+            // GitLive issue #666). So new-day creation uses set() with concrete
+            // now() timestamps, then updateFields to overwrite createdAt/updatedAt
+            // with server sentinels in the same transaction. This matches the
+            // web code's `transaction.set(dayRef, { ...payload, createdAt:
+            // serverTimestamp() })` pattern where serverTimestamp() is a native
+            // Firestore sentinel that stays intact through the JS SDK's
+            // serialization path.
+            val serverTs = Timestamp.ServerTimestamp as BaseTimestamp
+            val now = nowTimestamp()
+            if (existing == null) {
+                // New day: use set() to create the document.
+                //
+                // CRITICAL (item 4): Timestamp.ServerTimestamp cannot survive
+                // @Serializable data class round-tripping through
+                // BaseTimestampOrLongSerializer — it is serialized as null (see
+                // GitLive issue #666). So we create the doc with a concrete
+                // client-side now() for createdAt, then immediately overwrite
+                // BOTH createdAt and updatedAt with server sentinels via
+                // updateFields in the same transaction. This matches the web
+                // code's `transaction.set(dayRef, { ...payload, createdAt:
+                // serverTimestamp() })` pattern, where serverTimestamp() is a
+                // native Firestore sentinel that survives the JS SDK's
+                // serialization path intact.
+                set(dayRef, DayDocument(
                     date = trackingDate,
                     counts = counts,
                     trackerSnapshots = trackerSnapshots,
                     aggregateCredit = credit,
                     status = "open",
-                    foldedIntoLifetime = existing?.foldedIntoLifetime ?: false,
-                    legacyMigrationApplied = existing?.legacyMigrationApplied ?: false,
-                    createdAt = existing?.createdAt ?: now,
+                    foldedIntoLifetime = false,
+                    legacyMigrationApplied = false,
+                    createdAt = now,
                     updatedAt = now,
-                    closedAt = existing?.closedAt
-                )
-            )
+                    closedAt = null
+                ))
+                // Overwrite createdAt + updatedAt with real server sentinels.
+                // updateFields passes them through the native FieldValue path,
+                // not through @Serializable, so the sentinel is preserved.
+                updateFields(dayRef) {
+                    "createdAt" to serverTs
+                    "updatedAt" to serverTs
+                }
+            } else {
+                updateFields(dayRef) {
+                    "counts" to counts
+                    "trackerSnapshots" to trackerSnapshots
+                    "aggregateCredit" to credit
+                    "updatedAt" to serverTs
+                }
+            }
         }
     }
 
@@ -268,7 +308,10 @@ class FirebaseRegistryRepository(
 
             if (day.foldedIntoLifetime) {
                 if (day.status != "closed") {
-                    set(dayRef, day.copy(status = "closed", closedAt = nowTimestamp()))
+                    updateFields(dayRef) {
+                        "status" to "closed"
+                        "closedAt" to (Timestamp.ServerTimestamp as BaseTimestamp)
+                    }
                 }
                 return@runTransaction
             }
@@ -277,7 +320,11 @@ class FirebaseRegistryRepository(
             val profile = if (userSnap.exists) userSnap.data<UserProfile>() else UserProfile()
             val credit = day.aggregateCredit ?: LifetimeAggregates()
 
-            set(dayRef, day.copy(status = "closed", foldedIntoLifetime = true, closedAt = nowTimestamp()))
+            updateFields(dayRef) {
+                "status" to "closed"
+                "foldedIntoLifetime" to true
+                "closedAt" to (Timestamp.ServerTimestamp as BaseTimestamp)
+            }
             updateFields(userRef) {
                 "lifetimeAggregates.saved" to (profile.lifetimeAggregates.saved + credit.saved)
                 "lifetimeAggregates.wasted" to (profile.lifetimeAggregates.wasted + credit.wasted)
@@ -335,7 +382,11 @@ class FirebaseRegistryRepository(
                 }
             }
 
-            set(dayRef, day.copy(counts = mergedCounts, aggregateCredit = newCredit, updatedAt = nowTimestamp()))
+            updateFields(dayRef) {
+                "counts" to mergedCounts
+                "aggregateCredit" to newCredit
+                "updatedAt" to (Timestamp.ServerTimestamp as BaseTimestamp)
+            }
         }
     }
 
@@ -422,21 +473,36 @@ class FirebaseRegistryRepository(
                 configById[id]?.let { trackerSnapshots[id] = SmokingCalculator.buildTrackerSnapshot(it) }
             }
             val credit = SmokingCalculator.computeDayCredit(mergedCounts, trackerSnapshots)
-            val now = nowTimestamp()
 
-            set(
-                dayRef,
-                DayDocument(
+            val serverTs = Timestamp.ServerTimestamp as BaseTimestamp
+            val now = nowTimestamp()
+            if (existing == null) {
+                set(dayRef, DayDocument(
                     date = resolvedClaim.date,
                     counts = mergedCounts,
                     trackerSnapshots = trackerSnapshots,
                     aggregateCredit = credit,
                     status = "open",
                     legacyMigrationApplied = true,
-                    createdAt = existing?.createdAt ?: now,
-                    updatedAt = now
-                )
-            )
+                    foldedIntoLifetime = false,
+                    createdAt = now,
+                    updatedAt = now,
+                    closedAt = null
+                ))
+                // Overwrite createdAt + updatedAt with real server sentinels.
+                updateFields(dayRef) {
+                    "createdAt" to serverTs
+                    "updatedAt" to serverTs
+                }
+            } else {
+                updateFields(dayRef) {
+                    "counts" to mergedCounts
+                    "trackerSnapshots" to trackerSnapshots
+                    "aggregateCredit" to credit
+                    "legacyMigrationApplied" to true
+                    "updatedAt" to serverTs
+                }
+            }
             claimResolved = true
         }
 
@@ -676,7 +742,12 @@ class FirebaseRegistryRepository(
                         val counts = day.counts - configId
                         val trackerSnapshots = day.trackerSnapshots - configId
                         val credit = SmokingCalculator.computeDayCredit(counts, trackerSnapshots)
-                        set(dayRef, day.copy(counts = counts, trackerSnapshots = trackerSnapshots, aggregateCredit = credit, updatedAt = nowTimestamp()))
+                        updateFields(dayRef) {
+                            "counts" to counts
+                            "trackerSnapshots" to trackerSnapshots
+                            "aggregateCredit" to credit
+                            "updatedAt" to (Timestamp.ServerTimestamp as BaseTimestamp)
+                        }
                     }
                 }
             }
