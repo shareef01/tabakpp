@@ -16,9 +16,9 @@ import dev.gitlive.firebase.firestore.firestore
  * This class lives ONLY in the androidTest source set, so release/debug
  * builds never include it — it cannot accidentally touch production.
  *
- * Emulator endpoints (accessible from Android emulator via 10.0.2.2):
- *   - Firestore: 10.0.2.2:8080
- *   - Auth:      10.0.2.2:9099
+ * Emulator endpoints (via adb reverse 127.0.0.1:8080/9099 → host):
+ *   - Firestore: 127.0.0.1:8080
+ *   - Auth:      127.0.0.1:9099
  * Project ID: demo-tabakpp-test
  */
 class TestTabakApp : Application() {
@@ -26,9 +26,9 @@ class TestTabakApp : Application() {
     companion object {
         const val TAG = "TestTabakApp"
         const val TEST_UID = "test_instrumentation_uid"
-        const val FIRESTORE_EMULATOR_HOST = "10.0.2.2"
+        const val FIRESTORE_EMULATOR_HOST = "127.0.0.1"
         const val FIRESTORE_EMULATOR_PORT = 8080
-        const val AUTH_EMULATOR_HOST = "10.0.2.2"
+        const val AUTH_EMULATOR_HOST = "127.0.0.1"
         const val AUTH_EMULATOR_PORT = 9099
     }
 
