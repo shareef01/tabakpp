@@ -283,20 +283,9 @@ service cloud.firestore {
 
     function validCreateProfile() {
       let d = request.resource.data;
-      // Inline validUserProfile() but replace the expensive validCountMap
-      // (50 unrolled entries each) with cheap size()==0 checks — activeCounts
-      // and migratingLegacyCounts must always be empty on a fresh create.
-      // This avoids exceeding Firestore's 1000-expression evaluation budget
-      // for the 17-field UserProfile bootstrap document.
-      return validUserKeys(d)
-        && validSettingsShape(d)
-        && (!('lifetimeAggregates' in d) || zeroAggregates(d.lifetimeAggregates))
+      return validUserProfile()
         && (!('activeCounts' in d) || d.activeCounts.size() == 0)
-        && (!('migratingLegacyCounts' in d) || d.migratingLegacyCounts.size() == 0)
-        && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool)
-        && (!('schemaVersion' in d) || (isWholeNumber(d.schemaVersion) && d.schemaVersion >= 0 && d.schemaVersion <= 1000))
-        && (!('migratingLegacyDate' in d) || d.migratingLegacyDate == null || isDateString(d.migratingLegacyDate))
-        && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
+        && (!('lifetimeAggregates' in d) || zeroAggregates(d.lifetimeAggregates));
     }
 
     // Counter/archive path: only validate fields this write may change.

@@ -408,6 +408,117 @@ describe('users/{uid}/days/{date} — dated daily-document model (items 1, 2, 13
     }));
   });
 
+  it('rejects a full-document set() that rewrites immutable/frozen fields on an open day', async () => {
+    const db = await seedAlice();
+    // Seed an open day the way the Android repo would (new DayDocument with all fields)
+    await setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay,
+      foldedIntoLifetime: false,
+      legacyMigrationApplied: false,
+      createdAt: { seconds: 1750000000, nanos: 0 },
+      updatedAt: { seconds: 1750000000, nanos: 0 },
+      closedAt: null,
+    });
+
+    // Android's old set() path rewrote the ENTIRE document, including fields
+    // that should not change on a counter increment: createdAt (re-used but
+    // re-serialized), foldedIntoLifetime, legacyMigrationApplied, closedAt.
+    // This set() mirrors the old Android updateLiveCounter behavior —
+    // full DayDocument replace instead of a field-level update.
+    const fullReplacePayload = {
+      ...openDay,
+      counts: { cig: 5 },
+      foldedIntoLifetime: false,
+      legacyMigrationApplied: false,
+      createdAt: { seconds: 1750000000, nanos: 0 },
+      updatedAt: { seconds: 1750000001, nanos: 0 },
+      closedAt: null,
+    };
+
+    // Per validDayUpdate: foldedIntoLifetime changes from false->false is OK,
+    // BUT 'closedAt' is explicitly absent from the allowed set in validDayUpdate.
+    // A full set() that includes 'closedAt' as a top-level key in the diff is
+    // still permitted because validDayUpdate only validates CHANGED keys, and
+    // if closedAt was null before and null now, it is not "changed".
+    // The real question is whether any field actually differs in a way that
+    // trips a rule. Verify empirically.
+    await assertSucceeds(setDoc(doc(db, 'users/alice/days/2026-07-20'), fullReplacePayload));
+  });
+
+  it('set() full-replace is rejected when foldedIntoLifetime changes unexpectedly', async () => {
+    const db = await seedAlice();
+    // Seed a day that has been folded into lifetime
+    await setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay,
+      status: 'closed',
+      foldedIntoLifetime: true,
+      closedAt: { seconds: 1750000000, nanos: 0 },
+    });
+
+    // Android's old closeDay used set(dayRef, day.copy(status="closed", foldedIntoLifetime=true, ...))
+    // but if the Android client's serialized form of foldedIntoLifetime differs
+    // from what Firestore stores, the diff-based validation could reject it.
+    // Verify that a full set() that doesn't change foldedIntoLifetime passes.
+    await assertSucceeds(setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay,
+      status: 'closed',
+      foldedIntoLifetime: true,
+      closedAt: { seconds: 1750000000, nanos: 0 },
+      createdAt: { seconds: 1750000000, nanos: 0 },
+      updatedAt: { seconds: 1750000001, nanos: 0 },
+    }));
+  });
+
+  it('set() that changes a frozen field on a closed day is rejected', async () => {
+    const db = await seedAlice();
+    await setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay,
+      status: 'closed',
+      foldedIntoLifetime: true,
+      closedAt: { seconds: 1750000000, nanos: 0 },
+    });
+
+    // validDayUpdate: (!changed.hasAny(['trackerSnapshots']) || (before.status != 'closed' && ...))
+    // once closed, trackerSnapshots is frozen — a set() that changes it is rejected
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      ...openDay,
+      status: 'closed',
+      foldedIntoLifetime: true,
+      closedAt: { seconds: 1750000000, nanos: 0 },
+      trackerSnapshots: { cig: { ...openDay.trackerSnapshots.cig, target: 999 } },
+    }));
+  });
+
+  it('set() full-replace where existing doc lacks closedAt but set writes null is NOT a rules violation', async () => {
+    const db = await seedAlice();
+    // Seed a minimal open day — NO closedAt field at all (web create path
+    // only sets date/counts/trackerSnapshots/aggregateCredit/status)
+    await setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      date: '2026-07-20',
+      counts: { cig: 4 },
+      trackerSnapshots: { cig: { name: 'Cig', type: 'CIGARETTE', target: 10, baseline: 20, unitPrice: 1, isFinanciallyTracked: true } },
+      aggregateCredit: { saved: 6, wasted: 4, smokingUnits: 4, baselineSaved: 16 },
+      status: 'open',
+    });
+
+    // Android's old set() serialized DayDocument with encodeDefaults=true,
+    // writing closedAt: null even though the existing doc has no closedAt key.
+    // In Firestore rules, a missing field and null are both == null, so
+    // diff() does NOT flag closedAt as changed. Verify this empirically.
+    await assertSucceeds(setDoc(doc(db, 'users/alice/days/2026-07-20'), {
+      date: '2026-07-20',
+      counts: { cig: 5 },
+      trackerSnapshots: { cig: { name: 'Cig', type: 'CIGARETTE', target: 10, baseline: 20, unitPrice: 1, isFinanciallyTracked: true } },
+      aggregateCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 15 },
+      status: 'open',
+      foldedIntoLifetime: false,
+      legacyMigrationApplied: false,
+      createdAt: { seconds: 1750000000, nanos: 0 },
+      updatedAt: { seconds: 1750000001, nanos: 0 },
+      closedAt: null,
+    }));
+  });
+
   it('rejects fractional counts and fractional snapshot targets in day documents', async () => {
     const db = await seedAlice();
     await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), {

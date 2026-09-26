@@ -1,0 +1,261 @@
+name: Android Instrumentation Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Java
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Setup Node.js (for Firebase CLI + web tests)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.23.2"
+          cache: npm
+          cache-dependency-path: webApp/package-lock.json
+
+      - name: Pin npm to canonical version
+        run: npm install -g npm@10.9.8
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools@15.24.0
+
+      - name: Install web dependencies
+        working-directory: webApp
+        run: npm ci
+
+      # --- Web emulator tests (rules + emulator-backed service tests) ---
+      # `npm run test:rules` uses `firebase emulators:exec` (self-contained:
+      # starts Firestore, runs vitest.rules.config.js, then shuts down).
+      # vitest.rules.config.js includes *.rules.test.js (35 cases) and
+      # *.emulator.test.js (22 + 2 = 24 cases), for 59 total.
+      - name: Run Firestore rules and emulator-backed Web tests
+        working-directory: webApp
+        run: |
+          npm run test:rules
+
+      # --- Android instrumentation tests ---
+      # google-services.json is required by the com.google.gms.google-services
+      # plugin (applied via gradle/libs.versions.toml). It must live in the
+      # `debug` source set (NOT androidTest), because processDebugGoogleServices
+      # only searches src/debug/, src/, and the project root.
+      - name: Create demo project google-services.json for Android test
+        run: |
+          mkdir -p androidApp/src/debug
+          cat > androidApp/src/debug/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "demo-tabakpp-test",
+              "storage_bucket": "demo-tabakpp-test.appspot.com"
+            },
+            "client": [{
+              "client_info": {
+                "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+                "android_client_info": { "package_name": "com.tabakpp.app" }
+              },
+              "api_key": [{ "current_key": "ci-test-only-not-a-real-api-key" }],
+              "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+            }],
+            "configuration_version": "1"
+          }
+          JSON
+
+      # Clear stale results from prior runs so artifacts reflect only this run's tests.
+      - name: Clear stale Android test results
+        run: rm -rf androidApp/build/outputs/androidTest-results/
+
+      # Pre-build the test APKs BEFORE booting the emulator. The Gradle build
+      # (Kotlin compile + dex) is CPU-intensive and running it concurrently
+      # with the Android emulator causes the emulator to crash
+      # ('cmd: Can't find service: package' / system_server restart).
+      # With APKs pre-built, connectedDebugAndroidTest skips straight to
+      # install + run, eliminating the build-vs-emulator resource contention.
+      - name: Pre-build test APKs
+        run: |
+          ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest \
+            --no-daemon \
+            --quiet
+      - name: Create instrumentation test script
+        run: |
+          cat > ci-run-tests.sh <<'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+
+          # Start Firebase emulators in the background.
+          # Create a CI-specific config that binds emulators to 0.0.0.0 instead
+          # of 127.0.0.1, because the Android emulator's 10.0.2.2 alias for the
+          # host loopback is intermittently unreachable on CI runners (ENETUNREACH).
+          # Binding to 0.0.0.0 makes emulators reachable via any interface,
+          # including the emulator's network bridge.
+          cat > firebase.ci.json <<'JSON'
+          {
+            "firestore": {
+              "rules": "firestore.rules"
+            },
+            "emulators": {
+              "firestore": { "port": 8080, "host": "0.0.0.0" },
+              "auth": { "port": 9099, "host": "0.0.0.0" },
+              "ui": { "enabled": false }
+            }
+          }
+          JSON
+          firebase emulators:start --config firebase.ci.json --only firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
+          FIREBASE_PID=$!
+          trap 'kill "$FIREBASE_PID" 2>/dev/null || true; pkill -f cloud-firestore 2>/dev/null || true; kill "$LOGCAT_PID" 2>/dev/null || true' EXIT
+
+          # Wait for Firestore emulator readiness (30 retries × 2s = 60s max)
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8080 > /dev/null 2>&1; then
+              echo "Firestore emulator is ready"
+              break
+            fi
+            sleep 2
+          done
+
+          # Wait for Auth emulator readiness (30 retries × 2s = 60s max)
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:9099 > /dev/null 2>&1; then
+              echo "Auth emulator is ready"
+              break
+            fi
+            sleep 2
+          done
+
+          # Fail fast if emulators never came up
+          if ! curl -s http://localhost:8080 > /dev/null 2>&1; then
+            echo "::error::Firestore emulator failed to start"
+            cat firebase-emulator.log
+            exit 1
+          fi
+          if ! curl -s http://localhost:9099 > /dev/null 2>&1; then
+            echo "::error::Auth emulator failed to start"
+            cat firebase-emulator.log
+            exit 1
+          fi
+
+          # Wait for the emulator to be fully ready (service manager online)
+          adb wait-for-device
+          # Give system_server additional time to finish starting all services
+          # after sys.boot_completed (services like 'package' can lag behind)
+          sleep 15
+
+          # Forward emulator's 127.0.0.1 to host's localhost for the Firebase
+          # emulator ports. The emulator's 10.0.2.2 loopback alias has unreliable
+          # IPv6 routing on CI runners — sockets source from :: (IPv6), causing
+          # ENETUNREACH. java.net.preferIPv4Stack set at runtime does NOT fix this
+          # because the JVM caches the IPv6 preference at process start. Using
+          # adb reverse routes through 127.0.0.1 (IPv4-only loopback) instead.
+          adb reverse tcp:8080 tcp:8080
+          adb reverse tcp:9099 tcp:9099
+
+          # Verify emulator can reach host's Firebase emulators via adb reverse.
+          EMULATOR_NET_OK=0
+          for i in $(seq 1 15); do
+            if adb shell "ping -c1 -W2 127.0.0.1" 2>/dev/null; then
+              EMULATOR_NET_OK=1
+              echo "Emulator network to Firebase emulators: OK (via adb reverse)"
+              break
+            fi
+            echo "Waiting for emulator network connectivity ($i/15)..."
+            sleep 2
+          done
+          if [ "$EMULATOR_NET_OK" -eq 0 ]; then
+            echo "::warning::Emulator cannot reach 10.0.2.2:8080 after 30s — tests may fail with ENETUNREACH"
+          fi
+
+          # Warm up the Auth emulator's sign-in endpoint. The first
+          # signInAnonymously request to a freshly-started Auth emulator can
+          # take >30s while it initializes token-signing infrastructure on
+          # cold start. Pre-warming with a direct API call ensures the
+          # emulator is fully ready before the test suite's first @Before
+          # setup() runs. Using --max-time 90 to allow for the cold start.
+          echo "Warming up Firebase Auth emulator (sign-in cold start)..."
+          curl --max-time 90 -s -X POST "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInAnonymously?key=test" \
+            -H "Content-Type: application/json" \
+            -d '{"returnSecureToken": true}' > /dev/null 2>&1 || true
+          echo "Auth emulator warm-up complete"
+
+          # Capture logcat during test execution — critical for diagnosing hangs
+          adb logcat -c
+          ( adb logcat -v threadtime > test-logcat.log 2>&1 ) &
+          LOGCAT_PID=$!
+
+          # Run Android instrumentation tests
+          # timeout=120: per-test timeout (via AndroidJUnitRunner) catches hanging @Before/setup
+          # `timeout -k 30s 20m`: hard kill if tests hang beyond 20 min (well under 45m job limit)
+          TEST_EXIT=0
+          timeout -k 30s 20m ./gradlew :androidApp:connectedDebugAndroidTest \
+            -Pandroid.testInstrumentationRunnerArguments.class=com.tabakpp.app.firestore.FirebaseRegistryRepositoryTest \
+            --no-daemon \
+            -Pandroid.testInstrumentationRunnerArguments.debug=false \
+            -Pandroid.testInstrumentationRunnerArguments.timeout=120 \
+            || TEST_EXIT=$?
+
+          # Stop logcat capture
+          kill "$LOGCAT_PID" 2>/dev/null || true
+
+          if [ "$TEST_EXIT" -ne 0 ]; then
+            echo "::error::Instrumentation tests failed (exit code: $TEST_EXIT)"
+            echo "=== Firebase emulator log ==="
+            cat firebase-emulator.log
+            echo "=== Test logcat (last 200 lines) ==="
+            tail -200 test-logcat.log 2>/dev/null || echo "No logcat available"
+            exit "$TEST_EXIT"
+          fi
+
+          echo "Instrumentation tests passed"
+          exit 0
+          SCRIPT
+          chmod +x ci-run-tests.sh
+
+      # The emulator-runner action (v2) starts the Android emulator, runs the
+      # `script`, then stops the emulator. Firebase emulators are started/stopped
+      # inside ci-run-tests.sh via background PID + trap for deterministic cleanup.
+      - name: Boot Android emulator and run instrumentation tests
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          emulator-options: -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect
+          force-avd-creation: true
+          avd-name: test_emulator
+          script: ./ci-run-tests.sh
+
+      # Upload test result artifacts from BOTH runs.
+      # No test re-execution — just collect what the test steps already produced.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.sha }}
+          path: |
+            androidApp/build/outputs/androidTest-results/
+            webApp/test-results/
+            # Debug artifacts from the test job only
+            firebase-emulator.log
+            test-logcat.log

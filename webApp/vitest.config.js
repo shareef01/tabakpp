@@ -12,6 +12,7 @@ export default defineConfig({
       ...configDefaults.exclude,
       'src/**/*.rules.test.js',
       'src/**/*.emulator.test.js',
+      'src/**/*.repro.test.js',
     ],
   },
 });

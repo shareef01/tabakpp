@@ -1,0 +1,334 @@
+Perform a final adversarial review of the complete staged change set.
+
+Do **not** make new architectural changes or expand scope unless you find a concrete correctness, security, reliability, or test-integrity problem.
+
+Current reported verification baseline:
+
+* Android instrumentation: **12/12 passing**, executed twice
+* Android/shared unit tests: **176 passing, 0 failures**
+* Firestore rules tests: **15 passing**
+* Firestore emulator integration tests: **6 passing**
+* Android lint: PASS
+* Debug build: PASS
+* Release build: PASS
+* androidTest build: PASS
+* Firebase/Auth/Firestore emulator processes stopped
+* Production fixes for rules, counter serialization, `closeDay`, and `endDay` reported verified
+* Changes staged
+* Nothing committed or pushed yet
+
+## 1. Establish exact staged repository state
+
+Return:
+
+```text
+branch:
+HEAD:
+git status --short:
+git diff --stat:
+git diff --cached --stat:
+```
+
+Clarify whether **all intended changes are staged in the index**.
+
+The phrase “staged in the working tree” is ambiguous. Explicitly identify:
+
+* staged tracked changes;
+* unstaged tracked changes;
+* untracked files;
+* ignored test artifacts.
+
+There should be no accidental generated files, temporary emulator configs, test reports, APKs, Gradle diagnostics, or scratch files staged.
+
+Preserve unrelated user files.
+
+## 2. Review the staged diff only
+
+Review:
+
+```bash
+git diff --cached
+```
+
+file by file.
+
+Classify every staged file as:
+
+### Production behavior
+
+Examples:
+
+* repository write logic;
+* ViewModel serialization;
+* End Day behavior;
+* Firestore rules;
+* error mapping.
+
+### Debug/test-only infrastructure
+
+Examples:
+
+* emulator bootstrap;
+* debug network security config;
+* instrumentation setup.
+
+### Regression tests
+
+### Build/dependency plumbing
+
+### Documentation/configuration
+
+Flag anything that does not belong in this commit.
+
+## 3. Verify no test-only behavior leaks into release
+
+Pay particular attention to:
+
+* Auth emulator setup;
+* Firestore emulator setup;
+* `10.0.2.2`;
+* cleartext network configuration;
+* demo Firebase project IDs;
+* anonymous test users;
+* debug manifests;
+* test application classes;
+* emulator ports;
+* test-only logging.
+
+Prove these are confined to debug/test/instrumentation source sets and cannot affect the release build.
+
+Inspect the merged release manifest/configuration if needed.
+
+## 4. Re-review `firestore.rules` as a security boundary
+
+The rules change is production-sensitive.
+
+Compare the staged create-profile validation against the previous contract.
+
+Verify the optimized rule still enforces every required invariant while avoiding the expression-budget failure.
+
+Specifically confirm that tests cover:
+
+* unauthenticated create rejected;
+* cross-user create rejected;
+* unexpected fields rejected;
+* malformed profile fields rejected;
+* malformed count/maps rejected;
+* invalid aggregate data rejected;
+* legitimate Android bootstrap accepted.
+
+Look for any validation removed merely to reduce expression count.
+
+Do not approve a weaker rule unless that weakening is explicitly intended and justified.
+
+## 5. Counter-write correctness
+
+Review the final counter state machine.
+
+Verify:
+
+* optimistic operation added exactly once;
+* repository write serialized correctly;
+* operation success acknowledged exactly once;
+* definite failure removes only that operation;
+* another queued operation cannot be removed accidentally;
+* server listener cannot double-apply a successful delta;
+* rapid taps produce exact final persisted count;
+* cancellation cannot permanently leave a phantom optimistic delta.
+
+Use the passing regression tests as evidence, but also inspect the implementation for untested edge cases.
+
+## 6. End Day correctness
+
+Review final `endDay` / `closeDay` semantics.
+
+Verify:
+
+* pending counter operation ordering is intentional;
+* completed counts cannot be silently lost;
+* lifetime aggregates fold once;
+* second close cannot double-fold;
+* persisted closed state reconstructs after reload;
+* failure leaves a recoverable state;
+* zero-count behavior is intentional.
+
+Flag any partial-write possibility.
+
+## 7. Transaction/write semantics
+
+Review every staged change from:
+
+```text
+set()
+→ updateFields()
+```
+
+or equivalent.
+
+Confirm each changed existing-document write really should be a partial update.
+
+Check for accidental omission of fields that previously depended on full-document replacement.
+
+For new document creation, verify all mandatory fields are still written.
+
+Pay special attention to:
+
+* `createdAt`;
+* `updatedAt`;
+* `closedAt`;
+* `foldedIntoLifetime`;
+* `legacyMigrationApplied`;
+* snapshots;
+* aggregate credit.
+
+## 8. Timestamp handling
+
+Re-review the final GitLive timestamp implementation.
+
+Confirm:
+
+* no `Timestamp.ServerTimestamp` is passed through a serializer that converts it to `null`;
+* server timestamp sentinels use a supported field-update path;
+* new-day documents contain non-null valid timestamps;
+* existing documents retain `createdAt`;
+* close operation produces valid `closedAt`.
+
+Use the real instrumentation assertions as evidence.
+
+## 9. Structured error handling
+
+Review `RegistryErrorMapper`.
+
+Verify:
+
+* native structured Firestore codes take precedence;
+* fallback string matching remains only where needed;
+* `PERMISSION_DENIED`, `ABORTED`, `UNAVAILABLE`, `FAILED_PRECONDITION` behavior is sensible;
+* no raw backend exception details are exposed unnecessarily to users;
+* diagnostics do not log tokens, passwords, or private payloads.
+
+If `ABORTED` was not reproduced as the original bug, ensure comments/tests do not falsely imply it was.
+
+## 10. Test integrity
+
+Audit the new tests for false positives.
+
+Particularly inspect:
+
+* emulator setup/teardown;
+* test-data cleanup;
+* shared UID usage;
+* lifetime aggregate reset;
+* test ordering assumptions;
+* sleeps/timeouts;
+* retries that could hide failures;
+* assertions that only check “no exception” instead of persisted state.
+
+The suite must remain valid when tests run:
+
+* individually;
+* in different order;
+* twice consecutively.
+
+Confirm the test-isolation fix does not accidentally test `deleteAllUserData()` more than the feature under test.
+
+## 11. Dependency/build review
+
+Review all Gradle changes.
+
+Check:
+
+* Firebase BOM remains coherent;
+* no duplicate or unnecessary Firebase libraries;
+* Hamcrest exclusion is scoped appropriately;
+* no broad dependency exclusion can break unrelated tests;
+* temporary memory settings are gone;
+* no temporary debugging flags remain.
+
+If `isReturnDefaultValues` remains, state why.
+
+If it was removed, confirm host tests still pass.
+
+## 12. CI implications
+
+Inspect whether the new instrumentation coverage is actually represented in CI.
+
+If a new Android emulator/Firestore integration job was added:
+
+* verify correct triggers;
+* immutable/pinned Actions where repo policy requires;
+* emulator cleanup;
+* Firebase emulator cleanup;
+* failure propagation;
+* final status aggregator includes it if appropriate.
+
+If instrumentation is **not yet in CI**, identify that clearly as the primary remaining follow-up rather than calling it permanently covered.
+
+Do not add CI work during this review unless it is already within the staged scope or required to prevent the tests from silently disappearing after this session.
+
+## 13. Reconcile test counts
+
+Verify the reported numbers from actual result files/logs:
+
+```text
+Android instrumentation: 12/12
+Android/shared unit: 176
+Rules: 15
+Emulator integration: 6
+```
+
+Explain what changed from the earlier 143/143 and 18/18 counts so the final commit report is internally consistent.
+
+Do not report combined host + instrumentation numbers ambiguously.
+
+## 14. Final hygiene
+
+Run once more after the review:
+
+```text
+git diff --check
+Android unit suite
+Android instrumentation suite
+Firestore rules suite
+Firestore emulator integration suite
+lint
+debug build
+release build
+androidTest build
+```
+
+A second instrumentation repetition is unnecessary if nothing changes during this review—the existing twice-passing evidence is sufficient.
+
+If you modify any implementation/test/config file during review, rerun the affected checks.
+
+## 15. Final verdict
+
+Return exactly one of:
+
+### READY TO COMMIT
+
+Only if no blockers remain.
+
+Include:
+
+* exact staged files;
+* verification table;
+* confirmed root causes;
+* fixes;
+* disproven earlier hypotheses;
+* remaining non-blocking risks;
+* recommended commit breakdown/message.
+
+OR:
+
+### NOT READY TO COMMIT
+
+Include only concrete blockers, severity, file/line evidence, and required fixes.
+
+Do not create speculative work just to avoid approving the change.
+
+## 16. Do not commit or push
+
+Stop after the verdict.
+
+I will decide whether to commit after reviewing your final report.
