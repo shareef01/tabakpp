@@ -79,6 +79,12 @@ class FirebaseRegistryRepositoryTest {
             val nativeAuth = com.google.firebase.auth.FirebaseAuth.getInstance(nativeApp)
             nativeAuth.useEmulator(AUTH_HOST, AUTH_PORT)
 
+            // Configure GitLive Auth emulator too — TestTabakApp is not used by
+            // AndroidJUnitRunner (it falls back to TabakApp), so without this the
+            // SDK tries to reach production identitytoolkit.googleapis.com and
+            // times out after 30s, leaving no auth token → PERMISSION_DENIED.
+            Firebase.auth.useEmulator(AUTH_HOST, AUTH_PORT)
+
             firestore = Firebase.firestore
             // Firestore emulator — use setSettings instead of useEmulator because
             // useEmulator() throws if the instance was already initialized.
