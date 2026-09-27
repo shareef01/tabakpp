@@ -2,6 +2,7 @@ package com.tabakpp.app
 
 import kotlin.test.Test
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 import java.io.File
 
 /**
@@ -71,6 +72,80 @@ class AppCheckProviderSelectionTest {
         assertTrue(
             debugFile.absolutePath != releaseFile.absolutePath,
             "Debug and release AppCheckInstaller must be distinct source-set files"
+        )
+    }
+
+    @Test
+    fun tabakApp_initializesViaAppCheckInstaller_only() {
+        val f = File(moduleDir, "src/main/java/com/tabakpp/app/TabakApp.kt")
+        assertTrue(f.exists(), "TabakApp.kt must exist")
+        val src = f.readText()
+        // All App Check initialization must go through the centralized installer.
+        assertTrue(
+            src.contains("AppCheckInstaller.install()"),
+            "TabakApp must call AppCheckInstaller.install() to centralize App Check setup"
+        )
+        // TabakApp must NOT directly import any provider factory — all App
+        // Check initialization goes through AppCheckInstaller.install() which
+        // is resolved at compile time via source-set separation.
+        assertFalse(
+            src.contains("import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory"),
+            "TabakApp must not import DebugAppCheckProviderFactory directly"
+        )
+        assertFalse(
+            src.contains("import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory"),
+            "TabakApp must not import PlayIntegrityAppCheckProviderFactory directly"
+        )
+    }
+
+    @Test
+    fun buildGradle_usesDebugImplementationForDebugProvider() {
+        val f = File(moduleDir, "build.gradle.kts")
+        assertTrue(f.exists(), "build.gradle.kts must exist")
+        val src = f.readText()
+        assertTrue(
+            src.contains("debugImplementation(libs.firebase.appcheck.debug)"),
+            "App Check debug provider must be scoped to debugImplementation to avoid " +
+                "bundling the Debug provider in release APKs"
+        )
+    }
+
+    @Test
+    fun buildGradle_usesReleaseImplementationForPlayIntegrity() {
+        val f = File(moduleDir, "build.gradle.kts")
+        assertTrue(f.exists(), "build.gradle.kts must exist")
+        val src = f.readText()
+        assertTrue(
+            src.contains("releaseImplementation(libs.firebase.appcheck.playintegrity)"),
+            "App Check Play Integrity provider must be scoped to releaseImplementation"
+        )
+    }
+
+    @Test
+    fun buildGradle_doesNotExposeDebugProviderToRelease() {
+        val f = File(moduleDir, "build.gradle.kts")
+        assertTrue(f.exists(), "build.gradle.kts must exist")
+        val src = f.readText()
+        // The only acceptable form is debugImplementation for the debug provider.
+        // A plain `implementation(...)` would bundle the Debug provider in release.
+        assertFalse(
+            src.contains("implementation(libs.firebase.appcheck.debug)"),
+            "firebase-appcheck-debug must NOT be a plain implementation dependency " +
+                "(would bundle Debug provider in release APK)"
+        )
+    }
+
+    @Test
+    fun appCheckInstaller_enablesTokenAutoRefresh() {
+        val releaseSrc = releaseInstallerSource()
+        val debugSrc = debugInstallerSource()
+        assertTrue(
+            releaseSrc.contains("setTokenAutoRefreshEnabled(true)"),
+            "Release AppCheckInstaller must explicitly enable token auto-refresh"
+        )
+        assertTrue(
+            debugSrc.contains("setTokenAutoRefreshEnabled(true)"),
+            "Debug AppCheckInstaller must explicitly enable token auto-refresh"
         )
     }
 }

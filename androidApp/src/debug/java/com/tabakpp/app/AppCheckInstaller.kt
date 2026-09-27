@@ -9,5 +9,10 @@ internal object AppCheckInstaller {
         FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
             DebugAppCheckProviderFactory.getInstance()
         )
+        // Explicitly keep App Check token auto-refresh enabled independently of
+        // Firebase's global data-collection default flag. When using
+        // installAppCheckProviderFactory(), auto-refresh follows that global
+        // default; this call ensures tokens refresh unless disabled elsewhere.
+        FirebaseAppCheck.getInstance().setTokenAutoRefreshEnabled(true)
     }
 }
