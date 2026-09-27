@@ -25,5 +25,9 @@ internal object AppCheckInstaller {
         FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
             PlayIntegrityAppCheckProviderFactory.getInstance()
         )
+        // Explicitly enable token auto-refresh (matches Web: isTokenAutoRefreshEnabled = true).
+        // Auto-refresh is enabled by default in the App Check SDK, but we set it
+        // explicitly so future SDK changes cannot silently disable refresh.
+        FirebaseAppCheck.getInstance().setTokenAutoRefreshEnabled(true)
     }
 }
