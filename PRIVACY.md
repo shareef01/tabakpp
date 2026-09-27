@@ -29,9 +29,10 @@ failure so the user can retry.
 
 Access rules restrict each signed-in user to their own Firestore subtree.
 Firebase App Check is not currently enforced: Android release builds request
-Play Integrity tokens. Production App Check verification additionally depends
-on completing the required Play Integrity and Firebase App Check project/app
-registration and signing-certificate configuration. Per-user
+Play Integrity tokens. Whether production requests are accepted as verified
+App Check traffic depends on the external Play Integrity and Firebase App
+Check configuration, including app/project registration and signing-certificate
+configuration. Per-user
 Firestore rules and API-key restrictions are the active controls. Because the Spark-plan architecture performs calculations on
 clients, users can modify their own calculated totals with a modified client;
 this does not grant access to another user's data.

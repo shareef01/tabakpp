@@ -151,8 +151,8 @@ Console, and the prerequisites that make it safe have not yet been confirmed:
   app entry is registered and linked to the Firebase Cloud project. This app
   is distributed via GitHub Releases (sideloaded APKs); Play Integrity
   supports apps distributed **outside** Google Play, so sideloading is not by
-  itself a blocker. The missing Play Console registration — not the
-  distribution channel — is the gap.
+  itself a blocker. The unverified Play Console / Firebase App Check production configuration — not the
+  distribution channel — is the gap that must be resolved before enforcement.
 - **Production signing SHA-256 must be registered.** The release certificate
   fingerprint must be supplied to Firebase Console → App Check → Android
   before tokens can be verified.
@@ -258,7 +258,9 @@ Enforcement may be enabled **only if all GO gates** for the affected product pas
 
 - [ ] Verified Android App Check metrics show `verified` traffic from v1.0.7+ release clients
 - [ ] Verified Web App Check metrics show `verified` traffic
-- [ ] Acceptable level of outdated / unverified traffic (see "Observation window" below)
+- [ ] Outdated-client and unknown-origin traffic understood
+- [ ] Invalid-request volume investigated
+- [ ] Legitimate-user impact considered acceptable
 - [ ] Production signing SHA-256 registered in Firebase Console → App Check → Android app
 - [ ] Web reCAPTCHA Enterprise site key configured and producing verified requests
 - [ ] Rollback owner identified (see "Rollback" below)
@@ -268,6 +270,8 @@ Enforcement may be enabled **only if all GO gates** for the affected product pas
 - [ ] Authentication App Check metrics show `verified` traffic
 - [ ] Sign-in traffic from supported Android clients verified
 - [ ] Web authentication traffic verified
+- [ ] Outdated-client and unknown-origin traffic understood
+- [ ] Invalid-request volume investigated
 - [ ] Compatibility impact understood (no forced-update mechanism exists)
 - [ ] Rollback owner identified
 
@@ -280,12 +284,14 @@ Firebase Console → Security → App Check → your app → Metrics shows reque
 classifications including (terminology from Firebase docs — do not invent
 categories):
 
-- **Verified requests** — App Check token present and valid.
-- **Outdated client requests / missing token** — client has no token or an
-  expired token.
-- **Invalid requests** — token present but invalid.
-- **Unverified requests** — token present but not yet verified by the provider
-  (or other product-specific categories exposed by Console).
+- **Verified requests** — valid App Check token.
+- **Outdated client requests** — missing App Check token and request appears
+  to come from the Firebase SDK (commonly older clients without App Check).
+- **Unknown origin requests** — missing App Check token and request does not
+  appear to come from the Firebase SDK.
+- **Invalid requests** — an App Check token is present but invalid.
+- **Reused token requests** — relevant when replay-protection monitoring
+  applies.
 
 Use actual Console metrics for rollout decisions — do not assume.
 
