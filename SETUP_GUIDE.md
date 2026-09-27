@@ -190,6 +190,8 @@ Play — the blocker is configuration, not the distribution channel. To switch:
    set **PLAY_RECOGNIZED** to not required, **LICENSED** to not required, and
    minimum device integrity to **Device integrity**. Non-Play apps can never
    receive `PLAY_RECOGNIZED`, which is why the default config fails for sideloads.
+   These outside-Google-Play settings are `RECOMMENDED EXTERNAL CONFIGURATION`
+   (current external state is not verified from this repository).
 4. ✅ **DONE** — `androidApp/src/release/.../AppCheckInstaller.kt` now uses
    `PlayIntegrityAppCheckProviderFactory` and the `firebase-appcheck-playintegrity`
    dependency is declared. Source-set separation (src/debug vs src/release) is
@@ -238,7 +240,7 @@ roll out each product independently.
 - Android: variant-isolated provider selection, explicit `setTokenAutoRefreshEnabled(true)`, no runtime fallback
 - Web: `ReCaptchaEnterpriseProvider` with `isTokenAutoRefreshEnabled: true`
 
-**Unverified / external (Firebase Console & Play Console):**
+**Unverified / external (Firebase Console & Play Console) — `EXTERNAL VERIFICATION REQUIRED`:**
 
 - Android App Check provider registration (Play Integrity)
 - Production signing SHA-256 registered in Firebase App Check
@@ -249,6 +251,12 @@ roll out each product independently.
 - v1.0.6 active usage quantification
 
 v1.0.7 is **structurally App Check-capable**, not verified for enforcement.
+
+> **Rollout verdict: `NOT READY — EXTERNAL CONFIGURATION GAPS`**
+> The application code is App Check-complete and enforcement is OFF. Before any
+> enforcement toggle is flipped, all items in the **Unverified / external** list
+> above must be confirmed by a read-only check of the Firebase Console and Play
+> Console.
 
 #### GO gates
 
