@@ -3,10 +3,14 @@ rules_version = '2';
 //
 // App Check is integrated on both clients but enforcement is DELIBERATELY OFF —
 // do not turn it on in the Console as a "hardening" pass. Android release APKs
-// now use PlayIntegrityAppCheckProviderFactory, but Play Integrity requires a
-// Play Console link (not present for GitHub Release APKs), so enforcing would
-// break every APK downloaded from GitHub Releases. These rules plus API-key
-// restrictions are the security boundary. See README → Security and
+// use PlayIntegrityAppCheckProviderFactory; Play Integrity supports apps
+// distributed inside or outside Google Play, so sideloading is not a blocker.
+// Enforcement is withheld until external prerequisites are verified: Play
+// Integrity/App Check registration, production signing SHA-256, App Check
+// metrics, and client compatibility (v1.0.6 used the debug provider and would
+// be rejected). These rules plus API-key restrictions remain the
+// authorization/data-validation boundary. App Check is an additional
+// attestation/abuse-resistance layer. See README → Security and
 // SETUP_GUIDE.md for the upgrade path.
 //
 // SCHEMA (v2 — dated daily-document model):

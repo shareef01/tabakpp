@@ -12,10 +12,15 @@ import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderF
  * There is no runtime branch that can fall back to the debug factory.
  *
  * Prerequisites for production attestation to work:
- * 1. The app's signing SHA-256 is registered in Firebase Console
- *    → App Check → Play Integrity provider.
- * 2. App Check enforcement is enabled in the Firebase Console
- *    only for supported existing client versions.
+ *
+ * Google Play Console:
+ * 1. The Android app is registered and the Play Integrity API is enabled,
+ *    linked to the correct Cloud/Firebase project.
+ *
+ * Firebase Console → App Check → Apps:
+ * 2. The app is registered with the Play Integrity provider.
+ * 3. The production signing certificate SHA-256 is supplied.
+ * 4. App Check enforcement is enabled only for supported client versions.
  *
  * See SETUP_GUIDE.md → "App Check rollout sequence" for the
  * step-by-step enforcement plan.
@@ -25,9 +30,10 @@ internal object AppCheckInstaller {
         FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
             PlayIntegrityAppCheckProviderFactory.getInstance()
         )
-        // Explicitly enable token auto-refresh (matches Web: isTokenAutoRefreshEnabled = true).
-        // Auto-refresh is enabled by default in the App Check SDK, but we set it
-        // explicitly so future SDK changes cannot silently disable refresh.
+        // Explicitly keep App Check token auto-refresh enabled independently of
+        // Firebase's global data-collection default flag. When using
+        // installAppCheckProviderFactory(), auto-refresh follows that global
+        // default; this call ensures tokens refresh unless disabled elsewhere.
         FirebaseAppCheck.getInstance().setTokenAutoRefreshEnabled(true)
     }
 }
