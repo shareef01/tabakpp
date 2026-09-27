@@ -28,10 +28,11 @@ failure so the user can retry.
 ## Security and limitations
 
 Access rules restrict each signed-in user to their own Firestore subtree.
-Firebase App Check is not currently enforced: the Android client ships with a
-debug App Check provider (it cannot use Play Integrity without a Play Console
-link), so per-user Firestore rules and API-key restrictions are the active
-controls. Because the Spark-plan architecture performs calculations on
+Firebase App Check is not currently enforced: Android release builds request
+Play Integrity tokens. Production App Check verification additionally depends
+on completing the required Play Integrity and Firebase App Check project/app
+registration and signing-certificate configuration. Per-user
+Firestore rules and API-key restrictions are the active controls. Because the Spark-plan architecture performs calculations on
 clients, users can modify their own calculated totals with a modified client;
 this does not grant access to another user's data.
 
