@@ -11,7 +11,7 @@ import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderF
  * a release APK, and it unconditionally selects PlayIntegrity.
  * There is no runtime branch that can fall back to the debug factory.
  *
- * Prerequisites for production attestation to work:
+ * Prerequisites for Play Integrity/App Check token issuance:
  *
  * Google Play Console:
  * 1. The Android app is registered and the Play Integrity API is enabled,
@@ -20,10 +20,11 @@ import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderF
  * Firebase Console → App Check → Apps:
  * 2. The app is registered with the Play Integrity provider.
  * 3. The production signing certificate SHA-256 is supplied.
- * 4. App Check enforcement is enabled only for supported client versions.
  *
- * See SETUP_GUIDE.md → "App Check rollout sequence" for the
- * step-by-step enforcement plan.
+ * Enforcement rollout (separate later step — not required for attestation):
+ * - Distribute the App Check-enabled client and observe App Check metrics.
+ * - Enable enforcement only when legitimate users are verified compatible.
+ * See SETUP_GUIDE.md → "App Check rollout sequence" for the step-by-step plan.
  */
 internal object AppCheckInstaller {
     fun install() {

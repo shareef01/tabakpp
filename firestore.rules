@@ -7,10 +7,12 @@ rules_version = '2';
 // distributed inside or outside Google Play, so sideloading is not a blocker.
 // Enforcement is withheld until external prerequisites are verified: Play
 // Integrity/App Check registration, production signing SHA-256, App Check
-// metrics, and client compatibility (v1.0.6 used the debug provider and would
-// be rejected). These rules plus API-key restrictions remain the
-// authorization/data-validation boundary. App Check is an additional
-// attestation/abuse-resistance layer. See README → Security and
+// metrics, and client compatibility (v1.0.6 uses the Debug provider and is not
+// suitable for production enforcement; ordinary installations would not have
+// their per-installation debug token registered). Firestore Security Rules
+// remain the authorization/data-validation boundary. App Check adds app
+// attestation and abuse resistance; Firebase API-key restrictions limit API
+// usage but do not authorize Firestore access. See README → Security and
 // SETUP_GUIDE.md for the upgrade path.
 //
 // SCHEMA (v2 — dated daily-document model):
