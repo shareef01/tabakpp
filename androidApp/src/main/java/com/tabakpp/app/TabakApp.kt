@@ -20,7 +20,7 @@ class TabakApp : Application() {
         // App Check provider selection is build-variant-aware via source sets:
         //   debug   → src/debug/.../AppCheckInstaller.kt → DebugAppCheckProviderFactory
         //   release → src/release/.../AppCheckInstaller.kt → PlayIntegrityAppCheckProviderFactory
-        // Enforcement remains off in Firebase Console; see SETUP_GUIDE.md → "Why App Check is not enforced".
+        // Enforcement remains off in Firebase Console; see SETUP_GUIDE.md → "Why App Check is integrated but not enforced".
         FirebaseApp.initializeApp(this)
         AppCheckInstaller.install()
         initKoin {

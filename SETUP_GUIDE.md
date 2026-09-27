@@ -133,33 +133,35 @@ firebase apps:sdkconfig ANDROID <ANDROID_APP_ID> --project tabakpp-ff036 -o andr
 
 ### Why App Check is integrated but not enforced
 
-Verify current state rather than trusting this file:
-
-```bash
-curl -H "Authorization: Bearer $(gcloud auth print-access-token)" \
-     -H "x-goog-user-project: tabakpp-ff036" \
-     https://firebaseappcheck.googleapis.com/v1/projects/tabakpp-ff036/services
-```
-
-Enforcement was **switched off deliberately on 2026-07-31**, having been on
-before that. The reason is a hard conflict with how Android ships:
+This repository cannot verify external Firebase/Play Console configuration
+from source alone. Enforcement is **deliberately OFF** pending that external
+verification. The application code is structurally ready — release builds
+select `PlayIntegrityAppCheckProviderFactory`, debug builds select
+`DebugAppCheckProviderFactory`, and token auto-refresh is explicitly enabled
+on both variants (PR #59) — but enforcement is a runtime toggle in Firebase
+Console, and the prerequisites that make it safe have not yet been confirmed:
 
 - **Enforcement is per Firebase product, not per platform.** Setting Cloud
-  Firestore to Enforced rejects unattested requests from *every* client. There
-  is no way to enforce for web only, and Android needs both Firestore and
-  Authentication to function.
-- **Release APKs cannot attest via Play Integrity without a Play Console link.**
-  `androidApp/src/release/AppCheckInstaller.kt` now uses
-  `PlayIntegrityAppCheckProviderFactory`, but Play Integrity requires a Play
-  Console app entry linked to the Firebase Cloud project (see upgrade path
-  below). This app ships via GitHub Releases only — there is no Play Console
-  entry, so release APKs cannot produce verifiable Play Integrity tokens.
-
-With enforcement on, that combination meant **anyone who downloaded the APK
-from Releases could not sign in** — Play Integrity had no app entry to verify
-against. Debug builds still use `DebugAppCheckProviderFactory`, which mints a
-random secret per install that must be pasted into Console → App Check →
-Manage debug tokens by hand (for local development only).
+  Firestore to *Enforced* rejects unattested requests from every client
+  hitting Firestore. It does **not** automatically set Authentication to
+  *Enforced* — each product has its own enforcement toggle, metrics, and
+  rollout decision. Evaluate Firestore and Auth App Check metrics independently.
+- **Play Integrity requires a Play Console app entry.** Release builds request
+  Play Integrity tokens, but tokens cannot be *verified* until a Play Console
+  app entry is registered and linked to the Firebase Cloud project. This app
+  is distributed via GitHub Releases (sideloaded APKs); Play Integrity
+  supports apps distributed **outside** Google Play, so sideloading is not by
+  itself a blocker. The missing Play Console registration — not the
+  distribution channel — is the gap.
+- **Production signing SHA-256 must be registered.** The release certificate
+  fingerprint must be supplied to Firebase Console → App Check → Android
+  before tokens can be verified.
+- **App Check metrics must be observed.** Release-client token verification
+  status must be confirmed in Console metrics before enforcement is safe.
+- **v1.0.6 is not compatible.** v1.0.6 releases use the Debug provider and
+  are not suitable as production-enforcement clients.
+- **No forced-update mechanism.** There is no in-app update or server-side
+  version gate. Enforcing while outdated clients exist risks permanent lockout.
 
 What carries the load instead:
 
@@ -167,15 +169,14 @@ What carries the load instead:
 - **API key restrictions** — package + signing certificate on Android, HTTP
   referrer on web, constraining which applications and domains Google APIs will accept requests from.
 
-App Check still initializes on both clients, so tokens flow and the metrics in
-Console stay meaningful. The release source set now requests Play Integrity
-tokens (which will fail gracefully without a Play Console link). Turning
-enforcement back on requires completing the Play Console setup below and
-verifying release clients report verified in App Check metrics first.
+App Check still initializes on both clients, so tokens are requested and the
+metrics in Console stay meaningful. The release source set requests Play
+Integrity tokens; without a Play Console link, those tokens are **unverified**
+(they do not fail the app — App Check is advisory while enforcement is OFF).
 
-**That means Play Integrity** (below), which attests without a per-device allow
-list once the Play Console link exists. Do that first, verify release installs
-report verified in App Check metrics, then enforce.
+**To prepare for enforcement:** complete the Play Console and Firebase Console
+setup (upgrade path below), verify release installs report as verified in App
+Check metrics, **then** enforce — product by product.
 
 **Upgrade path.** Contrary to a common
 misconception, Play Integrity *does* support apps distributed outside Google
@@ -205,6 +206,138 @@ Play — the blocker is configuration, not the distribution channel. To switch:
 3. Console → App Check → Manage debug tokens → Add debug token (once per device).
 4. **Revoke any debug token that has appeared in logs, screenshots, or chat.** A
    debug token is a bearer secret that bypasses attestation from anywhere.
+
+### App Check enforcement rollout runbook
+
+This section is an operational reference for enabling App Check enforcement.
+It does **not** change any repository code or external settings.
+
+#### Firebase services relevant to enforcement
+
+| Product | App Check available? | Enforcement available? | Current status |
+|---|---|---|---|
+| Cloud Firestore | Yes | Yes | Unverified externally — enforcement OFF |
+| Firebase Authentication | Yes | Yes | Unverified externally — enforcement OFF |
+| Cloud Storage | — | — | Not used (no `storage` in `firebase.json`) |
+| Cloud Functions | — | — | Not used (Spark plan, no Blaze) |
+| Realtime Database | — | — | Not used |
+| Custom backend | — | — | None (Spark-safe, client-side only) |
+
+Enforcement is **per Firebase product**. Enabling it for Firestore does **not**
+automatically enable it for Authentication, and vice versa. Each product has
+its own enforcement toggle, request metrics, and rollout decision. Evaluate and
+roll out each product independently.
+
+#### Readiness status
+
+**Proven (from this repository):**
+
+- v1.0.7 release artifact exists; SHA-256 `3915042222cb551eac1661382aeb51acacbad23fed1fd46a2b80c976bcf211ec` matches the published checksum
+- v1.0.7 production signing certificate SHA-256: `31:C7:DA:2E:0B:FF:5E:ED:60:CB:CD:FC:DE:06:A4:67:03:AD:A9:A1:90:AA:F4:65:38:EB:F4:F8:F4:EC:05:EE`
+- v1.0.7 tag (`911b4c0d5dc9efbbbafea8b2fb3140d93d85c24e`) release source selects `PlayIntegrityAppCheckProviderFactory`
+- Android: variant-isolated provider selection, explicit `setTokenAutoRefreshEnabled(true)`, no runtime fallback
+- Web: `ReCaptchaEnterpriseProvider` with `isTokenAutoRefreshEnabled: true`
+
+**Unverified / external (Firebase Console & Play Console):**
+
+- Android App Check provider registration (Play Integrity)
+- Production signing SHA-256 registered in Firebase App Check
+- Play Integrity API enabled; Play Console app entry linked
+- Web App Check provider registration (reCAPTCHA Enterprise)
+- Web production site key configured and producing verified requests
+- Real verified App Check traffic metrics from released clients
+- v1.0.6 active usage quantification
+
+v1.0.7 is **structurally App Check-capable**, not verified for enforcement.
+
+#### GO gates
+
+Enforcement may be enabled **only if all GO gates** for the affected product pass.
+
+##### Firestore enforcement GO gate
+
+- [ ] Verified Android App Check metrics show `verified` traffic from v1.0.7+ release clients
+- [ ] Verified Web App Check metrics show `verified` traffic
+- [ ] Acceptable level of outdated / unverified traffic (see "Observation window" below)
+- [ ] Production signing SHA-256 registered in Firebase Console → App Check → Android app
+- [ ] Web reCAPTCHA Enterprise site key configured and producing verified requests
+- [ ] Rollback owner identified (see "Rollback" below)
+
+##### Authentication enforcement GO gate
+
+- [ ] Authentication App Check metrics show `verified` traffic
+- [ ] Sign-in traffic from supported Android clients verified
+- [ ] Web authentication traffic verified
+- [ ] Compatibility impact understood (no forced-update mechanism exists)
+- [ ] Rollback owner identified
+
+A product whose gates are unmet must remain on **Unenforce** while other
+products may proceed independently.
+
+#### Metrics categories
+
+Firebase Console → Security → App Check → your app → Metrics shows request
+classifications including (terminology from Firebase docs — do not invent
+categories):
+
+- **Verified requests** — App Check token present and valid.
+- **Outdated client requests / missing token** — client has no token or an
+  expired token.
+- **Invalid requests** — token present but invalid.
+- **Unverified requests** — token present but not yet verified by the provider
+  (or other product-specific categories exposed by Console).
+
+Use actual Console metrics for rollout decisions — do not assume.
+
+#### Rollback procedure
+
+For **each** product independently:
+
+1. **Identify** which Firebase product is affected (Firestore or Authentication).
+2. **Inspect** App Check metrics and user-impact reports for that product.
+3. **Navigate** to Firebase Console → Security → App Check → [product].
+4. **Disable enforcement** for that specific product (set to *Unenforce*).
+5. **Monitor** recovery. After configuration propagation completes, that
+   product stops rejecting requests solely because they lack valid App Check
+   verification.
+6. **Leave other products unchanged** unless evidence justifies disabling them
+   too.
+7. **Record** the incident: time, affected product, metrics at each step,
+   resolution.
+
+> Disabling enforcement does **not** generate valid tokens for clients. It
+> stops the product from rejecting requests that lack valid App Check
+> verification. Clients continue requesting tokens independently, and
+> application updates are normally not needed solely because enforcement was
+> disabled.
+
+Firebase documents that enabling enforcement can take up to approximately 15
+minutes to take effect. Do not assume disable timing is identical unless
+documented.
+
+#### Representative observation window
+
+There is no fixed mandatory duration — Firebase does not require 24h or 48h.
+Use a **representative observation window** defined by acceptance criteria:
+
+- Enough real Android requests to represent normal usage volume.
+- Enough real Web requests to represent normal usage volume.
+- No material unexplained unverified traffic.
+- Older client (v1.0.6) impact understood and acceptable.
+
+> **Project policy recommendation (not a Firebase requirement):** after
+> distributing v1.0.7, collect at least 48 hours of App Check metrics with
+> minimum viable traffic thresholds before considering enforcement.
+
+#### v1.0.6 compatibility
+
+- v1.0.6 release uses `DebugAppCheckProviderFactory` in release builds.
+- Ordinary installations would not have their per-installation debug token
+  registered, so v1.0.6 clients would be rejected under Play Integrity enforcement.
+- Manually registered debug tokens are a development/testing case, not a
+  production path.
+- Active v1.0.6 usage is currently unquantified — enforcement risk cannot be
+  measured from this repository alone.
 
 ### Release signing
 The Android release build reads signing credentials from environment variables;
