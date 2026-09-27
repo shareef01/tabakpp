@@ -205,12 +205,17 @@ jobs:
           ( adb logcat -v threadtime > test-logcat.log 2>&1 ) &
           LOGCAT_PID=$!
 
-          # Run Android instrumentation tests
+          # Run Android instrumentation tests — full androidTest suite.
+          # No -Pandroid.testInstrumentationRunnerArguments.class filter: AndroidJUnitRunner
+          # discovers all androidTest classes automatically (currently FirebaseRegistryRepositoryTest
+          # + RegistryErrorStructuredCodeTest = 21 tests). This keeps CI in sync with the
+          # complete intended suite and automatically includes future androidTest classes.
           # timeout=120: per-test timeout (via AndroidJUnitRunner) catches hanging @Before/setup
-          # `timeout -k 30s 20m`: hard kill if tests hang beyond 20 min (well under 45m job limit)
+          # timeout -k 30s 30m: hard kill if tests hang beyond 30 min (well under 45m job limit;
+          # bumped from 20m → 30m to accommodate slow CI emulator boots: 21 androidTest tests
+          # can take up to ~15 min on a cold emulator, plus ~6-7 min APK install)
           TEST_EXIT=0
-          timeout -k 30s 20m ./gradlew :androidApp:connectedDebugAndroidTest \
-            -Pandroid.testInstrumentationRunnerArguments.class=com.tabakpp.app.firestore.FirebaseRegistryRepositoryTest \
+          timeout -k 30s 30m ./gradlew :androidApp:connectedDebugAndroidTest \
             --no-daemon \
             -Pandroid.testInstrumentationRunnerArguments.debug=false \
             -Pandroid.testInstrumentationRunnerArguments.timeout=120 \
