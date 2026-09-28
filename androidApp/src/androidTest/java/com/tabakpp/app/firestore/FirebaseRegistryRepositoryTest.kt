@@ -138,15 +138,33 @@ class FirebaseRegistryRepositoryTest {
                 }
             }
 
-            if (uid.isNullOrEmpty()) uid = TEST_UID
-            System.setProperty("test.uid", uid!!)
+            // HARDENING: Fail setup explicitly if no authenticated UID exists.
+            // The previous fallback to TEST_UID could produce ambiguous downstream
+            // failures (unauthenticated requests → PERMISSION_DENIED) that are
+            // difficult to diagnose from CI artifacts alone.
+            if (uid.isNullOrEmpty()) {
+                throw IllegalStateException(
+                    "AUTH_SETUP_FAILED: anonymous authentication unavailable after $maxRetries attempts"
+                )
+            }
+            Log.d(TAG, "test.uid set to: $uid")
+
+            // HARDENING: Assert auth UID matches the path UID used for Firestore operations.
+            // A mismatch here would produce rules denials that are hard to trace.
+            val currentUid = Firebase.auth.currentUser?.uid
+            if (currentUid != uid) {
+                Log.e(TAG, "AUTH_UID_MISMATCH: current=$currentUid path=$uid")
+                throw IllegalStateException(
+                    "AUTH_UID_MISMATCH: Firebase.auth.currentUser?.uid=$currentUid != test.uid=$uid"
+                )
+            }
 
             // Clear any stale data from previous test runs (same UID, persisted
             // across test methods in the same emulator session).
             try {
-                repository.deleteAllUserData(uid!!)
+                repository.deleteAllUserData(uid)
             } catch (_: Exception) { }
-            try { repository.ensureUserDocument(uid!!, "Test User") } catch (e: Exception) {
+            try { repository.ensureUserDocument(uid, "Test User") } catch (e: Exception) {
                 Log.d(TAG, "ensureUserDocument: ${e.message}")
             }
 
@@ -156,9 +174,21 @@ class FirebaseRegistryRepositoryTest {
                 isFinanciallyTracked = true, isPrimaryTracked = true, baseline = 20,
                 createdAt = Timestamp(0, 0), updatedAt = Timestamp(0, 0)
             )
-            try { repository.addConfig(uid!!, config) } catch (e: Exception) {
+            try { repository.addConfig(uid, config) } catch (e: Exception) {
                 Log.d(TAG, "addConfig: ${e.message}")
             }
+
+            // HARDENING: Verify the config was actually created. A missing config
+            // produces CONFIG_NOT_FOUND during transactions, not PERMISSION_DENIED,
+            // but verifying here makes setup failures explicit rather than deferred.
+            val configSnap = firestore.collection("users").document(uid)
+                .collection("configs").document(TEST_TRACKER_ID).get()
+            if (!configSnap.exists) {
+                throw IllegalStateException(
+                    "CONFIG_SETUP_FAILED: users/$uid/configs/$TEST_TRACKER_ID does not exist after addConfig"
+                )
+            }
+            Log.d(TAG, "Config existence verified: users/$uid/configs/$TEST_TRACKER_ID")
         }
     }
 
@@ -292,13 +322,16 @@ class FirebaseRegistryRepositoryTest {
         val uid = System.getProperty("test.uid") ?: TEST_UID
         cleanDay(uid, TEST_DATE)
 
+        Log.d(TAG, "CONTENTION_PHASE=SEED_START concurrency=$concurrency")
         repeat(5) {
             repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
         }
+        Log.d(TAG, "CONTENTION_PHASE=SEED_COMPLETE seed=5.0")
 
         assertEquals(5.0, getCountsRetry(uid, TEST_DATE), 0.001,
             "Seed count should be 5")
 
+        Log.d(TAG, "CONTENTION_PHASE=BURST_START concurrency=$concurrency")
         val results = coroutineScope {
             val deferred = (1..concurrency).map { i ->
                 async {
@@ -314,6 +347,7 @@ class FirebaseRegistryRepositoryTest {
             }
             deferred.awaitAll()
         }
+        Log.d(TAG, "CONTENTION_PHASE=BURST_COMPLETE")
 
         val successes = results.count { it.success }
         val failures = results.count { !it.success }
@@ -323,13 +357,15 @@ class FirebaseRegistryRepositoryTest {
             "$failures failed, $abortedFailures ABORTED")
         results.forEach { r -> Log.d(TAG, "  $r") }
 
-        // Give the Firestore emulator's gRPC channel time to recover from the
-        // concurrent transaction burst before reading the final count.
-        // Under contention, the emulator can transiently return PERMISSION_DENIED
-        // (a channel-level gRPC error, not a rules violation).
+        // Concurrent transactions may fail with structured Firestore errors
+        // (FAILED_PRECONDITION, ABORTED, etc.). Only successful operations
+        // contribute to the expected final count; failures are logged with
+        // their structured code for diagnosis.
         delay(3000)
+        Log.d(TAG, "CONTENTION_PHASE=FINAL_READ_START")
         val actualCount = getCountsRetry(uid, TEST_DATE)
         Log.d(TAG, "Final count: $actualCount (expected: ${5.0 + expectedFinal}, successes: $successes)")
+        Log.d(TAG, "CONTENTION_PHASE=FINAL_READ_COMPLETE count=$actualCount")
 
         // Under concurrent load, Firestore transactions can abort after exhausting
         // retries (native SDK default: 5 attempts). The PERMISSION_DENIED / ABORTED

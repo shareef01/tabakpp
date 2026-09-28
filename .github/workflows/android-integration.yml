@@ -226,8 +226,45 @@ jobs:
 
           if [ "$TEST_EXIT" -ne 0 ]; then
             echo "::error::Instrumentation tests failed (exit code: $TEST_EXIT)"
-            echo "=== Firebase emulator log ==="
+            echo ""
+            echo "=== CI failure diagnostics ==="
+            echo ""
+            echo "--- test-logcat.log: AUTH_ lines ---"
+            grep -i "AUTH_\|Signed in as\|AUTH_SETUP_FAILED\|AUTH_UID_MISMATCH\|test\.uid" test-logcat.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- test-logcat.log: contention phase markers ---"
+            grep -i "CONTENTION_PHASE=" test-logcat.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- test-logcat.log: Contention summary ---"
+            grep -i "Contention (" test-logcat.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- test-logcat.log: final count ---"
+            grep -i "Final count:" test-logcat.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- test-logcat.log: PERMISSION_DENIED ---"
+            grep -i "PERMISSION_DENIED" test-logcat.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- test-logcat.log: FAILED_PRECONDITION ---"
+            grep -i "FAILED_PRECONDITION" test-logcat.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- test-logcat.log: ABORTED ---"
+            grep -i "ABORTED" test-logcat.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- firebase-emulator.log: PERMISSION_DENIED ---"
+            grep -i "PERMISSION_DENIED" firebase-emulator.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- firebase-emulator.log: permissionTracesAsJsonArray ---"
+            grep -i "permissionTracesAsJsonArray" firebase-emulator.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- firebase-emulator.log: ArrayIndexOutOfBoundsException ---"
+            grep -i "ArrayIndexOutOfBoundsException" firebase-emulator.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "--- firebase-emulator.log: rules evaluation failures ---"
+            grep -i "rules evaluation\|RulesEvaluation\|false for" firebase-emulator.log 2>/dev/null || echo "(none)"
+            echo ""
+            echo "=== Full Firebase emulator log ==="
             cat firebase-emulator.log
+            echo ""
             echo "=== Test logcat (last 200 lines) ==="
             tail -200 test-logcat.log 2>/dev/null || echo "No logcat available"
             exit "$TEST_EXIT"
@@ -253,14 +290,36 @@ jobs:
 
       # Upload test result artifacts from BOTH runs.
       # No test re-execution — just collect what the test steps already produced.
+      # Artifact names are attempt-specific to avoid ambiguity on reruns.
+      - name: Generate CI test metadata
+        if: always()
+        run: |
+          cat > ci-test-metadata.txt <<EOF
+          github.run_id=${{ github.run_id }}
+          github.run_attempt=${{ github.run_attempt }}
+          commit_sha=$(git rev-parse HEAD)
+          branch_ref=$(git rev-parse --abbrev-ref HEAD)
+          workflow_name=${{ github.workflow }}
+          runner_os=${{ runner.os }}
+          java_version=$(java -version 2>&1 | head -1)
+          firebase_cli_version=$(firebase --version 2>/dev/null || echo "not installed")
+          android_api_level=35
+          emulator_avd_name=test_emulator
+          test_start_time_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          EOF
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: test-results-${{ github.sha }}
+          name: instrumentation-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          retention-days: 30
           path: |
             androidApp/build/outputs/androidTest-results/
             webApp/test-results/
+            # Connected-test reports (if generated)
+            androidApp/build/reports/androidTests/connected/
             # Debug artifacts from the test job only
             firebase-emulator.log
             test-logcat.log
+            ci-test-metadata.txt
