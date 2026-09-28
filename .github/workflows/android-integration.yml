@@ -250,6 +250,18 @@ jobs:
             echo "--- test-logcat.log: ABORTED ---"
             grep -i "ABORTED" test-logcat.log 2>/dev/null || echo "(none)"
             echo ""
+            echo "--- firebase-debug.log: PERMISSION_DENIED ---"
+            grep -i "PERMISSION_DENIED" firestore-debug.log 2>/dev/null || echo "(none or not present)"
+            echo ""
+            echo "--- firebase-debug.log: permissionTracesAsJsonArray ---"
+            grep -i "permissionTracesAsJsonArray" firestore-debug.log 2>/dev/null || echo "(none or not present)"
+            echo ""
+            echo "--- firebase-debug.log: ArrayIndexOutOfBoundsException ---"
+            grep -i "ArrayIndexOutOfBoundsException" firestore-debug.log 2>/dev/null || echo "(none or not present)"
+            echo ""
+            echo "--- firebase-debug.log: rules evaluation failures ---"
+            grep -i "rules evaluation\|RulesEvaluation\|false for" firestore-debug.log 2>/dev/null || echo "(none or not present)"
+            echo ""
             echo "--- firebase-emulator.log: PERMISSION_DENIED ---"
             grep -i "PERMISSION_DENIED" firebase-emulator.log 2>/dev/null || echo "(none)"
             echo ""
@@ -291,28 +303,37 @@ jobs:
       # Upload test result artifacts from BOTH runs.
       # No test re-execution — just collect what the test steps already produced.
       # Artifact names are attempt-specific to avoid ambiguity on reruns.
+      # Artifact names use the actual PR source head SHA (or the push commit SHA
+      # for push events) so forensic identity matches the commit under review.
+      # github.event.pull_request.head.sha is the PR's actual source commit;
+      # github.sha is the workflow merge commit (for pull_request events) or the
+      # push commit (for push events). We prefer the source head when available.
       - name: Generate CI test metadata
         if: always()
         run: |
+          SOURCE_HEAD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           cat > ci-test-metadata.txt <<EOF
           github.run_id=${{ github.run_id }}
           github.run_attempt=${{ github.run_attempt }}
-          commit_sha=$(git rev-parse HEAD)
-          branch_ref=$(git rev-parse --abbrev-ref HEAD)
+          workflow_sha=${{ github.sha }}
+          source_head_sha=$SOURCE_HEAD_SHA
+          github.ref=${{ github.ref }}
+          github.head_ref=${{ github.head_ref || '' }}
+          github.base_ref=${{ github.base_ref || '' }}
           workflow_name=${{ github.workflow }}
           runner_os=${{ runner.os }}
           java_version=$(java -version 2>&1 | head -1)
           firebase_cli_version=$(firebase --version 2>/dev/null || echo "not installed")
           android_api_level=35
           emulator_avd_name=test_emulator
-          test_start_time_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          metadata_generated_at_utc=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           EOF
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: instrumentation-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          name: instrumentation-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           retention-days: 30
           path: |
             androidApp/build/outputs/androidTest-results/
@@ -321,5 +342,6 @@ jobs:
             androidApp/build/reports/androidTests/connected/
             # Debug artifacts from the test job only
             firebase-emulator.log
+            firestore-debug.log
             test-logcat.log
             ci-test-metadata.txt
