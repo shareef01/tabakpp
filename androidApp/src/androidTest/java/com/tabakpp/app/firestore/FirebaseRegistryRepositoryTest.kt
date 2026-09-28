@@ -62,6 +62,7 @@ class FirebaseRegistryRepositoryTest {
 
     private lateinit var firestore: FirebaseFirestore
     private lateinit var repository: FirebaseRegistryRepository
+    private lateinit var testUid: String
 
     @Before
     fun setup() {
@@ -148,6 +149,7 @@ class FirebaseRegistryRepositoryTest {
                 )
             }
             Log.d(TAG, "test.uid set to: $uid")
+            testUid = uid
 
             // HARDENING: Assert auth UID matches the path UID used for Firestore operations.
             // A mismatch here would produce rules denials that are hard to trace.
@@ -195,9 +197,8 @@ class FirebaseRegistryRepositoryTest {
     @After
     fun tearDown() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
             try {
-                firestore.collection("users").document(uid)
+                firestore.collection("users").document(testUid)
                     .collection("days").document(TEST_DATE).delete()
             } catch (_: Exception) { }
         }
@@ -246,12 +247,11 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testA_newDayLifecycle() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
 
-            val dayDoc = getDay(uid, TEST_DATE)
+            val dayDoc = getDay(testUid, TEST_DATE)
             assertNotNull(dayDoc, "Day document should exist after increment")
             assertEquals(1.0, dayDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
 
@@ -270,12 +270,12 @@ class FirebaseRegistryRepositoryTest {
             assertEquals(0.5, credit.wasted, 0.001)
             assertEquals(9.5, credit.saved, 0.001)
 
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            assertEquals(2.0, getCounts(uid, TEST_DATE), 0.001)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            assertEquals(2.0, getCounts(testUid, TEST_DATE), 0.001)
 
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
-            val closedDoc = getDay(uid, TEST_DATE)
+            val closedDoc = getDay(testUid, TEST_DATE)
             assertEquals("closed", closedDoc?.status)
             assertNotNull(closedDoc?.closedAt)
             assertEquals(2.0, closedDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
@@ -284,7 +284,7 @@ class FirebaseRegistryRepositoryTest {
             assertEquals(1.0, credit2.wasted, 0.001)
             assertEquals(9.0, credit2.saved, 0.001)
 
-            val userSnap = firestore.collection("users").document(uid).get()
+            val userSnap = firestore.collection("users").document(testUid).get()
             val profile = userSnap.data<UserProfile>()
             assertNotNull(profile)
             assertEquals(1.0, profile!!.lifetimeAggregates.wasted, 0.001)
@@ -319,16 +319,15 @@ class FirebaseRegistryRepositoryTest {
     }
 
     private suspend fun testCounterContention(concurrency: Int, expectedFinal: Double) {
-        val uid = System.getProperty("test.uid") ?: TEST_UID
-        cleanDay(uid, TEST_DATE)
+        cleanDay(testUid, TEST_DATE)
 
         Log.d(TAG, "CONTENTION_PHASE=SEED_START concurrency=$concurrency")
         repeat(5) {
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
         }
         Log.d(TAG, "CONTENTION_PHASE=SEED_COMPLETE seed=5.0")
 
-        assertEquals(5.0, getCountsRetry(uid, TEST_DATE), 0.001,
+        assertEquals(5.0, getCountsRetry(testUid, TEST_DATE), 0.001,
             "Seed count should be 5")
 
         Log.d(TAG, "CONTENTION_PHASE=BURST_START concurrency=$concurrency")
@@ -337,7 +336,7 @@ class FirebaseRegistryRepositoryTest {
                 async {
                     val opId = "op_$i"
                     try {
-                        repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                        repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
                         ContentionResult(opId, true, null, null, null)
                     } catch (e: Exception) {
                         val code = extractFirestoreCode(e)
@@ -363,7 +362,7 @@ class FirebaseRegistryRepositoryTest {
         // their structured code for diagnosis.
         delay(3000)
         Log.d(TAG, "CONTENTION_PHASE=FINAL_READ_START")
-        val actualCount = getCountsRetry(uid, TEST_DATE)
+        val actualCount = getCountsRetry(testUid, TEST_DATE)
         Log.d(TAG, "Final count: $actualCount (expected: ${5.0 + expectedFinal}, successes: $successes)")
         Log.d(TAG, "CONTENTION_PHASE=FINAL_READ_COMPLETE count=$actualCount")
 
@@ -381,7 +380,7 @@ class FirebaseRegistryRepositoryTest {
             Log.d(TAG, "No ABORTED at concurrency=$concurrency — all retried successfully")
         }
 
-        try { repository.closeDay(uid, TEST_DATE) } catch (_: Exception) { }
+        try { repository.closeDay(testUid, TEST_DATE) } catch (_: Exception) { }
     }
 
     // ============================================================
@@ -391,20 +390,19 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testC_endDayScenarioA_persistedCountPositive() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
 
-            val doc = getDay(uid, TEST_DATE)
+            val doc = getDay(testUid, TEST_DATE)
             assertEquals(3.0, doc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
             assertEquals("open", doc.status)
 
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
-            val closedDoc = getDay(uid, TEST_DATE)
+            val closedDoc = getDay(testUid, TEST_DATE)
             assertEquals("closed", closedDoc?.status)
             assertNotNull(closedDoc?.closedAt)
             assertEquals(3.0, closedDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
@@ -414,12 +412,11 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testC_endDayScenarioB_persistedCountZero() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
             val date = "2099-12-30"
-            cleanDay(uid, date)
+            cleanDay(testUid, date)
 
             val exception = assertFailsWith<Exception> {
-                repository.closeDay(uid, date)
+                repository.closeDay(testUid, date)
             }
             assertTrue(
                 exception.message?.contains("NOTHING_TO_ARCHIVE") == true,
@@ -431,12 +428,11 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testC_endDayScenarioC_concurrentIncrementAndCloseDay() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             val incrementResult = async<CloseResult> {
                 try {
-                    repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                    repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
                     CloseResult(true, null, null)
                 } catch (e: Exception) {
                     CloseResult(false, extractFirestoreCode(e), e.message?.take(200))
@@ -447,7 +443,7 @@ class FirebaseRegistryRepositoryTest {
 
             val closeDayResult = async<CloseResult> {
                 try {
-                    repository.closeDay(uid, TEST_DATE)
+                    repository.closeDay(testUid, TEST_DATE)
                     CloseResult(true, null, null)
                 } catch (e: Exception) {
                     CloseResult(false, extractFirestoreCode(e), e.message?.take(200))
@@ -458,7 +454,7 @@ class FirebaseRegistryRepositoryTest {
             val closeRes = closeDayResult.await()
             Log.d(TAG, "Concurrent: increment=$incRes, closeDay=$closeRes")
 
-            val finalDoc = getDay(uid, TEST_DATE)
+            val finalDoc = getDay(testUid, TEST_DATE)
             if (finalDoc != null) {
                 Log.d(TAG, "Final doc: status=${finalDoc.status}, " +
                     "counts=${finalDoc.counts[TEST_TRACKER_ID] ?: 0.0}")
@@ -471,19 +467,18 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testC_endDayScenarioD_incrementThenEndDay() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             repeat(3) {
-                repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
             }
 
-            val doc = getDay(uid, TEST_DATE)
+            val doc = getDay(testUid, TEST_DATE)
             assertEquals(3.0, doc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
 
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
-            val closedDoc = getDay(uid, TEST_DATE)
+            val closedDoc = getDay(testUid, TEST_DATE)
             assertEquals("closed", closedDoc?.status)
             assertEquals(3.0, closedDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
             assertNotNull(closedDoc.closedAt)
@@ -497,19 +492,18 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testD_endDayIdempotency() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
 
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
-            val doc1 = getDay(uid, TEST_DATE)
+            val doc1 = getDay(testUid, TEST_DATE)
             assertEquals("closed", doc1?.status)
             assertEquals(2.0, doc1!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
 
-            val userSnap1 = firestore.collection("users").document(uid).get()
+            val userSnap1 = firestore.collection("users").document(testUid).get()
             val profile1 = userSnap1.data<UserProfile>()
             val saved1 = profile1!!.lifetimeAggregates.saved
             val wasted1 = profile1!!.lifetimeAggregates.wasted
@@ -518,17 +512,17 @@ class FirebaseRegistryRepositoryTest {
             Log.d(TAG, "After first closeDay: saved=$saved1, wasted=$wasted1, smoking=$smoking1")
 
             try {
-                repository.closeDay(uid, TEST_DATE)
+                repository.closeDay(testUid, TEST_DATE)
                 Log.d(TAG, "Second closeDay succeeded (idempotent)")
             } catch (e: Exception) {
                 Log.d(TAG, "Second closeDay threw: ${e.message}")
             }
 
-            val doc2 = getDay(uid, TEST_DATE)
+            val doc2 = getDay(testUid, TEST_DATE)
             assertEquals("closed", doc2?.status)
             assertEquals(2.0, doc2!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
 
-            val userSnap2 = firestore.collection("users").document(uid).get()
+            val userSnap2 = firestore.collection("users").document(testUid).get()
             val profile2 = userSnap2.data<UserProfile>()
             assertEquals(saved1, profile2!!.lifetimeAggregates.saved, 0.001,
                 "Lifetime saved should NOT change on second closeDay")
@@ -546,25 +540,24 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testE_existingDay_incrementFromFiveToSix() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             // Seed count = 5 via the production repository path
             repeat(5) {
-                repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
             }
-            assertEquals(5.0, getCounts(uid, TEST_DATE), 0.001,
+            assertEquals(5.0, getCounts(testUid, TEST_DATE), 0.001,
                 "Seed count must be 5")
 
             // The core regression: existing-day increment from 5→6
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
 
             // Verify persisted
-            val dayDoc = getDay(uid, TEST_DATE)
+            val dayDoc = getDay(testUid, TEST_DATE)
             assertNotNull(dayDoc)
             assertEquals(6.0, dayDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001,
                 "count 6")
-            assertEquals(6.0, getCounts(uid, TEST_DATE), 0.001,
+            assertEquals(6.0, getCounts(testUid, TEST_DATE), 0.001,
                 "repository reload count = 6")
         }
     }
@@ -576,20 +569,19 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testF_reload_reconstructsClosedDayAndLifetime() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             // Write 3 increments + close day
             repeat(3) {
-                repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
             }
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
             // Capture pre-reload state
-            val beforeDoc = getDay(uid, TEST_DATE)!!
+            val beforeDoc = getDay(testUid, TEST_DATE)!!
             assertEquals("closed", beforeDoc.status)
             assertEquals(3.0, beforeDoc.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
-            val userSnap = firestore.collection("users").document(uid).get()
+            val userSnap = firestore.collection("users").document(testUid).get()
             val beforeProfile = userSnap.data<UserProfile>()
             assertEquals(1.5, beforeProfile.lifetimeAggregates.wasted, 0.001)
             assertEquals(8.5, beforeProfile.lifetimeAggregates.saved, 0.001)
@@ -598,17 +590,17 @@ class FirebaseRegistryRepositoryTest {
             val freshRepo = FirebaseRegistryRepository(firestore)
 
             // Verify the day document is reconstructed correctly
-            val dayFlow = freshRepo.subscribeToDay(uid, TEST_DATE).first()
+            val dayFlow = freshRepo.subscribeToDay(testUid, TEST_DATE).first()
             assertNotNull(dayFlow, "Day document must reconstruct after reload")
             assertEquals("closed", dayFlow!!.status)
             assertEquals(3.0, dayFlow.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
             assertNotNull(dayFlow.closedAt)
 
             // Verify lifetime aggregates are reconstructed correctly
-            val profileFlow = freshRepo.subscribeToUserProfile(uid).first()
+            val profileFlow = freshRepo.subscribeToUserProfile(testUid).first()
             assertNotNull(profileFlow)
             assertEquals(1.5, profileFlow!!.lifetimeAggregates.wasted, 0.001)
-            assertEquals(8.5, profileFlow.lifetimeAggregates.saved, 0.001)
+            assertEquals(8.5, profileFlow!!.lifetimeAggregates.saved, 0.001)
             assertEquals(3.0, profileFlow.lifetimeAggregates.smokingUnits, 0.001)
         }
     }
@@ -620,12 +612,11 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testG_crossUserAccess_rejectedWithPermissionDenied() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             // Establish a valid open day as the test UID
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            assertEquals(1.0, getCounts(uid, TEST_DATE), 0.001)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            assertEquals(1.0, getCounts(testUid, TEST_DATE), 0.001)
 
             // Attempt to READ another user's day document — must be rejected by rules
             val error = assertFailsWith<Exception> {
