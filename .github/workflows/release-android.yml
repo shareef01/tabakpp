@@ -46,7 +46,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
           fetch-depth: 0  # full history for provenance operations
@@ -85,7 +85,7 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           cache: npm
@@ -142,7 +142,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Checkout the EXACT validated SHA from require-ci, not whatever
           # main happens to contain later. This prevents a race where main
@@ -164,7 +164,7 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - uses: gradle/actions/setup-gradle@07d1f8453baaff67fb503883367f8b13e6158a54 # v6
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -250,7 +250,7 @@ jobs:
           git push origin "v${VERSION}"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b # v3
         with:
           tag_name: v${{ github.event.inputs.version }}
           body_path: .github/release-notes/${{ github.event.inputs.version }}.md
