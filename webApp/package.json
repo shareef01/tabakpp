@@ -29,6 +29,11 @@
     "recharts": "^2.13.0",
     "tailwind-merge": "^2.5.4"
   },
+  "overrides": {
+    "@firebase/firestore": {
+      "@grpc/grpc-js": "1.14.5"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@firebase/rules-unit-testing": "^5.0.1",
