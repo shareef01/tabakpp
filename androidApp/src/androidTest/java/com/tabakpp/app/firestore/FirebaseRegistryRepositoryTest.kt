@@ -57,6 +57,15 @@ class FirebaseRegistryRepositoryTest {
         const val FIRESTORE_PORT = TestTabakApp.FIRESTORE_EMULATOR_PORT
         const val AUTH_HOST = TestTabakApp.AUTH_EMULATOR_HOST
         const val AUTH_PORT = TestTabakApp.AUTH_EMULATOR_PORT
+
+        /**
+         * Single bounded budget for the one anonymous sign-in issued per setup.
+         *
+         * Chosen to match the worst case of the previous retry loop
+         * (30 s + 3 s + 15 s + 3 s + 15 s), so cold Auth emulator startup keeps
+         * equivalent headroom without ever overlapping a second sign-in.
+         */
+        const val SIGN_IN_TIMEOUT_SECONDS = 60L
     }
 
     private lateinit var firestore: FirebaseFirestore
@@ -114,83 +123,73 @@ class FirebaseRegistryRepositoryTest {
                 Log.d(TAG, "App Check token pre-fetch failed (expected in CI): ${e.message}")
             }
 
-            // Retry sign-in to handle Auth emulator cold-start delay.
-            // The first attempt uses a 30s timeout to accommodate:
-            //   - First-time Auth SDK class loading (~10-15s bytecode verification)
-            //   - App Check placeholder token usage (cached after pre-fetch above)
-            //   - Initial token signing on the emulator (~5-10s)
-            // Subsequent attempts use 15s (classes + DNS already cached).
-            var uid: String? = null
-            var lastError: Throwable? = null
-            val maxRetries = 3
-            for (attempt in 1..maxRetries) {
-                val timeoutMs = if (attempt == 1) 30000L else 15000L
-                try {
-                    // Use the NATIVE Task + Tasks.await rather than
-                    // withTimeout { Firebase.auth.signInAnonymously() }.
-                    //
-                    // withTimeout only cancels the Kotlin coroutine; the native
-                    // sign-in Task keeps running. Retrying after a timeout
-                    // therefore launched CONCURRENT sign-ins whose completion
-                    // order was nondeterministic, and a late completion could
-                    // overwrite Firebase.auth.currentUser *after* testUid had
-                    // already been captured. Firestore then kept using the
-                    // stale credential and every owner-path operation was
-                    // denied by the rules (firestore.rules L490 / L499).
-                    val authResult = Tasks.await(
-                        nativeAuth.signInAnonymously(),
-                        timeoutMs,
-                        TimeUnit.MILLISECONDS,
-                    )
-                    uid = authResult.user?.uid
-                    Log.d(TAG, "Signed in as: $uid (attempt $attempt/$maxRetries)")
-                    if (uid.isNullOrEmpty()) {
-                        throw IllegalStateException("signInAnonymously returned a null uid")
-                    }
-                    break
-                } catch (e: Exception) {
-                    lastError = e
-                    // Deliberately do NOT fall back to currentUser?.uid.
-                    // A non-null currentUser proves neither that sign-in
-                    // succeeded nor that the SDK's token store has settled,
-                    // and accepting it here is what produced the misleading
-                    // "test.uid set to: <uid>" log followed by
-                    // PERMISSION_DENIED in CI artifacts.
-                    Log.w(TAG, "signInAnonymously failed (attempt $attempt/$maxRetries, ${timeoutMs}ms timeout): ${e.message}")
-                    if (attempt < maxRetries) {
-                        delay(3000)
-                    }
-                }
+            // ONE sign-in Task per setup invocation. There is deliberately no
+            // retry loop.
+            //
+            // Tasks.await(task, timeout, unit) bounds only the WAIT; it does not
+            // cancel the underlying Firebase Task, and FirebaseAuth offers no
+            // reliable way to cancel signInAnonymously(). Retrying after a wait
+            // timeout can therefore leave the previous Task unresolved and
+            // overlap it with the next one; whichever completes last wins, and a
+            // late completion can overwrite the current user after testUid has
+            // already been captured. Firestore then keeps using the stale
+            // credential and every owner-path rule (isOwner, firestore.rules
+            // L490 / L499) evaluates false.
+            //
+            // So a wait timeout is terminal here: setup aborts with
+            // AUTH_SETUP_FAILED rather than issuing a second sign-in.
+            //
+            // The single budget (SIGN_IN_TIMEOUT_SECONDS) matches the previous
+            // retry loop's worst case (30 + 3 + 15 + 3 + 15), so cold Auth
+            // emulator startup keeps equivalent headroom with no overlap.
+            val signInTask = nativeAuth.signInAnonymously()
+            val authResult = try {
+                Tasks.await(signInTask, SIGN_IN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            } catch (e: Exception) {
+                throw IllegalStateException(
+                    "AUTH_SETUP_FAILED: anonymous sign-in did not complete within " +
+                        "$SIGN_IN_TIMEOUT_SECONDS s (task completed=${signInTask.isComplete}, " +
+                        "successful=${if (signInTask.isComplete) signInTask.isSuccessful else "n/a"}): " +
+                        "${e.message}",
+                    e,
+                )
             }
 
+            val uid = authResult.user?.uid
             if (uid.isNullOrEmpty()) {
                 throw IllegalStateException(
-                    "AUTH_SETUP_FAILED: anonymous authentication unavailable after $maxRetries attempts; " +
-                        "last error: ${lastError?.message}",
-                    lastError,
+                    "AUTH_SETUP_FAILED: sign-in completed but returned a null uid"
                 )
             }
             Log.d(TAG, "test.uid set to: $uid")
             testUid = uid
 
-            // The returned uid and currentUser must agree before we build fixtures.
-            val currentUid = Firebase.auth.currentUser?.uid
-            if (currentUid != uid) {
-                Log.e(TAG, "AUTH_UID_MISMATCH: current=$currentUid path=$uid")
+            // Both the native instance (which produced the token) and the
+            // GitLive wrapper (which the repository reads through) must agree
+            // with the returned uid. A divergence between the two would let
+            // Firestore use a different identity than the fixture path, which
+            // is exactly the hidden dual-auth failure this guards against.
+            val nativeUid = nativeAuth.currentUser?.uid
+            if (nativeUid != uid) {
+                Log.e(TAG, "AUTH_UID_MISMATCH: native=$nativeUid path=$uid")
                 throw IllegalStateException(
-                    "AUTH_UID_MISMATCH: Firebase.auth.currentUser?.uid=$currentUid != test.uid=$uid"
+                    "AUTH_UID_MISMATCH: native FirebaseAuth.currentUser?.uid=$nativeUid != $uid"
+                )
+            }
+            val gitLiveUid = Firebase.auth.currentUser?.uid
+            if (gitLiveUid != uid) {
+                Log.e(TAG, "AUTH_UID_MISMATCH: gitlive=$gitLiveUid native=$nativeUid path=$uid")
+                throw IllegalStateException(
+                    "AUTH_UID_MISMATCH: GitLive Firebase.auth.currentUser?.uid=$gitLiveUid != $uid"
                 )
             }
 
             // AUTH_FIRESTORE_READY gate.
             //
-            // currentUser matching is necessary but NOT sufficient: the SDK's
-            // token store can still be settling, in which case Firestore
-            // carries no usable credential and every owner-path rule
-            // (isOwner -> L490/L499) evaluates false. Prove readiness with an
-            // owner-only read on the user document before building fixtures,
-            // so a credential problem fails setup loudly instead of surfacing
-            // much later as PERMISSION_DENIED inside a test body.
+            // This proves Firestore is CURRENTLY able to serve an authenticated
+            // owner-path request for this uid. It does not claim the token store
+            // has permanently "settled" — it is a point-in-time readiness check
+            // performed immediately before fixture construction.
             awaitAuthFirestoreReady(uid)
 
             // REQUIRED fixture construction. These are owner-only paths
