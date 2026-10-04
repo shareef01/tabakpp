@@ -21,7 +21,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.TimeUnit
@@ -122,16 +121,41 @@ class FirebaseRegistryRepositoryTest {
             //   - Initial token signing on the emulator (~5-10s)
             // Subsequent attempts use 15s (classes + DNS already cached).
             var uid: String? = null
+            var lastError: Throwable? = null
             val maxRetries = 3
             for (attempt in 1..maxRetries) {
                 val timeoutMs = if (attempt == 1) 30000L else 15000L
                 try {
-                    val authResult = withTimeout(timeoutMs) { Firebase.auth.signInAnonymously() }
+                    // Use the NATIVE Task + Tasks.await rather than
+                    // withTimeout { Firebase.auth.signInAnonymously() }.
+                    //
+                    // withTimeout only cancels the Kotlin coroutine; the native
+                    // sign-in Task keeps running. Retrying after a timeout
+                    // therefore launched CONCURRENT sign-ins whose completion
+                    // order was nondeterministic, and a late completion could
+                    // overwrite Firebase.auth.currentUser *after* testUid had
+                    // already been captured. Firestore then kept using the
+                    // stale credential and every owner-path operation was
+                    // denied by the rules (firestore.rules L490 / L499).
+                    val authResult = Tasks.await(
+                        nativeAuth.signInAnonymously(),
+                        timeoutMs,
+                        TimeUnit.MILLISECONDS,
+                    )
                     uid = authResult.user?.uid
                     Log.d(TAG, "Signed in as: $uid (attempt $attempt/$maxRetries)")
+                    if (uid.isNullOrEmpty()) {
+                        throw IllegalStateException("signInAnonymously returned a null uid")
+                    }
                     break
                 } catch (e: Exception) {
-                    uid = Firebase.auth.currentUser?.uid
+                    lastError = e
+                    // Deliberately do NOT fall back to currentUser?.uid.
+                    // A non-null currentUser proves neither that sign-in
+                    // succeeded nor that the SDK's token store has settled,
+                    // and accepting it here is what produced the misleading
+                    // "test.uid set to: <uid>" log followed by
+                    // PERMISSION_DENIED in CI artifacts.
                     Log.w(TAG, "signInAnonymously failed (attempt $attempt/$maxRetries, ${timeoutMs}ms timeout): ${e.message}")
                     if (attempt < maxRetries) {
                         delay(3000)
@@ -139,20 +163,17 @@ class FirebaseRegistryRepositoryTest {
                 }
             }
 
-            // HARDENING: Fail setup explicitly if no authenticated UID exists.
-            // The previous fallback to TEST_UID could produce ambiguous downstream
-            // failures (unauthenticated requests → PERMISSION_DENIED) that are
-            // difficult to diagnose from CI artifacts alone.
             if (uid.isNullOrEmpty()) {
                 throw IllegalStateException(
-                    "AUTH_SETUP_FAILED: anonymous authentication unavailable after $maxRetries attempts"
+                    "AUTH_SETUP_FAILED: anonymous authentication unavailable after $maxRetries attempts; " +
+                        "last error: ${lastError?.message}",
+                    lastError,
                 )
             }
             Log.d(TAG, "test.uid set to: $uid")
             testUid = uid
 
-            // HARDENING: Assert auth UID matches the path UID used for Firestore operations.
-            // A mismatch here would produce rules denials that are hard to trace.
+            // The returned uid and currentUser must agree before we build fixtures.
             val currentUid = Firebase.auth.currentUser?.uid
             if (currentUid != uid) {
                 Log.e(TAG, "AUTH_UID_MISMATCH: current=$currentUid path=$uid")
@@ -161,13 +182,35 @@ class FirebaseRegistryRepositoryTest {
                 )
             }
 
-            // Clear any stale data from previous test runs (same UID, persisted
-            // across test methods in the same emulator session).
+            // AUTH_FIRESTORE_READY gate.
+            //
+            // currentUser matching is necessary but NOT sufficient: the SDK's
+            // token store can still be settling, in which case Firestore
+            // carries no usable credential and every owner-path rule
+            // (isOwner -> L490/L499) evaluates false. Prove readiness with an
+            // owner-only read on the user document before building fixtures,
+            // so a credential problem fails setup loudly instead of surfacing
+            // much later as PERMISSION_DENIED inside a test body.
+            awaitAuthFirestoreReady(uid)
+
+            // REQUIRED fixture construction. These are owner-only paths
+            // (firestore.rules L490 / L500); a denial here means the fixture
+            // is incomplete, so it must abort setup rather than log and let the
+            // test body fail later with an unrelated-looking exception.
             try {
                 repository.deleteAllUserData(uid)
-            } catch (_: Exception) { }
-            try { repository.ensureUserDocument(uid, "Test User") } catch (e: Exception) {
-                Log.d(TAG, "ensureUserDocument: ${e.message}")
+            } catch (e: Exception) {
+                // Optional cleanup — pre-existing fixtures may legitimately be
+                // absent. Logged but non-fatal.
+                Log.d(TAG, "deleteAllUserData (non-fatal): ${e.message}")
+            }
+            try {
+                repository.ensureUserDocument(uid, "Test User")
+            } catch (e: Exception) {
+                throw IllegalStateException(
+                    "FIXTURE_SETUP_FAILED: ensureUserDocument(users/$uid) failed: ${e.message}",
+                    e,
+                )
             }
 
             val config = TrackerConfig(
@@ -176,13 +219,18 @@ class FirebaseRegistryRepositoryTest {
                 isFinanciallyTracked = true, isPrimaryTracked = true, baseline = 20,
                 createdAt = Timestamp(0, 0), updatedAt = Timestamp(0, 0)
             )
-            try { repository.addConfig(uid, config) } catch (e: Exception) {
-                Log.d(TAG, "addConfig: ${e.message}")
+            try {
+                repository.addConfig(uid, config)
+            } catch (e: Exception) {
+                throw IllegalStateException(
+                    "FIXTURE_SETUP_FAILED: addConfig(users/$uid/configs/$TEST_TRACKER_ID) failed: ${e.message}",
+                    e,
+                )
             }
 
-            // HARDENING: Verify the config was actually created. A missing config
-            // produces CONFIG_NOT_FOUND during transactions, not PERMISSION_DENIED,
-            // but verifying here makes setup failures explicit rather than deferred.
+            // Verify the config was actually created. A missing config produces
+            // CONFIG_NOT_FOUND during transactions; verifying here makes setup
+            // failures explicit rather than deferred.
             val configSnap = firestore.collection("users").document(uid)
                 .collection("configs").document(TEST_TRACKER_ID).get()
             if (!configSnap.exists) {
@@ -192,6 +240,41 @@ class FirebaseRegistryRepositoryTest {
             }
             Log.d(TAG, "Config existence verified: users/$uid/configs/$TEST_TRACKER_ID")
         }
+    }
+
+    /**
+     * Blocks until Firestore is actually serving requests for the authenticated
+     * identity [uid], or fails setup.
+     *
+     * Reads `users/{uid}`, which the rules permit only when
+     * `isOwner(uid)` (firestore.rules L490). A PERMISSION_DENIED here means
+     * the SDK's token store has not yet adopted the signed-in user, which is
+     * what previously caused owner-only fixture writes and the subsequent
+     * contention transaction to be denied with a misleading PERMISSION_DENIED.
+     *
+     * The document itself is never created, so this stays a pure read and adds
+     * no new write surface.
+     */
+    private suspend fun awaitAuthFirestoreReady(uid: String) {
+        val deadlineAttempts = 5
+        var lastError: Throwable? = null
+        for (attempt in 1..deadlineAttempts) {
+            try {
+                firestore.collection("users").document(uid).get()
+                Log.d(TAG, "AUTH_FIRESTORE_READY: owner-path read permitted (attempt $attempt/$deadlineAttempts)")
+                return
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(TAG, "AUTH_FIRESTORE_READY not ready (attempt $attempt/$deadlineAttempts): ${e.message}")
+                if (attempt < deadlineAttempts) delay(500)
+            }
+        }
+        throw IllegalStateException(
+            "AUTH_FIRESTORE_READY_FAILED: Firestore denied the owner-path read for " +
+                "users/$uid after $deadlineAttempts attempts; currentUser=" +
+                "${Firebase.auth.currentUser?.uid}; last error: ${lastError?.message}",
+            lastError,
+        )
     }
 
     @After
