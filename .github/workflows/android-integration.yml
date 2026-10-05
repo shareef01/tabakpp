@@ -134,7 +134,10 @@ jobs:
           JSON
           firebase emulators:start --config firebase.ci.json --only firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
           FIREBASE_PID=$!
-          trap 'kill "$FIREBASE_PID" 2>/dev/null || true; pkill -f cloud-firestore 2>/dev/null || true; kill "$LOGCAT_PID" 2>/dev/null || true' EXIT
+          # LOGCAT_PID is only assigned later; readiness failures exit before that.
+          # ${LOGCAT_PID:-} avoids an unbound-variable error under `set -u`
+          # that would otherwise mask the real infrastructure error.
+          trap 'kill "$FIREBASE_PID" 2>/dev/null || true; pkill -f cloud-firestore 2>/dev/null || true; kill "${LOGCAT_PID:-}" 2>/dev/null || true' EXIT
 
           # Wait for Firestore emulator readiness (30 retries × 2s = 60s max)
           for i in $(seq 1 30); do
@@ -278,7 +281,12 @@ jobs:
           # unresponsive. It was a false positive on every run.
           PROBE_TOOL=""
           probe_port() {
-          if adb shell "toybox nc -w 3 127.0.0.1 $1" >/dev/null 2>&1; then
+          # Redirect stdin from /dev/null so nc observes EOF immediately
+          # after connecting and exits 0 on success. Without this, adb shell
+          # keeps stdin open, nc blocks for the full -w timeout and then
+          # exits NON-ZERO even though the TCP connection succeeded — which
+          # would hard-fail a healthy runner as EMULATOR_PORT_UNREACHABLE.
+          if adb shell "toybox nc -w 3 127.0.0.1 $1 < /dev/null" >/dev/null 2>&1; then
           PROBE_TOOL="toybox-nc"
           return 0
           fi
