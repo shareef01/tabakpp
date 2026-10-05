@@ -114,6 +114,10 @@ jobs:
           #!/bin/bash
           set -euo pipefail
 
+          # Target the single emulator we launched explicitly, so no adb call
+          # can resolve to a different (or absent) device.
+          export ANDROID_SERIAL=emulator-5554
+
           # Start Firebase emulators in the background.
           # Create a CI-specific config that binds emulators to 0.0.0.0 instead
           # of 127.0.0.1, because the Android emulator's 10.0.2.2 alias for the
@@ -215,33 +219,57 @@ jobs:
           exit 1
           }
 
-          strip_ws() {
-          tr -d '[:space:]'
+          # Per-command bound: a single `adb shell` can hang indefinitely while
+          # the device is mid-boot, stalling the whole probe loop and defeating
+          # the bounded retry budget.
+          ADB_SHELL_TIMEOUT=20
+          adb_shell_ok() {
+            timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell "$1" >/dev/null 2>&1
+          }
+          adb_prop() {
+            timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell "getprop $1" 2>/dev/null | tr -d '[:space:]' || true
           }
 
+          # The budget must outlast the emulator boot itself: observed boots are
+          # 341-606s, and `adb get-state` succeeds long before
+          # sys.boot_completed flips to 1. A budget shorter than boot would
+          # expire before the device could ever become ready.
+          READINESS_PROBES=160
           STABLE_REQUIRED=3
           stable=0
-          for probe in $(seq 1 60); do
-          ok=1
-          state="$(adb get-state 2>/dev/null | strip_ws || true)"
-          [ "$state" = "device" ] || ok=0
-          boot=""
-          if [ "$ok" = "1" ]; then
-          boot="$(adb shell getprop sys.boot_completed 2>/dev/null | strip_ws || true)"
-          [ "$boot" = "1" ] || ok=0
-          fi
-          if [ "$ok" = "1" ] && ! adb shell pm list packages >/dev/null 2>&1; then ok=0; fi
-          if [ "$ok" = "1" ] && ! adb shell settings get global window_animation_scale >/dev/null 2>&1; then ok=0; fi
+          for probe in $(seq 1 "$READINESS_PROBES"); do
+            ok=1
+            state="$(adb get-state 2>/dev/null | tr -d '[:space:]' || true)"
+            [ "$state" = "device" ] || ok=0
 
-          if [ "$ok" = "1" ]; then
-          stable=$((stable + 1))
-          echo "DEVICE_READY: consecutive probe $stable/$STABLE_REQUIRED"
-          if [ "$stable" -ge "$STABLE_REQUIRED" ]; then break; fi
-          else
-          stable=0
-          echo "DEVICE_NOT_READY (probe $probe/60): state='$state' boot_completed='$boot'"
-          fi
-          sleep 5
+            boot=""
+            if [ "$ok" = "1" ]; then
+              boot="$(adb_prop sys.boot_completed)"
+              [ "$boot" = "1" ] || ok=0
+            fi
+
+            # API level must be readable AND numeric, so a device that answers
+            # with empty output or error text cannot look ready.
+            sdk=""
+            if [ "$ok" = "1" ]; then
+              sdk="$(adb_prop ro.build.version.sdk)"
+              case "$sdk" in
+                ''|*[!0-9]*) ok=0 ;;
+              esac
+            fi
+
+            if [ "$ok" = "1" ] && ! adb_shell_ok "pm list packages"; then ok=0; fi
+            if [ "$ok" = "1" ] && ! adb_shell_ok "settings get global window_animation_scale"; then ok=0; fi
+
+            if [ "$ok" = "1" ]; then
+              stable=$((stable + 1))
+              echo "DEVICE_READY: consecutive probe $stable/$STABLE_REQUIRED (sdk=$sdk)"
+              if [ "$stable" -ge "$STABLE_REQUIRED" ]; then break; fi
+            else
+              stable=0
+              echo "DEVICE_NOT_READY (probe $probe/$READINESS_PROBES): state='$state' boot_completed='$boot' sdk='$sdk'"
+            fi
+            sleep 5
           done
 
           if [ "$stable" -lt "$STABLE_REQUIRED" ]; then
@@ -414,18 +442,65 @@ jobs:
           SCRIPT
           chmod +x ci-run-tests.sh
 
-      # The emulator-runner action (v2) starts the Android emulator, runs the
-      # `script`, then stops the emulator. Firebase emulators are started/stopped
-      # inside ci-run-tests.sh via background PID + trap for deterministic cleanup.
-      - name: Boot Android emulator and run instrumentation tests
-        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
-        with:
-          api-level: 35
-          arch: x86_64
-          emulator-options: -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect
-          force-avd-creation: true
-          avd-name: test_emulator
-          script: ./ci-run-tests.sh
+      # The workflow now owns the emulator lifecycle end-to-end instead of
+      # delegating to reactivecircus/android-emulator-runner.
+      #
+      # Why: the action treats `sys.boot_completed == 1` as sufficient device
+      # readiness and then immediately runs shell-dependent commands —
+      # unconditionally `adb shell input keyevent 82`, plus `settings put ...`
+      # when animations are disabled. On a slow software-emulated AVD those
+      # services are still unstable, producing Broken pipe (32) and adb exit
+      # 224. The action then aborts BEFORE `script:` is invoked, so a readiness
+      # gate inside ci-run-tests.sh can never run. Observed in run 37253333090:
+      #
+      #   Emulator booted.
+      #   adb shell input keyevent 82
+      #   Boot completed in 437842 ms
+      #   cmd: Failure calling service input: Broken pipe (32)
+      #   ##[error] ... adb ... failed with exit code 224
+      #
+      # Owning launch + readiness puts the stable-probe gate before the first
+      # fragile service interaction.
+      - name: Set up emulator and run instrumentation tests
+        run: |
+          set -euo pipefail
+
+          # --- SDK / AVD setup (parity with the previous wrapper) ---
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install 'build-tools;37.0.0' platform-tools 'platforms;android-35' > /dev/null
+          sdkmanager --install emulator --channel=0 > /dev/null
+          sdkmanager --install 'system-images;android-35;default;x86_64' --channel=0 > /dev/null
+
+          echo no | avdmanager create avd --force -n test_emulator \
+            --package 'system-images;android-35;default;x86_64' > /dev/null
+          printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/test_emulator.avd/config.ini"
+
+          # --- Acceleration: decide explicitly and record it ---
+          ACCEL_ARGS=""
+          if [ -w /dev/kvm ]; then
+            echo "ACCELERATION: /dev/kvm writable, using hardware acceleration"
+          else
+            echo "ACCELERATION: /dev/kvm not available to this user, using software emulation (-accel off)"
+            ACCEL_ARGS="-accel off"
+          fi
+
+          echo "Launching emulator: emulator -port 5554 -avd test_emulator -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect $ACCEL_ARGS"
+          nohup emulator -port 5554 -avd test_emulator \
+            -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect \
+            $ACCEL_ARGS > emulator-launch.log 2>&1 &
+          EMULATOR_PID=$!
+          echo "Emulator launched (pid $EMULATOR_PID)"
+
+          cleanup_emulator() {
+            adb -s emulator-5554 emu kill > /dev/null 2>&1 || true
+            if [ -n "${EMULATOR_PID:-}" ]; then
+              kill "$EMULATOR_PID" > /dev/null 2>&1 || true
+              wait "$EMULATOR_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_emulator EXIT
+
+          ./ci-run-tests.sh
 
       # Upload test result artifacts from BOTH runs.
       # No test re-execution — just collect what the test steps already produced.
