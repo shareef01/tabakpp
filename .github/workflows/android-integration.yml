@@ -530,9 +530,35 @@ jobs:
           command -v adb
           command -v emulator
 
+          # AVD creation output is kept (not discarded): run 37256678364
+          # showed avdmanager can exit 0 yet produce no AVD at the assumed
+          # path — a silent failure that discarded output would hide.
           echo no | "$AVDMANAGER" create avd --force -n test_emulator \
-            --package 'system-images;android-35;default;x86_64' > /dev/null
-          printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/test_emulator.avd/config.ini"
+            --package 'system-images;android-35;default;x86_64'
+
+          # avdmanager may honour ANDROID_AVD_HOME / ANDROID_SDK_HOME /
+          # ANDROID_USER_HOME instead of $HOME/.android. Resolve the config
+          # path from evidence, and fail with diagnostics if it is nowhere.
+          AVD_CONFIG=""
+          for candidate in \
+            "$HOME/.android/avd/test_emulator.avd/config.ini" \
+            ${ANDROID_AVD_HOME:+"$ANDROID_AVD_HOME/test_emulator.avd/config.ini"} \
+            ${ANDROID_SDK_HOME:+"$ANDROID_SDK_HOME/.android/avd/test_emulator.avd/config.ini"} \
+            ${ANDROID_USER_HOME:+"$ANDROID_USER_HOME/avd/test_emulator.avd/config.ini"}; do
+            if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+              AVD_CONFIG="$candidate"
+              break
+            fi
+          done
+          if [ -z "$AVD_CONFIG" ]; then
+            echo "::error::test_emulator AVD config.ini not found in any known location"
+            echo "ANDROID_AVD_HOME='${ANDROID_AVD_HOME:-}' ANDROID_SDK_HOME='${ANDROID_SDK_HOME:-}' ANDROID_USER_HOME='${ANDROID_USER_HOME:-}' HOME='$HOME'"
+            "$AVDMANAGER" list avd 2>&1 || true
+            ls -la "$HOME/.android" "$HOME/.android/avd" 2>&1 || true
+            exit 1
+          fi
+          echo "AVD_CONFIG=$AVD_CONFIG"
+          printf 'hw.cpu.ncore=2\n' >> "$AVD_CONFIG"
 
           # --- Acceleration: decide explicitly and record it ---
           ACCEL_ARGS=""
