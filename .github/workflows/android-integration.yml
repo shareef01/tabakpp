@@ -205,6 +205,9 @@ jobs:
           adb shell getprop ro.product.cpu.abilist 2>&1 || true
           adb shell getprop ro.product.model 2>&1 || true
           adb shell getprop sys.boot_completed 2>&1 || true
+          adb shell getprop sys.user.0.ce_available 2>&1 || true
+          echo "=== current user ==="
+          adb shell am get-current-user 2>&1 || true
           echo "=== adb reverse --list ==="
           adb reverse --list 2>&1 || true
           echo "=== load ==="
@@ -258,24 +261,71 @@ jobs:
               esac
             fi
 
+            # Credential-encrypted storage for User 0 must be prepared (Direct Boot unlock).
+            # On Android 15, sys.boot_completed flips to 1 while User 0 is still RUNNING_LOCKED;
+            # PackageInstallerService cannot complete install sessions until User 0 CE storage is mounted.
+            ce_ready=""
+            if [ "$ok" = "1" ]; then
+              ce_ready="$(adb_prop sys.user.0.ce_available)"
+              [ "$ce_ready" = "true" ] || ok=0
+            fi
+
             if [ "$ok" = "1" ] && ! adb_shell_ok "pm list packages"; then ok=0; fi
             if [ "$ok" = "1" ] && ! adb_shell_ok "settings get global window_animation_scale"; then ok=0; fi
 
+            # Dismiss keyguard and disable animations as soon as shell and settings respond.
+            # Headless -no-window mode otherwise stalls WindowManager until 'Keyguard drawn timeout' (10s),
+            # and animations waste software GPU/CPU rendering cycles.
+            if [ "$ok" = "1" ]; then
+              adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+              adb shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
+              adb shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
+              adb shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
+            fi
+
+            # Verify ActivityManager can report the current user
+            current_user=""
+            if [ "$ok" = "1" ]; then
+              current_user="$(timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell am get-current-user 2>/dev/null | tr -d '[:space:]' || true)"
+              [ "$current_user" = "0" ] || ok=0
+            fi
+
+            # Real PackageInstaller transaction probe (#74).
+            # Verifies PackageInstallerService is alive, initialized, and capable of
+            # creating and abandoning an install session. This directly exercises the IPC
+            # endpoint that failed with Broken pipe (32) under UTP.
+            session_id=""
+            if [ "$ok" = "1" ]; then
+              session_id="$(timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell cmd package install-create 2>/dev/null | grep -oE '[0-9]+' || true)"
+              if [ -n "$session_id" ]; then
+                timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell cmd package install-abandon "$session_id" >/dev/null 2>&1 || true
+              else
+                ok=0
+              fi
+            fi
+
             if [ "$ok" = "1" ]; then
               stable=$((stable + 1))
-              echo "DEVICE_READY: consecutive probe $stable/$STABLE_REQUIRED (sdk=$sdk)"
+              echo "DEVICE_READY: consecutive probe $stable/$STABLE_REQUIRED (sdk=$sdk, ce=$ce_ready, user=$current_user, session=$session_id)"
               if [ "$stable" -ge "$STABLE_REQUIRED" ]; then break; fi
             else
               stable=0
-              echo "DEVICE_NOT_READY (probe $probe/$READINESS_PROBES): state='$state' boot_completed='$boot' sdk='$sdk'"
+              echo "DEVICE_NOT_READY (probe $probe/$READINESS_PROBES): state='$state' boot_completed='$boot' sdk='$sdk' ce_available='$ce_ready' user='$current_user' session='$session_id'"
             fi
             sleep 5
           done
 
           if [ "$stable" -lt "$STABLE_REQUIRED" ]; then
-          fail_readiness "DEVICE_NOT_READY: device never satisfied $STABLE_REQUIRED consecutive readiness probes (adb shell, package manager, settings service)"
+            fail_readiness "DEVICE_NOT_READY: device never satisfied $STABLE_REQUIRED consecutive readiness probes (adb shell, package manager, settings service, user unlock, package-installer session)"
           fi
-          echo "DEVICE_READY: shell, package manager and settings service all responsive"
+          echo "DEVICE_READY: shell, package manager, settings service, user CE storage, and package-installer session all responsive"
+
+          # Drain any lingering post-boot broadcast storm (e.g. BOOT_COMPLETED, LOCKED_BOOT_COMPLETED receivers)
+          # so background initializations settle before Gradle and test execution start.
+          echo "Waiting for post-boot broadcasts to settle..."
+          timeout -k 5 30 adb shell am wait-for-broadcast-idle >/dev/null 2>&1 || true
+          echo "Broadcast queues drained"
+
           # Always capture device evidence, not only on failure, so a green run
           # still records the exact API level / ABI / reverse mapping used.
           dump_device_evidence
@@ -355,6 +405,27 @@ jobs:
             -d '{"returnSecureToken": true}' > /dev/null 2>&1 || true
           echo "Auth emulator warm-up complete"
 
+          # Capture diagnostic evidence immediately before Gradle test execution
+          {
+            echo "=== timestamp ==="
+            date -u +"%Y-%m-%dT%H:%M:%SZ"
+            echo "=== adb get-state ==="
+            adb get-state 2>&1 || true
+            echo "=== sys.boot_completed ==="
+            adb shell getprop sys.boot_completed 2>&1 || true
+            echo "=== sys.user.0.ce_available ==="
+            adb shell getprop sys.user.0.ce_available 2>&1 || true
+            echo "=== current user ==="
+            adb shell am get-current-user 2>&1 || true
+            echo "=== load ==="
+            adb shell cat /proc/loadavg 2>&1 || true
+            echo "=== memory ==="
+            adb shell cat /proc/meminfo 2>&1 | head -n 10 || true
+            echo "=== package service dump ==="
+            adb shell dumpsys activity services package 2>&1 | head -n 30 || true
+          } > pre-gradle-evidence.txt 2>&1 || true
+          cat pre-gradle-evidence.txt || true
+
           # Capture logcat during test execution — critical for diagnosing hangs
           adb logcat -c
           ( adb logcat -v threadtime > test-logcat.log 2>&1 ) &
@@ -372,6 +443,7 @@ jobs:
           TEST_EXIT=0
           timeout -k 30s 30m ./gradlew :androidApp:connectedDebugAndroidTest \
             --no-daemon \
+            --max-workers=2 \
             -Pandroid.testInstrumentationRunnerArguments.debug=false \
             -Pandroid.testInstrumentationRunnerArguments.timeout=120 \
             || TEST_EXIT=$?
@@ -678,5 +750,6 @@ jobs:
             firestore-debug.log
             test-logcat.log
             adb-device-evidence.txt
+            pre-gradle-evidence.txt
             ci-test-metadata.txt
             avd-environment-evidence.txt
