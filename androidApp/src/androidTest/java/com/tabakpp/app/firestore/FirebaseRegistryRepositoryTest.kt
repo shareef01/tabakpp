@@ -31,6 +31,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import org.junit.After
 import org.junit.Before
+import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -66,143 +67,188 @@ class FirebaseRegistryRepositoryTest {
          * equivalent headroom without ever overlapping a second sign-in.
          */
         const val SIGN_IN_TIMEOUT_SECONDS = 60L
+
+        /** UID established once in [setUpClass] and reused by every method. */
+        @Volatile
+        private var classUid: String? = null
+
+        /** Firestore instance configured once, before any authentication. */
+        private lateinit var classFirestore: FirebaseFirestore
+
+        /**
+         * Point-in-time owner-path readiness probe. Proves Firestore served an
+         * owner-protected request using [uid]. Does NOT claim the token store has
+         * permanently settled. Read-only; creates no document.
+         */
+        private suspend fun awaitAuthFirestoreReady(uid: String) {
+            val attempts = 5
+            var lastError: Throwable? = null
+            for (attempt in 1..attempts) {
+                try {
+                    classFirestore.collection("users").document(uid).get()
+                    Log.d(TAG, "AUTH_FIRESTORE_READY: owner-path read permitted (attempt $attempt/$attempts)")
+                    return
+                } catch (e: Exception) {
+                    lastError = e
+                    Log.w(TAG, "AUTH_FIRESTORE_READY not ready (attempt $attempt/$attempts): ${e.message}")
+                    if (attempt < attempts) delay(500)
+                }
+            }
+            throw IllegalStateException(
+                "AUTH_FIRESTORE_READY_FAILED: Firestore could not serve the owner-path read for " +
+                    "users/$uid after $attempts attempts; currentUser=" +
+                    "${Firebase.auth.currentUser?.uid}; last error: ${lastError?.message}",
+                lastError,
+            )
+        }
+
+        /**
+         * Establishes the class-scoped authenticated session.
+         *
+         * Auth happens ONCE per class, never per test method. This is the only
+         * place signInAnonymously() is called, so at most one sign-in Task can
+         * ever be outstanding for this test class.
+         *
+         * The previous per-@Before design still had a cross-method hole: if
+         * Tasks.await timed out, the native Task remained unresolved and the NEXT
+         * test method's @Before created a second one. FirebaseAuth offers no
+         * reliable cancellation for signInAnonymously(), so that overlap was
+         * unrecoverable. Authenticating once, before any test method runs, removes
+         * the possibility entirely.
+         */
+        @BeforeClass
+        @JvmStatic
+        fun setUpClass() {
+            // Force IPv4 before any Firebase/network initialization. The emulator's
+            // IPv6 routing to 10.0.2.2 is unreliable on CI runners (ENETUNREACH).
+            System.setProperty("java.net.preferIPv4Stack", "true")
+            runBlocking {
+                Log.d(TAG, "=== CLASS SETUP: establishing single auth session ===")
+
+                // Emulators MUST be configured before authenticating.
+                // TestTabakApp is not reliably used by AndroidJUnitRunner (it falls
+                // back to TabakApp), so configure them here.
+                val nativeApp = com.google.firebase.FirebaseApp.getInstance()
+                val nativeAuth = com.google.firebase.auth.FirebaseAuth.getInstance(nativeApp)
+                nativeAuth.useEmulator(AUTH_HOST, AUTH_PORT)
+                // Without this the SDK tries production identitytoolkit.googleapis.com.
+                Firebase.auth.useEmulator(AUTH_HOST, AUTH_PORT)
+
+                classFirestore = Firebase.firestore
+                // setSettings rather than useEmulator: useEmulator throws if the
+                // instance was already initialized.
+                classFirestore.setSettings(
+                    host = "$FIRESTORE_HOST:$FIRESTORE_PORT",
+                    sslEnabled = false,
+                    persistenceEnabled = false,
+                )
+
+                // Pre-fetch App Check to cache the DNS failure for
+                // firebaseappcheck.googleapis.com, which is unreachable from the CI
+                // emulator. Uncached, each sign-in eats a multi-second DNS timeout.
+                try {
+                    Tasks.await(
+                        FirebaseAppCheck.getInstance().getToken(true),
+                        15, TimeUnit.SECONDS
+                    )
+                } catch (e: Exception) {
+                    Log.d(TAG, "App Check token pre-fetch failed (expected in CI): ${e.message}")
+                }
+
+                // ---- The ONE and ONLY signInAnonymously() call in this class ----
+                val signInTask = nativeAuth.signInAnonymously()
+                val authResult = try {
+                    Tasks.await(signInTask, SIGN_IN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                } catch (e: Exception) {
+                    // Terminal. No second sign-in is ever issued, so no Task can
+                    // overlap this one. Failing the class here is preferable to
+                    // reintroducing concurrent Auth mutations.
+                    Log.e(TAG, "AUTH_SETUP_FAILED: signInAnonymously call count=1, task completed=${signInTask.isComplete}")
+                    throw IllegalStateException(
+                        "AUTH_SETUP_FAILED: anonymous sign-in did not complete within " +
+                            "$SIGN_IN_TIMEOUT_SECONDS s (signInAnonymously call count=1, " +
+                            "task completed=${signInTask.isComplete}): ${e.message}",
+                        e,
+                    )
+                }
+
+                val uid = authResult.user?.uid
+                if (uid.isNullOrEmpty()) {
+                    throw IllegalStateException("AUTH_SETUP_FAILED: sign-in completed but returned a null uid")
+                }
+
+                // Both the native instance (which produces the token) and the
+                // GitLive wrapper (which the repository reads through) must agree.
+                val nativeUid = nativeAuth.currentUser?.uid
+                if (nativeUid != uid) {
+                    throw IllegalStateException("AUTH_UID_MISMATCH: native=$nativeUid != $uid")
+                }
+                val gitLiveUid = Firebase.auth.currentUser?.uid
+                if (gitLiveUid != uid) {
+                    throw IllegalStateException(
+                        "AUTH_UID_MISMATCH: gitlive=$gitLiveUid native=$nativeUid != $uid"
+                    )
+                }
+
+                classUid = uid
+                Log.d(TAG, "CLASS AUTH READY: uid=$uid (single sign-in for the whole class)")
+
+                // Point-in-time readiness: Firestore served an owner-protected
+                // request with this uid immediately before any test runs. This does
+                // NOT claim permanent token stability.
+                awaitAuthFirestoreReady(uid)
+                Log.d(TAG, "=== CLASS SETUP COMPLETE ===")
+            }
+        }
     }
 
     private lateinit var firestore: FirebaseFirestore
     private lateinit var repository: FirebaseRegistryRepository
     private lateinit var testUid: String
 
+    /**
+     * Per-method fixture construction under the already-established class UID.
+     * Does NOT sign in; that happened once in [setUpClass].
+     */
     @Before
     fun setup() {
-        // Force IPv4 before any Firebase operations.
-        // The Android emulator's IPv6 routing to 10.0.2.2 (host loopback)
-        // is unreliable on CI runners — connections via IPv6 source (::)
-        // fail with ENETUNREACH. TestTabakApp.onCreate() also sets this,
-        // but it's not reliably used by AndroidJUnitRunner, so we set it here too.
-        System.setProperty("java.net.preferIPv4Stack", "true")
         runBlocking {
             Log.d(TAG, "=== Setting up test ===")
 
-            // Configure Firebase emulators — must happen BEFORE any Firebase operations.
-            // The TestTabakApp Application class is NOT reliably used by AndroidJUnitRunner
-            // (it falls back to the debug build's TabakApp), so we configure the emulators
-            // directly here.
-            val nativeApp = com.google.firebase.FirebaseApp.getInstance()
-            val nativeAuth = com.google.firebase.auth.FirebaseAuth.getInstance(nativeApp)
-            nativeAuth.useEmulator(AUTH_HOST, AUTH_PORT)
-
-            // Configure GitLive Auth emulator too — TestTabakApp is not used by
-            // AndroidJUnitRunner (it falls back to TabakApp), so without this the
-            // SDK tries to reach production identitytoolkit.googleapis.com and
-            // times out after 30s, leaving no auth token → PERMISSION_DENIED.
-            Firebase.auth.useEmulator(AUTH_HOST, AUTH_PORT)
-
-            firestore = Firebase.firestore
-            // Firestore emulator — use setSettings instead of useEmulator because
-            // useEmulator() throws if the instance was already initialized.
-            firestore.setSettings(
-                host = "$FIRESTORE_HOST:$FIRESTORE_PORT",
-                sslEnabled = false,
-                persistenceEnabled = false,
-            )
-
+            firestore = classFirestore
             repository = FirebaseRegistryRepository(firestore)
 
-            // Pre-fetch App Check token to cache DNS failure for
-            // firebaseappcheck.googleapis.com (unreachable from CI emulator).
-            // Without this, each signInAnonymously attempt triggers a ~8s
-            // DNS timeout before falling back to a placeholder token.
-            // The App Check SDK caches the token after the first request,
-            // so subsequent sign-in calls reuse the cached value.
-            try {
-                Tasks.await(
-                    FirebaseAppCheck.getInstance().getToken(true),
-                    15, TimeUnit.SECONDS
-                )
-            } catch (e: Exception) {
-                Log.d(TAG, "App Check token pre-fetch failed (expected in CI): ${e.message}")
-            }
-
-            // ONE sign-in Task per setup invocation. There is deliberately no
-            // retry loop.
-            //
-            // Tasks.await(task, timeout, unit) bounds only the WAIT; it does not
-            // cancel the underlying Firebase Task, and FirebaseAuth offers no
-            // reliable way to cancel signInAnonymously(). Retrying after a wait
-            // timeout can therefore leave the previous Task unresolved and
-            // overlap it with the next one; whichever completes last wins, and a
-            // late completion can overwrite the current user after testUid has
-            // already been captured. Firestore then keeps using the stale
-            // credential and every owner-path rule (isOwner, firestore.rules
-            // L490 / L499) evaluates false.
-            //
-            // So a wait timeout is terminal here: setup aborts with
-            // AUTH_SETUP_FAILED rather than issuing a second sign-in.
-            //
-            // The single budget (SIGN_IN_TIMEOUT_SECONDS) matches the previous
-            // retry loop's worst case (30 + 3 + 15 + 3 + 15), so cold Auth
-            // emulator startup keeps equivalent headroom with no overlap.
-            val signInTask = nativeAuth.signInAnonymously()
-            val authResult = try {
-                Tasks.await(signInTask, SIGN_IN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            } catch (e: Exception) {
-                throw IllegalStateException(
-                    "AUTH_SETUP_FAILED: anonymous sign-in did not complete within " +
-                        "$SIGN_IN_TIMEOUT_SECONDS s (task completed=${signInTask.isComplete}, " +
-                        "successful=${if (signInTask.isComplete) signInTask.isSuccessful else "n/a"}): " +
-                        "${e.message}",
-                    e,
-                )
-            }
-
-            val uid = authResult.user?.uid
+            val uid = classUid
             if (uid.isNullOrEmpty()) {
-                throw IllegalStateException(
-                    "AUTH_SETUP_FAILED: sign-in completed but returned a null uid"
-                )
+                throw IllegalStateException("AUTH_SETUP_FAILED: class auth session was not established")
             }
-            Log.d(TAG, "test.uid set to: $uid")
-            testUid = uid
 
-            // Both the native instance (which produced the token) and the
-            // GitLive wrapper (which the repository reads through) must agree
-            // with the returned uid. A divergence between the two would let
-            // Firestore use a different identity than the fixture path, which
-            // is exactly the hidden dual-auth failure this guards against.
-            val nativeUid = nativeAuth.currentUser?.uid
-            if (nativeUid != uid) {
-                Log.e(TAG, "AUTH_UID_MISMATCH: native=$nativeUid path=$uid")
-                throw IllegalStateException(
-                    "AUTH_UID_MISMATCH: native FirebaseAuth.currentUser?.uid=$nativeUid != $uid"
-                )
-            }
+            // Detect identity drift between test methods instead of silently
+            // repairing it. A drift means some other actor changed the Auth
+            // session, which would make Firestore use a different identity
+            // than the fixture path.
+            val nativeUid = com.google.firebase.auth.FirebaseAuth.getInstance(
+                com.google.firebase.FirebaseApp.getInstance()
+            ).currentUser?.uid
             val gitLiveUid = Firebase.auth.currentUser?.uid
-            if (gitLiveUid != uid) {
-                Log.e(TAG, "AUTH_UID_MISMATCH: gitlive=$gitLiveUid native=$nativeUid path=$uid")
+            if (nativeUid != uid || gitLiveUid != uid) {
+                Log.e(TAG, "AUTH_SESSION_DRIFT: native=$nativeUid gitlive=$gitLiveUid expected=$uid")
                 throw IllegalStateException(
-                    "AUTH_UID_MISMATCH: GitLive Firebase.auth.currentUser?.uid=$gitLiveUid != $uid"
+                    "AUTH_SESSION_DRIFT: native=$nativeUid gitlive=$gitLiveUid != classUid=$uid"
                 )
             }
 
-            // AUTH_FIRESTORE_READY gate.
-            //
-            // This proves Firestore is CURRENTLY able to serve an authenticated
-            // owner-path request for this uid. It does not claim the token store
-            // has permanently "settled" — it is a point-in-time readiness check
-            // performed immediately before fixture construction.
-            awaitAuthFirestoreReady(uid)
+            testUid = uid
+            Log.d(TAG, "test.uid set to: $uid")
 
-            // REQUIRED fixture construction. These are owner-only paths
-            // (firestore.rules L490 / L500); a denial here means the fixture
-            // is incomplete, so it must abort setup rather than log and let the
-            // test body fail later with an unrelated-looking exception.
+            // Optional cleanup — a missing stale document is legitimate.
             try {
                 repository.deleteAllUserData(uid)
             } catch (e: Exception) {
-                // Optional cleanup — pre-existing fixtures may legitimately be
-                // absent. Logged but non-fatal.
                 Log.d(TAG, "deleteAllUserData (non-fatal): ${e.message}")
             }
+
+            // REQUIRED fixture construction (owner-only paths, L490 / L500).
             try {
                 repository.ensureUserDocument(uid, "Test User")
             } catch (e: Exception) {
@@ -227,9 +273,6 @@ class FirebaseRegistryRepositoryTest {
                 )
             }
 
-            // Verify the config was actually created. A missing config produces
-            // CONFIG_NOT_FOUND during transactions; verifying here makes setup
-            // failures explicit rather than deferred.
             val configSnap = firestore.collection("users").document(uid)
                 .collection("configs").document(TEST_TRACKER_ID).get()
             if (!configSnap.exists) {
@@ -239,41 +282,6 @@ class FirebaseRegistryRepositoryTest {
             }
             Log.d(TAG, "Config existence verified: users/$uid/configs/$TEST_TRACKER_ID")
         }
-    }
-
-    /**
-     * Blocks until Firestore is actually serving requests for the authenticated
-     * identity [uid], or fails setup.
-     *
-     * Reads `users/{uid}`, which the rules permit only when
-     * `isOwner(uid)` (firestore.rules L490). A PERMISSION_DENIED here means
-     * the SDK's token store has not yet adopted the signed-in user, which is
-     * what previously caused owner-only fixture writes and the subsequent
-     * contention transaction to be denied with a misleading PERMISSION_DENIED.
-     *
-     * The document itself is never created, so this stays a pure read and adds
-     * no new write surface.
-     */
-    private suspend fun awaitAuthFirestoreReady(uid: String) {
-        val deadlineAttempts = 5
-        var lastError: Throwable? = null
-        for (attempt in 1..deadlineAttempts) {
-            try {
-                firestore.collection("users").document(uid).get()
-                Log.d(TAG, "AUTH_FIRESTORE_READY: owner-path read permitted (attempt $attempt/$deadlineAttempts)")
-                return
-            } catch (e: Exception) {
-                lastError = e
-                Log.w(TAG, "AUTH_FIRESTORE_READY not ready (attempt $attempt/$deadlineAttempts): ${e.message}")
-                if (attempt < deadlineAttempts) delay(500)
-            }
-        }
-        throw IllegalStateException(
-            "AUTH_FIRESTORE_READY_FAILED: Firestore denied the owner-path read for " +
-                "users/$uid after $deadlineAttempts attempts; currentUser=" +
-                "${Firebase.auth.currentUser?.uid}; last error: ${lastError?.message}",
-            lastError,
-        )
     }
 
     @After
