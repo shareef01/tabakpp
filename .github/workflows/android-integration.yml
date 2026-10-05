@@ -166,35 +166,146 @@ jobs:
             exit 1
           fi
 
-          # Wait for the emulator to be fully ready (service manager online)
-          adb wait-for-device
-          # Give system_server additional time to finish starting all services
-          # after sys.boot_completed (services like 'package' can lag behind)
-          sleep 15
+          # ---------------------------------------------------------------------
+          # Android device readiness (#74)
+          #
+          # sys.boot_completed == 1 alone is NOT sufficient. ddmlib reads device
+          # properties with `adb shell getprop`; when the shell is still
+          # unresponsive it throws ShellCommandUnresponsiveException and AGP
+          # reports:
+          #     Skipping device 'test_emulator(AVD)': Unknown API Level
+          #     : No compatible devices connected.
+          #     Found 1 connected device(s), 0 of which were compatible.
+          # ...even though adb lists the device and boot_completed is 1.
+          #
+          # ICMP is NOT a valid readiness signal: `ping` uses a raw socket and
+          # bypasses the adbd/shell path that ddmlib depends on, so it succeeds
+          # on a device whose shell is wedged.
+          #
+          # Require device state, a real getprop round-trip, the package
+          # manager and the settings service — for N consecutive probes.
+          dump_device_evidence() {
+          {
+          echo "=== timestamp ==="
+          date -u +"%Y-%m-%dT%H:%M:%SZ"
+          echo "=== adb devices -l ==="
+          adb devices -l 2>&1 || true
+          echo "=== adb get-state ==="
+          adb get-state 2>&1 || true
+          echo "=== selected getprop ==="
+          adb shell getprop ro.build.version.sdk 2>&1 || true
+          adb shell getprop ro.product.cpu.abi 2>&1 || true
+          adb shell getprop ro.product.cpu.abilist 2>&1 || true
+          adb shell getprop ro.product.model 2>&1 || true
+          adb shell getprop sys.boot_completed 2>&1 || true
+          echo "=== adb reverse --list ==="
+          adb reverse --list 2>&1 || true
+          echo "=== load ==="
+          adb shell cat /proc/loadavg 2>&1 || true
+          } > adb-device-evidence.txt 2>&1 || true
+          cat adb-device-evidence.txt || true
+          }
 
-          # Forward emulator's 127.0.0.1 to host's localhost for the Firebase
-          # emulator ports. The emulator's 10.0.2.2 loopback alias has unreliable
-          # IPv6 routing on CI runners — sockets source from :: (IPv6), causing
-          # ENETUNREACH. java.net.preferIPv4Stack set at runtime does NOT fix this
-          # because the JVM caches the IPv6 preference at process start. Using
-          # adb reverse routes through 127.0.0.1 (IPv4-only loopback) instead.
+          fail_readiness() {
+          echo "::error::$1"
+          dump_device_evidence
+          exit 1
+          }
+
+          strip_ws() {
+          tr -d '[:space:]'
+          }
+
+          STABLE_REQUIRED=3
+          stable=0
+          for probe in $(seq 1 60); do
+          ok=1
+          state="$(adb get-state 2>/dev/null | strip_ws || true)"
+          [ "$state" = "device" ] || ok=0
+          boot=""
+          if [ "$ok" = "1" ]; then
+          boot="$(adb shell getprop sys.boot_completed 2>/dev/null | strip_ws || true)"
+          [ "$boot" = "1" ] || ok=0
+          fi
+          if [ "$ok" = "1" ] && ! adb shell pm list packages >/dev/null 2>&1; then ok=0; fi
+          if [ "$ok" = "1" ] && ! adb shell settings get global window_animation_scale >/dev/null 2>&1; then ok=0; fi
+
+          if [ "$ok" = "1" ]; then
+          stable=$((stable + 1))
+          echo "DEVICE_READY: consecutive probe $stable/$STABLE_REQUIRED"
+          if [ "$stable" -ge "$STABLE_REQUIRED" ]; then break; fi
+          else
+          stable=0
+          echo "DEVICE_NOT_READY (probe $probe/60): state='$state' boot_completed='$boot'"
+          fi
+          sleep 5
+          done
+
+          if [ "$stable" -lt "$STABLE_REQUIRED" ]; then
+          fail_readiness "DEVICE_NOT_READY: device never satisfied $STABLE_REQUIRED consecutive readiness probes (adb shell, package manager, settings service)"
+          fi
+          echo "DEVICE_READY: shell, package manager and settings service all responsive"
+          # Always capture device evidence, not only on failure, so a green run
+          # still records the exact API level / ABI / reverse mapping used.
+          dump_device_evidence
+
+          # Forward emulator 127.0.0.1 to host localhost for the Firebase
+          # emulator ports. The emulator's 10.0.2.2 loopback alias has
+          # unreliable IPv6 routing on CI runners (ENETUNREACH); adb reverse
+          # routes through 127.0.0.1 (IPv4-only loopback) instead.
           adb reverse tcp:8080 tcp:8080
           adb reverse tcp:9099 tcp:9099
 
-          # Verify emulator can reach host's Firebase emulators via adb reverse.
-          EMULATOR_NET_OK=0
-          for i in $(seq 1 15); do
-            if adb shell "ping -c1 -W2 127.0.0.1" 2>/dev/null; then
-              EMULATOR_NET_OK=1
-              echo "Emulator network to Firebase emulators: OK (via adb reverse)"
-              break
-            fi
-            echo "Waiting for emulator network connectivity ($i/15)..."
-            sleep 2
-          done
-          if [ "$EMULATOR_NET_OK" -eq 0 ]; then
-            echo "::warning::Emulator cannot reach 10.0.2.2:8080 after 30s — tests may fail with ENETUNREACH"
+          # Verify the reverse tunnels are actually registered. This was never
+          # checked before, so a silently-dropped tunnel reached Gradle.
+          REVERSE_LIST="$(adb reverse --list 2>/dev/null || true)"
+          case "$REVERSE_LIST" in
+          *tcp:8080*) ;;
+          *) fail_readiness "ADB_REVERSE_MISSING: tcp:8080 not present in adb reverse --list" ;;
+          esac
+          case "$REVERSE_LIST" in
+          *tcp:9099*) ;;
+          *) fail_readiness "ADB_REVERSE_MISSING: tcp:9099 not present in adb reverse --list" ;;
+          esac
+          echo "ADB_REVERSE_OK:"
+          echo "$REVERSE_LIST"
+
+          # Real TCP reachability probe through the reverse tunnel.
+          #
+          # The previous probe was `adb shell "ping -c1 -W2 127.0.0.1"`, which
+          # (a) is ICMP to the emulator's own loopback and never traverses
+          # tcp:8080/tcp:9099, and (b) succeeds even when the adb shell is
+          # unresponsive. It was a false positive on every run.
+          PROBE_TOOL=""
+          probe_port() {
+          if adb shell "toybox nc -w 3 127.0.0.1 $1" >/dev/null 2>&1; then
+          PROBE_TOOL="toybox-nc"
+          return 0
           fi
+          if adb shell "nc -w 3 -z 127.0.0.1 $1" >/dev/null 2>&1; then
+          PROBE_TOOL="nc"
+          return 0
+          fi
+          return 1
+          }
+
+          for port in 8080 9099; do
+          reachable=0
+          for attempt in $(seq 1 10); do
+          if probe_port "$port"; then reachable=1; break; fi
+          echo "Waiting for emulator TCP reachability on 127.0.0.1:$port ($attempt/10)..."
+          sleep 3
+          done
+          if [ "$reachable" -eq 1 ]; then
+          echo "TCP_PROBE_OK: 127.0.0.1:$port reachable from emulator via $PROBE_TOOL through adb reverse"
+          else
+          if adb shell 'command -v toybox >/dev/null 2>&1 || command -v nc >/dev/null 2>&1'; then
+          fail_readiness "EMULATOR_PORT_UNREACHABLE: 127.0.0.1:$port not reachable from inside the emulator despite adb reverse being registered"
+          else
+          echo "::warning::TCP_PROBE_UNVERIFIED: no nc or toybox on this emulator image, so 127.0.0.1:$port could not be probed. adb reverse --list was verified; runtime connectivity is asserted by the test fixture."
+          fi
+          fi
+          done
 
           # Warm up the Auth emulator's sign-in endpoint. The first
           # signInAnonymously request to a freshly-started Auth emulator can
@@ -352,4 +463,5 @@ jobs:
             firebase-emulator.log
             firestore-debug.log
             test-logcat.log
+            adb-device-evidence.txt
             ci-test-metadata.txt
