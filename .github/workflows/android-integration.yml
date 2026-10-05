@@ -465,13 +465,72 @@ jobs:
         run: |
           set -euo pipefail
 
-          # --- SDK / AVD setup (parity with the previous wrapper) ---
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install 'build-tools;37.0.0' platform-tools 'platforms;android-35' > /dev/null
-          sdkmanager --install emulator --channel=0 > /dev/null
-          sdkmanager --install 'system-images;android-35;default;x86_64' --channel=0 > /dev/null
+          # --- Android SDK tool resolution ---
+          # GitHub's ubuntu runners install the Android command-line tools
+          # under the SDK root but do NOT put them on PATH. Resolve every
+          # tool explicitly and fail fast with diagnostics instead of dying
+          # later with 'command not found'.
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
+            echo "::error::Android SDK root not found or invalid: ANDROID_SDK_ROOT='${ANDROID_SDK_ROOT:-}' ANDROID_HOME='${ANDROID_HOME:-}'"
+            exit 1
+          fi
+          echo "SDK_ROOT=$SDK_ROOT"
 
-          echo no | avdmanager create avd --force -n test_emulator \
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
+          ADB="$SDK_ROOT/platform-tools/adb"
+          EMULATOR="$SDK_ROOT/emulator/emulator"
+
+          # sdkmanager/avdmanager must exist before any SDK package operation.
+          for tool in "$SDKMANAGER" "$AVDMANAGER"; do
+            if [ ! -x "$tool" ]; then
+              echo "::error::Required SDK tool missing or not executable: $tool"
+              ls -la "$SDK_ROOT" "$SDK_ROOT/cmdline-tools" 2>&1 || true
+              exit 1
+            fi
+          done
+
+          # Put the SDK on PATH so the child ./ci-run-tests.sh inherits it and
+          # its bare `adb` invocations resolve to THIS SDK.
+          export PATH="$SDK_ROOT/platform-tools:$SDK_ROOT/emulator:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          # Every normal adb invocation targets the intended emulator.
+          export ANDROID_SERIAL=emulator-5554
+          command -v sdkmanager
+          command -v avdmanager
+
+          # --- License acceptance ---
+          # `yes` dies by SIGPIPE (141) once sdkmanager stops reading; that is
+          # expected and must not fail the step. sdkmanager's OWN exit status
+          # must be checked — a blanket `|| true` would conceal a real failure.
+          set +e
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1
+          LICENSE_STATUSES=("${PIPESTATUS[@]}")
+          set -e
+          if [ "${LICENSE_STATUSES[1]}" -ne 0 ]; then
+            echo "::error::sdkmanager --licenses failed (exit ${LICENSE_STATUSES[1]})"
+            exit 1
+          fi
+          echo "SDK licenses accepted"
+
+          # --- SDK / AVD setup (parity with the previous wrapper) ---
+          "$SDKMANAGER" --install 'build-tools;37.0.0' platform-tools 'platforms;android-35' > /dev/null
+          "$SDKMANAGER" --install emulator --channel=0 > /dev/null
+          "$SDKMANAGER" --install 'system-images;android-35;default;x86_64' --channel=0 > /dev/null
+
+          # adb and emulator come from the packages installed above; verify
+          # them now, before AVD creation / launch depend on them.
+          for tool in "$ADB" "$EMULATOR"; do
+            if [ ! -x "$tool" ]; then
+              echo "::error::SDK tool missing after package install: $tool"
+              ls -la "$SDK_ROOT/platform-tools" "$SDK_ROOT/emulator" 2>&1 || true
+              exit 1
+            fi
+          done
+          command -v adb
+          command -v emulator
+
+          echo no | "$AVDMANAGER" create avd --force -n test_emulator \
             --package 'system-images;android-35;default;x86_64' > /dev/null
           printf 'hw.cpu.ncore=2\n' >> "$HOME/.android/avd/test_emulator.avd/config.ini"
 
@@ -484,15 +543,15 @@ jobs:
             ACCEL_ARGS="-accel off"
           fi
 
-          echo "Launching emulator: emulator -port 5554 -avd test_emulator -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect $ACCEL_ARGS"
-          nohup emulator -port 5554 -avd test_emulator \
+          echo "Launching emulator: $EMULATOR -port 5554 -avd test_emulator -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect $ACCEL_ARGS"
+          nohup "$EMULATOR" -port 5554 -avd test_emulator \
             -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect \
             $ACCEL_ARGS > emulator-launch.log 2>&1 &
           EMULATOR_PID=$!
           echo "Emulator launched (pid $EMULATOR_PID)"
 
           cleanup_emulator() {
-            adb -s emulator-5554 emu kill > /dev/null 2>&1 || true
+            "$ADB" -s emulator-5554 emu kill > /dev/null 2>&1 || true
             if [ -n "${EMULATOR_PID:-}" ]; then
               kill "$EMULATOR_PID" > /dev/null 2>&1 || true
               wait "$EMULATOR_PID" 2>/dev/null || true
@@ -543,6 +602,7 @@ jobs:
             # Connected-test reports (if generated)
             androidApp/build/reports/androidTests/connected/
             # Debug artifacts from the test job only
+            emulator-launch.log
             firebase-emulator.log
             firestore-debug.log
             test-logcat.log
