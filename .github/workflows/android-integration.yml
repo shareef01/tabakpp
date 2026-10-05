@@ -15,7 +15,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -290,6 +290,10 @@ jobs:
               adb shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
               adb shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
               adb shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
+              adb shell svc bluetooth disable >/dev/null 2>&1 || true
+              adb shell settings put global bluetooth_on 0 >/dev/null 2>&1 || true
+              adb shell settings put secure location_mode 0 >/dev/null 2>&1 || true
+              adb shell settings put global wifi_scan_always_enabled 0 >/dev/null 2>&1 || true
             fi
 
             # Verify ActivityManager can report the current user
@@ -333,6 +337,7 @@ jobs:
           # so background initializations settle before Gradle and test execution start.
           echo "Waiting for post-boot broadcasts to settle..."
           timeout -k 5 30 adb shell am wait-for-broadcast-idle >/dev/null 2>&1 || true
+          sleep 10
           echo "Broadcast queues drained"
 
           # Always capture device evidence, not only on failure, so a green run
@@ -448,17 +453,16 @@ jobs:
           # discovers all androidTest classes automatically (currently FirebaseRegistryRepositoryTest
           # + RegistryErrorStructuredCodeTest = 21 tests). This keeps CI in sync with the
           # complete intended suite and automatically includes future androidTest classes.
-          # timeout=120: per-test timeout (via AndroidJUnitRunner) catches hanging @Before/setup
-          # timeout -k 30s 30m: hard kill if tests hang beyond 30 min (well under 45m job limit;
-          # bumped from 20m → 30m to accommodate slow CI emulator boots: 21 androidTest tests
-          # can take up to ~15 min on a cold emulator, plus ~6-7 min APK install)
+          # timeout_msec=420000: per-test timeout (via AndroidJUnitRunner) catches hanging tests / setup
+          # timeout -k 30s 38m: hard kill if tests hang beyond 38 min (within 60m job limit;
+          # 21 androidTest tests take ~16m on software emulator under contention, plus ~7m APK install)
           TEST_EXIT=0
-          timeout -k 30s 30m ./gradlew :androidApp:connectedDebugAndroidTest \
+          timeout -k 30s 38m ./gradlew :androidApp:connectedDebugAndroidTest \
             --no-daemon \
             --max-workers=2 \
             -Pandroid.injected.adb.options.timeOutInMs=600000 \
             -Pandroid.testInstrumentationRunnerArguments.debug=false \
-            -Pandroid.testInstrumentationRunnerArguments.timeout=120 \
+            -Pandroid.testInstrumentationRunnerArguments.timeout_msec=420000 \
             || TEST_EXIT=$?
 
           # Stop logcat capture
