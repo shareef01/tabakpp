@@ -536,25 +536,62 @@ jobs:
           echo no | "$AVDMANAGER" create avd --force -n test_emulator \
             --package 'system-images;android-35;default;x86_64'
 
-          # avdmanager may honour ANDROID_AVD_HOME / ANDROID_SDK_HOME /
-          # ANDROID_USER_HOME instead of $HOME/.android. Resolve the config
-          # path from evidence, and fail with diagnostics if it is nowhere.
+          # Authoritative discovery of the created AVD path from avdmanager.
+          # Newer cmdline-tools follow XDG Base Directory conventions on Linux,
+          # placing AVDs under ~/.config/.android/avd when overrides are unset.
+          # Query avdmanager directly rather than guessing filesystem paths.
+          AVD_DIR="$("$AVDMANAGER" list avd 2>/dev/null | awk '
+            /^[[:space:]]*Name:[[:space:]]*test_emulator[[:space:]]*$/ { in_target=1; next }
+            in_target && /^[[:space:]]*Path:[[:space:]]*/ {
+              sub(/^[[:space:]]*Path:[[:space:]]*/, "");
+              gsub(/[[:space:]\r]+$/, "");
+              print;
+              exit;
+            }
+            in_target && /^[[:space:]]*Name:/ { in_target=0 }
+          ' || true)"
+
           AVD_CONFIG=""
-          for candidate in \
-            "$HOME/.android/avd/test_emulator.avd/config.ini" \
-            ${ANDROID_AVD_HOME:+"$ANDROID_AVD_HOME/test_emulator.avd/config.ini"} \
-            ${ANDROID_SDK_HOME:+"$ANDROID_SDK_HOME/.android/avd/test_emulator.avd/config.ini"} \
-            ${ANDROID_USER_HOME:+"$ANDROID_USER_HOME/avd/test_emulator.avd/config.ini"}; do
-            if [ -n "$candidate" ] && [ -f "$candidate" ]; then
-              AVD_CONFIG="$candidate"
-              break
-            fi
-          done
+          if [ -n "$AVD_DIR" ] && [ -f "$AVD_DIR/config.ini" ]; then
+            AVD_CONFIG="$AVD_DIR/config.ini"
+          fi
+
+          # Fallback: if list avd did not locate config.ini, check well-known locations
+          if [ -z "$AVD_CONFIG" ]; then
+            for candidate in \
+              ${XDG_CONFIG_HOME:+"$XDG_CONFIG_HOME/.android/avd/test_emulator.avd/config.ini"} \
+              "$HOME/.config/.android/avd/test_emulator.avd/config.ini" \
+              ${ANDROID_AVD_HOME:+"$ANDROID_AVD_HOME/test_emulator.avd/config.ini"} \
+              ${ANDROID_USER_HOME:+"$ANDROID_USER_HOME/avd/test_emulator.avd/config.ini"} \
+              ${ANDROID_SDK_HOME:+"$ANDROID_SDK_HOME/.android/avd/test_emulator.avd/config.ini"} \
+              "$HOME/.android/avd/test_emulator.avd/config.ini"; do
+              if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+                AVD_CONFIG="$candidate"
+                break
+              fi
+            done
+          fi
+
+          # Capture diagnostic evidence unconditionally for post-run analysis
+          {
+            echo "=== AVD environment evidence ==="
+            echo "HOME=$HOME"
+            echo "XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-}"
+            echo "ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-}"
+            echo "ANDROID_USER_HOME=${ANDROID_USER_HOME:-}"
+            echo "ANDROID_SDK_HOME=${ANDROID_SDK_HOME:-}"
+            echo "ANDROID_EMULATOR_HOME=${ANDROID_EMULATOR_HOME:-}"
+            echo "AVD_DIR=${AVD_DIR:-}"
+            echo "AVD_CONFIG=${AVD_CONFIG:-}"
+            echo "=== avdmanager list avd ==="
+            "$AVDMANAGER" list avd 2>&1 || true
+            echo "=== emulator -list-avds ==="
+            "$EMULATOR" -list-avds 2>&1 || true
+          } > avd-environment-evidence.txt 2>&1 || true
+          cat avd-environment-evidence.txt || true
+
           if [ -z "$AVD_CONFIG" ]; then
             echo "::error::test_emulator AVD config.ini not found in any known location"
-            echo "ANDROID_AVD_HOME='${ANDROID_AVD_HOME:-}' ANDROID_SDK_HOME='${ANDROID_SDK_HOME:-}' ANDROID_USER_HOME='${ANDROID_USER_HOME:-}' HOME='$HOME'"
-            "$AVDMANAGER" list avd 2>&1 || true
-            ls -la "$HOME/.android" "$HOME/.android/avd" 2>&1 || true
             exit 1
           fi
           echo "AVD_CONFIG=$AVD_CONFIG"
@@ -634,3 +671,4 @@ jobs:
             test-logcat.log
             adb-device-evidence.txt
             ci-test-metadata.txt
+            avd-environment-evidence.txt
