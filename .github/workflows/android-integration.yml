@@ -496,6 +496,14 @@ jobs:
           export PATH="$SDK_ROOT/platform-tools:$SDK_ROOT/emulator:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           # Every normal adb invocation targets the intended emulator.
           export ANDROID_SERIAL=emulator-5554
+          # Align avdmanager and emulator directories: on Linux, avdmanager
+          # defaults to XDG (~/.config/.android/avd) when overrides are unset,
+          # whereas emulator specifically searches $ANDROID_AVD_HOME,
+          # $ANDROID_SDK_HOME/avd, and $HOME/.android/avd (not XDG).
+          # Exporting ANDROID_AVD_HOME deterministically guarantees both tools
+          # operate on the exact same AVD directory.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           command -v sdkmanager
           command -v avdmanager
 
