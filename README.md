@@ -84,11 +84,11 @@ Two clients, one backend. Shared domain logic on Android lives in a Kotlin Multi
 
 | Layer | Tech |
 |---|---|
-| **Android** | Kotlin 2.2 · Jetpack Compose (Compose Multiplatform UI) · GitLive Firebase |
-| **Web** | React 18 · Vite 7 · Tailwind CSS 3 · Firebase JS SDK · installable PWA |
+| **Android** | Kotlin 2.4 · Jetpack Compose (Compose Multiplatform UI) · GitLive Firebase |
+| **Web** | React 19 · Vite 8 · Tailwind CSS 4 · Firebase JS SDK · installable PWA |
 | **Backend** | Firebase Auth (email + Google) · Cloud Firestore · App Check (advisory) |
 | **Shared (KMP)** | Models, serializers, repositories, day-rollover / streak / spend math |
-| **Build** | Gradle 9.5 · AGP 9.3 · Java 17 bytecode · minSdk 26 · target/compileSdk 35 |
+| **Build** | Gradle 9.8 · AGP 9.4 · Java 17 bytecode · minSdk 26 · targetSdk 35 · compileSdk 37 |
 | **Toolchain** | Node 22.23.2 ([`.nvmrc`](.nvmrc)) · npm 10.9.8 (`packageManager`) |
 
 Realtime listeners keep Track / History / Settings in sync across devices. Firestore rules gate reads and writes to the signed-in owner.
@@ -294,7 +294,7 @@ npm run test:rules
 
 ```
 tabakpp/
-├── webApp/            React 18 PWA (Vite, Tailwind, Vitest, Firebase JS SDK)
+├── webApp/            React 19 PWA (Vite, Tailwind, Vitest, Firebase JS SDK)
 ├── shared/            Kotlin Multiplatform: models, serializers, repositories
 ├── composeApp/        Compose Multiplatform UI shared across targets
 ├── androidApp/        Android application module
