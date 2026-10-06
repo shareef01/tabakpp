@@ -5,8 +5,8 @@
 <h1 align="center">tabak++</h1>
 
 <p align="center">
-  Cut back with clarity — live counters, daily limits, streaks, and what it costs you.<br/>
-  Android + web, synced over Firebase.
+  A private, cross-platform tobacco-use tracker that keeps the numbers that matter
+  today — how many, how much left, how much spent, and whether you're still on streak.
 </p>
 
 <p align="center">
@@ -19,7 +19,15 @@
   <a href="PRIVACY.md">Privacy</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/shareef01/tabakpp/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/shareef01/tabakpp/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+  <a href="https://github.com/shareef01/tabakpp/actions/workflows/android-integration.yml?query=branch%3Amain"><img src="https://github.com/shareef01/tabakpp/actions/workflows/android-integration.yml/badge.svg?branch=main" alt="Android instrumentation" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+</p>
+
 ---
+
+## Screenshots
 
 ### Web
 
@@ -53,16 +61,35 @@ Most quit apps bury you in tips. **tabak++** stays on the numbers that matter to
 - Bookmarkable `/track`, `/history`, `/settings` routes  
 - Accent colors and layout density you can tune  
 
+## Highlights
+
+- **One product, two clients.** An installable web PWA and a native Android app
+  share one Firebase backend, so counters stay in sync across devices in realtime.
+- **Dated counts, not ambient counters.** Every count belongs to an explicit
+  tracking date decided when it is written, so a rollover is never lost because
+  the app was closed or a timer didn't fire.
+- **History you can't silently rewrite.** Once a day is closed, its stamped
+  tracker snapshot is frozen by Firestore rules — repricing a tracker today can
+  never rewrite what an old day cost.
+- **Baseline ≠ target.** Money saved and reduction are measured against an
+  optional personal baseline, never against a goal, because those are different claims.
+- **Owner-only by construction.** Firestore Security Rules are the primary
+  authorization boundary: default-deny, scoped to `users/{uid}`.
+- **No backend team required.** No Cloud Functions needed — the application uses
+  Firebase Auth, Cloud Firestore, and client-side security rules only.
+
 ## Stack
 
 Two clients, one backend. Shared domain logic on Android lives in a Kotlin Multiplatform module; the web app mirrors the same product surface in React.
 
 | Layer | Tech |
 |---|---|
-| **Android** | Kotlin · Jetpack Compose (Compose Multiplatform UI) · GitLive Firebase |
-| **Web** | React 18 · Vite · Tailwind · Firebase JS SDK · installable PWA |
-| **Backend** | Firebase Auth (email + Google) · Cloud Firestore · App Check |
-| **Shared (KMP)** | Models, repositories, day-rollover / streak / spend math |
+| **Android** | Kotlin 2.4 · Jetpack Compose (Compose Multiplatform UI) · GitLive Firebase |
+| **Web** | React 19 · Vite 8 · Tailwind CSS 4 · Firebase JS SDK · installable PWA |
+| **Backend** | Firebase Auth (email + Google) · Cloud Firestore · App Check (advisory) |
+| **Shared (KMP)** | Models, serializers, repositories, day-rollover / streak / spend math |
+| **Build** | Gradle 9.8 · AGP 9.4 · Java 17 bytecode · minSdk 26 · targetSdk 35 · compileSdk 37 |
+| **Toolchain** | Node 22.23.2 ([`.nvmrc`](.nvmrc)) · npm 10.9.8 (`packageManager`) |
 
 Realtime listeners keep Track / History / Settings in sync across devices. Firestore rules gate reads and writes to the signed-in owner.
 
@@ -81,7 +108,7 @@ flowchart TB
     Domain["Rollover · streaks · spend math"]
   end
 
-  subgraph firebase [Firebase Spark]
+  subgraph firebase [Firebase]
     Auth["Auth<br/>email · Google"]
     FS["Firestore<br/>users/{uid}"]
     AC["App Check"]
@@ -126,9 +153,9 @@ users/{uid}/meta/profile           avatar — kept off the profile document so
                                     along on every counter tap
 ```
 
-Historical days are anchored at the rules level once closed: `firestore.rules`
-(`validDayUpdate`, line 433) rejects any write that would change a closed day's
-stamped `trackerSnapshots`, so raising or lowering a tracker's target today
+Historical days are anchored at the rules level once closed: the `validDayUpdate`
+helper in [`firestore.rules`](firestore.rules) rejects any write that would change a
+closed day's stamped `trackerSnapshots`, so raising or lowering a tracker's target today
 can never retroactively change whether an old day was a success, and repricing
 a tracker can never rewrite what an old day cost. `status`, `date`,
 `foldedIntoLifetime`, and `legacyMigrationApplied` are also one-way or
@@ -148,7 +175,10 @@ document (using the same day-start-hour rule "End day" always used), and
 moves the avatar out of the profile document, the first time an updated
 client opens the account.
 
-### Security
+## Security & Privacy
+
+See [SECURITY.md](SECURITY.md) for the full threat model and
+[PRIVACY.md](PRIVACY.md) for data handling and retention.
 
 ```mermaid
 flowchart LR
@@ -166,7 +196,19 @@ flowchart LR
   AC["App Check<br/>integrated · not enforced"] -. advisory .-> Auth
 ```
 
-Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing; once a `days/{date}` document is closed, its stamped `trackerSnapshots` can never be rewritten (while `counts` and `aggregateCredit` remain writable by the authenticated owner — subject only to Firestore rule shape/bounds validation, and reconciled with `lifetimeAggregates` only when written through the application-layer `updateHistoricalDay` path). Every write path is covered by rules tests run against the real Firestore emulator in CI. As a client-side self-tracking app on Firebase Spark tier (without Cloud Functions re-verifying every increment), Firestore Security Rules are the primary authorization and validation boundary protecting cross-user isolation.
+Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing; once a `days/{date}` document is closed, its stamped `trackerSnapshots` can never be rewritten (while `counts` and `aggregateCredit` remain writable by the authenticated owner — subject only to Firestore rule shape/bounds validation, and reconciled with `lifetimeAggregates` only when written through the application-layer `updateHistoricalDay` path). Every write path is covered by rules tests run against the real Firestore emulator in CI. As a client-side self-tracking app that uses no Cloud Functions to re-verify every increment, Firestore Security Rules are the primary authorization and validation boundary protecting cross-user isolation.
+
+Engineering controls behind those claims:
+
+- **Immutable CI action pins** — every third-party GitHub Action is pinned to a
+  full 40-character commit SHA, enforced in CI by
+  [`.github/scripts/validate-action-pins.py`](.github/scripts/validate-action-pins.py).
+- **Reproducible installs** — CI installs with `npm ci` against a committed
+  lockfile, plus a dedicated lockfile-integrity check.
+- **Dependency auditing** — `npm run audit:prod` fails the build on any HIGH or
+  CRITICAL production advisory.
+- **Emulator-backed rule testing** — Firestore rules are tested against a real
+  Firestore emulator in CI, not mocked.
 
 **On App Check:** integrated on both clients (reCAPTCHA Enterprise on web, Play Integrity in Android release builds / debug provider in Android debug builds) with enforcement **deliberately off**, so it is advisory rather than part of the security boundary.
 
@@ -178,22 +220,123 @@ Enforcing becomes the right call once Android can attest for real — that means
 
 | | |
 |---|---|
-| **Android** | Native app — install the latest APK from [GitHub Releases](https://github.com/shareef01/tabakpp/releases/latest) |
-| **Web** | PWA at [tabakpp.web.app](https://tabakpp.web.app) |
-| **iOS** | Not a release target — shell shows an unsupported gate (see setup guide) |
+| **Android** | Native app (Kotlin · Compose Multiplatform) — install the latest APK from [GitHub Releases](https://github.com/shareef01/tabakpp/releases/latest) |
+| **Web** | Installable PWA at [tabakpp.web.app](https://tabakpp.web.app) |
+| **iOS** | Not a release target. The Compose shell is present but shows an explicit unsupported gate (see [SETUP_GUIDE.md](SETUP_GUIDE.md)) |
 
-## Get started
+## Getting Started
 
 Full Firebase, signing, and App Check notes: **[SETUP_GUIDE.md](SETUP_GUIDE.md)**
 
-```bash
-# Web — use Node 22 (see .nvmrc) and npm 10.9.8 (declared in package.json)
-cd webApp && npm ci && npm run dev
+### Prerequisites
 
-# Android — open in Android Studio, add google-services.json, run androidApp
-# Or install a signed APK from GitHub Releases (tag v*)
+| | |
+|---|---|
+| **Web** | Node **22.23.2** ([`.nvmrc`](.nvmrc)) and npm **10.9.8** (pinned via `packageManager`) |
+| **Android** | JDK 17+ and Android Studio, plus `google-services.json` (see [SETUP_GUIDE.md](SETUP_GUIDE.md)) |
+| **Firebase tooling** | [Firebase CLI](https://firebase.google.com/docs/cli) — only needed for the local Firestore emulator / rules tests |
+
+### Web
+
+```bash
+cd webApp
+npm ci          # reproducible install from the committed lockfile
+npm run dev     # Vite dev server
 ```
 
----
+Copy `webApp/.env.example` to `webApp/.env.local` and fill in your Firebase web
+app config before the app will render.
 
-<p align="center">Built by <a href="https://github.com/shareef01">shareef01</a></p>
+```bash
+npm run build        # production build -> webApp/dist
+npm run lint         # ESLint
+npm run audit:prod   # production dependency audit (fails on HIGH/CRITICAL)
+```
+
+### Android
+
+Open the repository in Android Studio and run the `androidApp` configuration after
+adding `google-services.json`, or install a signed APK from
+[GitHub Releases](https://github.com/shareef01/tabakpp/releases/latest).
+
+```bash
+./gradlew :androidApp:assembleDebug
+```
+
+## Testing
+
+| Suite | Command | Protects |
+|---|---|---|
+| Unit + coverage | `npm run coverage` | Web app behavior and domain math |
+| Cross-platform contract | `npm run test:contract` | Semantic parity between the JS and Kotlin ports of the domain math |
+| Firestore rules | `npm run test:rules` | Real authorization rules, executed against the Firestore emulator |
+| Android instrumentation | `./gradlew :androidApp:connectedDebugAndroidTest` | Android/KMP behavior against a real emulator |
+
+The contract fixtures in [`shared-tests/`](shared-tests/) are the important one:
+the JS and Kotlin domain implementations are hand-mirrored rather than code-shared,
+so a shared set of semantic vectors is what catches drift between them. See
+[shared-tests/README.md](shared-tests/README.md).
+
+Android instrumentation runs in CI for every pull request and every push to
+`main`, and preserves emulator logs, logcat, and per-run test metadata as a
+downloadable artifact for each attempt — including failed ones.
+
+## Firebase / Local Emulator Development
+
+Firestore rules tests boot a local emulator, so no live project is needed:
+
+```bash
+cd webApp
+npm run test:rules
+```
+
+## Repository Structure
+
+```
+tabakpp/
+├── webApp/            React 19 PWA (Vite, Tailwind, Vitest, Firebase JS SDK)
+├── shared/            Kotlin Multiplatform: models, serializers, repositories
+├── composeApp/        Compose Multiplatform UI shared across targets
+├── androidApp/        Android application module
+├── iosApp/            iOS shell — intentionally a non-release "unsupported" gate
+├── shared-tests/      Cross-platform domain contract fixtures (JS ⇄ Kotlin)
+├── assets/screenshots/ Showcase and themed screenshots used by the README
+├── scripts/           Screenshot/demo tooling
+├── .github/           Workflows, action-pin validator, release notes
+│   ├── workflows/     ci.yml · android-integration.yml · release-android.yml
+│   └── scripts/       validate-action-pins.py · validate-lockfile.py
+├── firestore.rules    Authorization + validation (the primary security boundary)
+├── firebase.json      Emulator / hosting configuration
+└── build.gradle.kts · settings.gradle.kts · gradle/libs.versions.toml
+```
+
+## Development Notes
+
+**Firestore gRPC dependency override.** `webApp/package.json` carries a scoped
+npm override pinning the Node-only `@grpc/grpc-js` dependency of
+`@firebase/firestore` to a patched release, because released Firestore currently
+declares a range that cannot reach one. It keeps the production dependency audit
+green. Remove it once a released `@firebase/firestore` range resolves to a
+non-vulnerable gRPC release without an override — upstream tracking lives at
+[firebase/firebase-js-sdk#10400](https://github.com/firebase/firebase-js-sdk/issues/10400).
+
+**Node and npm are pinned, not merely recommended.** `.nvmrc` and the
+`packageManager` field exist so local runs and CI resolve the same dependency
+tree; changing either will produce a lockfile diff.
+
+## Contributing
+
+External contributions are welcome through pull requests. For anything touching
+security rules, data-model semantics, or CI, please open an issue first so the
+approach can be discussed — those areas carry invariants that are easy to break
+silently.
+
+By contributing you agree that your work is licensed under the [MIT License](LICENSE).
+
+## License
+
+[MIT](LICENSE) © 2026 shareef01
+
+## Author
+
+Created and maintained by [@shareef01](https://github.com/shareef01).

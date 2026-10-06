@@ -104,7 +104,7 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
                       }
                     }}
                     className={cn(
-                      "relative min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-full outline-none transition-colors duration-200 touch-manipulation",
+                      "relative min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-full outline-hidden transition-colors duration-200 touch-manipulation",
                       "focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-panel",
                       selected ? "text-black" : "text-neutral-400 hover:text-neutral-200"
                     )}
@@ -116,7 +116,7 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
                         transition={{ type: 'spring', stiffness: 420, damping: 32 }}
                       />
                     )}
-                    <sz.icon size={14} strokeWidth={selected ? 2.5 : 2} className="relative z-[1]" />
+                    <sz.icon size={14} strokeWidth={selected ? 2.5 : 2} className="relative z-1" />
                   </button>
                 );
               })}
@@ -132,7 +132,7 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
               aria-expanded={isOpen}
               aria-label="Account menu"
               className={cn(
-                "group relative flex items-center gap-2 min-h-11 h-11 pl-1 pr-2 md:pr-2.5 rounded-full outline-none transition-all duration-200 touch-manipulation",
+                "group relative flex items-center gap-2 min-h-11 h-11 pl-1 pr-2 md:pr-2.5 rounded-full outline-hidden transition-all duration-200 touch-manipulation",
                 "bg-white/[0.03] ring-1 ring-inset ring-white/[0.08]",
                 "hover:bg-white/[0.05] hover:ring-white/[0.14]",
                 "focus-visible:ring-2 focus-visible:ring-accent/50",

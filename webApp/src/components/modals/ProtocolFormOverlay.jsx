@@ -83,7 +83,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
   };
 
   return (
-    <div className="fixed inset-0 z-[5000] flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
+    <div className="fixed inset-0 z-5000 flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -95,7 +95,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
       <motion.div
         ref={dialogRef}
         tabIndex={-1}
-        className={cn(UI.CARD, "custom-scrollbar w-full max-w-[500px] p-8 lg:p-12 shadow-[0_0_80px_rgba(0,0,0,0.9)] relative overflow-hidden overflow-y-auto max-h-[min(92dvh,92vh)] z-[5001] bg-[#111111] rounded-b-none sm:rounded-card")}
+        className={cn(UI.CARD, "custom-scrollbar w-full max-w-[500px] p-8 lg:p-12 shadow-[0_0_80px_rgba(0,0,0,0.9)] relative overflow-hidden overflow-y-auto max-h-[min(92dvh,92vh)] z-5001 bg-[#111111] rounded-b-none sm:rounded-card")}
         style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 24)}px)` }}
         role="dialog"
         aria-modal="true"
@@ -150,7 +150,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
                 checked={hasBaseline}
                 onChange={(e) => setHasBaseline(e.target.checked)}
                 aria-label="Set a baseline to track reduction"
-                className="h-5 w-5 shrink-0 accent-[var(--accent)]"
+                className="h-5 w-5 shrink-0 accent-(--accent)"
               />
             </label>
             {hasBaseline && (
@@ -205,7 +205,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
                 type="checkbox"
                 checked={isPrimary}
                 onChange={(e) => setIsPrimary(e.target.checked)}
-                className="h-5 w-5 accent-[var(--accent)]"
+                className="h-5 w-5 accent-(--accent)"
               />
             </label>
             <label className="flex items-center justify-between gap-4 cursor-pointer">
@@ -214,7 +214,7 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
                 type="checkbox"
                 checked={isFinancial}
                 onChange={(e) => setIsFinancial(e.target.checked)}
-                className="h-5 w-5 accent-[var(--accent)]"
+                className="h-5 w-5 accent-(--accent)"
               />
             </label>
             {isFinancial && (
