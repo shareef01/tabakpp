@@ -155,7 +155,7 @@ export const AuthScreen = React.memo(({ accent = '#FF5F5F' }) => {
       <h1 className="sr-only">{mode === 'LOGIN' ? 'Sign in' : mode === 'REGISTER' ? 'Create account' : 'Reset password'}</h1>
 
       {/* STEALTH BRANDING LAYER */}
-      <div className="absolute top-[max(2rem,env(safe-area-inset-top))] left-[max(2rem,env(safe-area-inset-left))] md:top-12 md:left-12 lg:top-16 lg:left-16 z-[100] pointer-events-none opacity-80">
+      <div className="absolute top-[max(2rem,env(safe-area-inset-top))] left-[max(2rem,env(safe-area-inset-left))] md:top-12 md:left-12 lg:top-16 lg:left-16 z-100 pointer-events-none opacity-80">
          <Logo size="md" />
       </div>
 
