@@ -21,7 +21,7 @@
   "dependencies": {
     "clsx": "^2.1.1",
     "firebase": "^12.19.0",
-    "framer-motion": "^13.4.4",
+    "framer-motion": "^14.0.0",
     "heic2any": "^0.0.4",
     "lucide-react": "^1.48.0",
     "react": "^19.3.0",
