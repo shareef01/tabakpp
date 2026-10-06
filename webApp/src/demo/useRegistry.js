@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { SmokingCalculator } from '../utils/smokingCalculator';
 
 // Seeded demo state for the screenshot build — a plausible established user,
@@ -16,6 +17,7 @@ const configs = [
 ];
 
 const activeCounts = { cig: 7, ryo: 3 };
+const dayDocs = [];
 
 const daysAgo = (n) => {
   const d = new Date();
@@ -59,16 +61,18 @@ export const useRegistry = () => {
   const base = SmokingCalculator.getGlobalMetrics(logs, configs, activeCounts, today, 0.55, lifetimeAggregates);
   const xp = SmokingCalculator.calculateXP(logs, base.streak);
   const metrics = { ...base, budgetLeft: base.budgetLeftToday, rank: SmokingCalculator.getRank(xp), xp };
-  const profileSettings = {
+  // Match the live hook: a profile snapshot keeps its identity until changed.
+  // Recreating it each render makes App settings hydration feed back forever.
+  const [profileSettings] = useState(() => ({
     accent: demoAccent(),
     widgetSize: 'MEDIUM',
     avatar: null,
     unitPrice: 0.55,
     dayStartHour: 6,
-  };
+  }));
 
   return {
-    configs, logs, dayDocs: [], metrics, loading: false, isEndingDay: false, isOnline: true,
+    configs, logs, dayDocs, metrics, loading: false, isEndingDay: false, isOnline: true,
     profileSettings, avatar: null,
     increment: noop, decrement: noop, endDay: asyncNoop, updateHistoricalLog: asyncNoop,
     updateHistoricalDay: asyncNoop, deleteLog: asyncNoop, restoreLog: asyncNoop, createManualEntry: asyncNoop,
