@@ -28,7 +28,7 @@ import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.viewmodels.RegistryViewModel
 import kotlinx.coroutines.launch
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
