@@ -15,7 +15,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -51,6 +51,12 @@ jobs:
 
       - name: Install Firebase CLI
         run: npm install -g firebase-tools@15.24.0
+
+      - name: Cache Firebase emulator downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/android-integration.yml') }}
 
       - name: Install web dependencies
         working-directory: webApp
@@ -114,6 +120,19 @@ jobs:
           #!/bin/bash
           set -euo pipefail
 
+          # Target the single emulator we launched explicitly, so no adb call
+          # can resolve to a different (or absent) device.
+          export ANDROID_SERIAL=emulator-5554
+
+          # Set ADB_INSTALL_TIMEOUT (in minutes) for ddmlib / Android Gradle Plugin.
+          # By default, ddmlib uses DdmPreferences.getTimeOut() = 5,000ms (5 seconds).
+          # On a software-emulated (non-KVM) AVD under CI load, `adb shell getprop` during
+          # AGP device discovery (PropertyFetcher) can take >5 seconds, throwing
+          # ShellCommandUnresponsiveException and causing AGP to drop the device with
+          # "Skipping device 'test_emulator(AVD)' for ':androidApp:': Unknown API Level".
+          # Setting ADB_INSTALL_TIMEOUT=10 scales DdmPreferences timeout to 10 minutes (600,000ms).
+          export ADB_INSTALL_TIMEOUT=10
+
           # Start Firebase emulators in the background.
           # Create a CI-specific config that binds emulators to 0.0.0.0 instead
           # of 127.0.0.1, because the Android emulator's 10.0.2.2 alias for the
@@ -134,7 +153,10 @@ jobs:
           JSON
           firebase emulators:start --config firebase.ci.json --only firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
           FIREBASE_PID=$!
-          trap 'kill "$FIREBASE_PID" 2>/dev/null || true; pkill -f cloud-firestore 2>/dev/null || true; kill "$LOGCAT_PID" 2>/dev/null || true' EXIT
+          # LOGCAT_PID is only assigned later; readiness failures exit before that.
+          # ${LOGCAT_PID:-} avoids an unbound-variable error under `set -u`
+          # that would otherwise mask the real infrastructure error.
+          trap 'kill "$FIREBASE_PID" 2>/dev/null || true; pkill -f cloud-firestore 2>/dev/null || true; kill "${LOGCAT_PID:-}" 2>/dev/null || true' EXIT
 
           # Wait for Firestore emulator readiness (30 retries × 2s = 60s max)
           for i in $(seq 1 30); do
@@ -166,35 +188,233 @@ jobs:
             exit 1
           fi
 
-          # Wait for the emulator to be fully ready (service manager online)
-          adb wait-for-device
-          # Give system_server additional time to finish starting all services
-          # after sys.boot_completed (services like 'package' can lag behind)
-          sleep 15
+          # ---------------------------------------------------------------------
+          # Android device readiness (#74)
+          #
+          # sys.boot_completed == 1 alone is NOT sufficient. ddmlib reads device
+          # properties with `adb shell getprop`; when the shell is still
+          # unresponsive it throws ShellCommandUnresponsiveException and AGP
+          # reports:
+          #     Skipping device 'test_emulator(AVD)': Unknown API Level
+          #     : No compatible devices connected.
+          #     Found 1 connected device(s), 0 of which were compatible.
+          # ...even though adb lists the device and boot_completed is 1.
+          #
+          # ICMP is NOT a valid readiness signal: `ping` uses a raw socket and
+          # bypasses the adbd/shell path that ddmlib depends on, so it succeeds
+          # on a device whose shell is wedged.
+          #
+          # Require device state, a real getprop round-trip, the package
+          # manager and the settings service — for N consecutive probes.
+          dump_device_evidence() {
+          {
+          echo "=== timestamp ==="
+          date -u +"%Y-%m-%dT%H:%M:%SZ"
+          echo "=== adb devices -l ==="
+          adb devices -l 2>&1 || true
+          echo "=== adb get-state ==="
+          adb get-state 2>&1 || true
+          echo "=== selected getprop ==="
+          adb shell getprop ro.build.version.sdk 2>&1 || true
+          adb shell getprop ro.product.cpu.abi 2>&1 || true
+          adb shell getprop ro.product.cpu.abilist 2>&1 || true
+          adb shell getprop ro.product.model 2>&1 || true
+          adb shell getprop sys.boot_completed 2>&1 || true
+          adb shell getprop sys.user.0.ce_available 2>&1 || true
+          echo "=== current user ==="
+          adb shell am get-current-user 2>&1 || true
+          echo "=== adb reverse --list ==="
+          adb reverse --list 2>&1 || true
+          echo "=== load ==="
+          adb shell cat /proc/loadavg 2>&1 || true
+          } > adb-device-evidence.txt 2>&1 || true
+          cat adb-device-evidence.txt || true
+          }
 
-          # Forward emulator's 127.0.0.1 to host's localhost for the Firebase
-          # emulator ports. The emulator's 10.0.2.2 loopback alias has unreliable
-          # IPv6 routing on CI runners — sockets source from :: (IPv6), causing
-          # ENETUNREACH. java.net.preferIPv4Stack set at runtime does NOT fix this
-          # because the JVM caches the IPv6 preference at process start. Using
-          # adb reverse routes through 127.0.0.1 (IPv4-only loopback) instead.
+          fail_readiness() {
+          echo "::error::$1"
+          dump_device_evidence
+          exit 1
+          }
+
+          # Per-command bound: a single `adb shell` can hang indefinitely while
+          # the device is mid-boot, stalling the whole probe loop and defeating
+          # the bounded retry budget.
+          ADB_SHELL_TIMEOUT=20
+          adb_shell_ok() {
+            timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell "$1" >/dev/null 2>&1
+          }
+          adb_prop() {
+            timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell "getprop $1" 2>/dev/null | tr -d '[:space:]' || true
+          }
+
+          # The budget must outlast the emulator boot itself: observed boots are
+          # 341-606s, and `adb get-state` succeeds long before
+          # sys.boot_completed flips to 1. A budget shorter than boot would
+          # expire before the device could ever become ready.
+          READINESS_PROBES=160
+          STABLE_REQUIRED=3
+          stable=0
+          for probe in $(seq 1 "$READINESS_PROBES"); do
+            ok=1
+            state="$(adb get-state 2>/dev/null | tr -d '[:space:]' || true)"
+            [ "$state" = "device" ] || ok=0
+
+            boot=""
+            if [ "$ok" = "1" ]; then
+              boot="$(adb_prop sys.boot_completed)"
+              [ "$boot" = "1" ] || ok=0
+            fi
+
+            # API level must be readable AND numeric, so a device that answers
+            # with empty output or error text cannot look ready.
+            sdk=""
+            if [ "$ok" = "1" ]; then
+              sdk="$(adb_prop ro.build.version.sdk)"
+              case "$sdk" in
+                ''|*[!0-9]*) ok=0 ;;
+              esac
+            fi
+
+            # Credential-encrypted storage for User 0 must be prepared (Direct Boot unlock).
+            # On Android 15, sys.boot_completed flips to 1 while User 0 is still RUNNING_LOCKED;
+            # PackageInstallerService cannot complete install sessions until User 0 CE storage is mounted.
+            ce_ready=""
+            if [ "$ok" = "1" ]; then
+              ce_ready="$(adb_prop sys.user.0.ce_available)"
+              [ "$ce_ready" = "true" ] || ok=0
+            fi
+
+            if [ "$ok" = "1" ] && ! adb_shell_ok "pm list packages"; then ok=0; fi
+            if [ "$ok" = "1" ] && ! adb_shell_ok "settings get global window_animation_scale"; then ok=0; fi
+
+            # Dismiss keyguard and disable animations as soon as shell and settings respond.
+            # Headless -no-window mode otherwise stalls WindowManager until 'Keyguard drawn timeout' (10s),
+            # and animations waste software GPU/CPU rendering cycles.
+            if [ "$ok" = "1" ]; then
+              adb shell wm dismiss-keyguard >/dev/null 2>&1 || true
+              adb shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
+              adb shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
+              adb shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
+              adb shell svc bluetooth disable >/dev/null 2>&1 || true
+              adb shell settings put global bluetooth_on 0 >/dev/null 2>&1 || true
+              adb shell settings put secure location_mode 0 >/dev/null 2>&1 || true
+              adb shell settings put global wifi_scan_always_enabled 0 >/dev/null 2>&1 || true
+              adb shell svc data disable >/dev/null 2>&1 || true
+              adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
+              adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
+            fi
+
+            # Verify ActivityManager can report the current user
+            current_user=""
+            if [ "$ok" = "1" ]; then
+              current_user="$(timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell am get-current-user 2>/dev/null | tr -d '[:space:]' || true)"
+              [ "$current_user" = "0" ] || ok=0
+            fi
+
+            # Real PackageInstaller transaction probe (#74).
+            # Verifies PackageInstallerService is alive, initialized, and capable of
+            # creating and abandoning an install session. This directly exercises the IPC
+            # endpoint that failed with Broken pipe (32) under UTP.
+            session_id=""
+            if [ "$ok" = "1" ]; then
+              session_id="$(timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell cmd package install-create 2>/dev/null | grep -oE '[0-9]+' || true)"
+              if [ -n "$session_id" ]; then
+                timeout -k 5 "$ADB_SHELL_TIMEOUT" adb shell cmd package install-abandon "$session_id" >/dev/null 2>&1 || true
+              else
+                ok=0
+              fi
+            fi
+
+            if [ "$ok" = "1" ]; then
+              stable=$((stable + 1))
+              echo "DEVICE_READY: consecutive probe $stable/$STABLE_REQUIRED (sdk=$sdk, ce=$ce_ready, user=$current_user, session=$session_id)"
+              if [ "$stable" -ge "$STABLE_REQUIRED" ]; then break; fi
+            else
+              stable=0
+              echo "DEVICE_NOT_READY (probe $probe/$READINESS_PROBES): state='$state' boot_completed='$boot' sdk='$sdk' ce_available='$ce_ready' user='$current_user' session='$session_id'"
+            fi
+            sleep 5
+          done
+
+          if [ "$stable" -lt "$STABLE_REQUIRED" ]; then
+            fail_readiness "DEVICE_NOT_READY: device never satisfied $STABLE_REQUIRED consecutive readiness probes (adb shell, package manager, settings service, user unlock, package-installer session)"
+          fi
+          echo "DEVICE_READY: shell, package manager, settings service, user CE storage, and package-installer session all responsive"
+
+          # Drain any lingering post-boot broadcast storm (e.g. BOOT_COMPLETED, LOCKED_BOOT_COMPLETED receivers)
+          # so background initializations settle before Gradle and test execution start.
+          echo "Waiting for post-boot broadcasts to settle..."
+          timeout -k 5 30 adb shell am wait-for-broadcast-idle >/dev/null 2>&1 || true
+          sleep 10
+          echo "Broadcast queues drained"
+
+          # Always capture device evidence, not only on failure, so a green run
+          # still records the exact API level / ABI / reverse mapping used.
+          dump_device_evidence
+
+          # Forward emulator 127.0.0.1 to host localhost for the Firebase
+          # emulator ports. The emulator's 10.0.2.2 loopback alias has
+          # unreliable IPv6 routing on CI runners (ENETUNREACH); adb reverse
+          # routes through 127.0.0.1 (IPv4-only loopback) instead.
           adb reverse tcp:8080 tcp:8080
           adb reverse tcp:9099 tcp:9099
 
-          # Verify emulator can reach host's Firebase emulators via adb reverse.
-          EMULATOR_NET_OK=0
-          for i in $(seq 1 15); do
-            if adb shell "ping -c1 -W2 127.0.0.1" 2>/dev/null; then
-              EMULATOR_NET_OK=1
-              echo "Emulator network to Firebase emulators: OK (via adb reverse)"
-              break
-            fi
-            echo "Waiting for emulator network connectivity ($i/15)..."
-            sleep 2
-          done
-          if [ "$EMULATOR_NET_OK" -eq 0 ]; then
-            echo "::warning::Emulator cannot reach 10.0.2.2:8080 after 30s — tests may fail with ENETUNREACH"
+          # Verify the reverse tunnels are actually registered. This was never
+          # checked before, so a silently-dropped tunnel reached Gradle.
+          REVERSE_LIST="$(adb reverse --list 2>/dev/null || true)"
+          case "$REVERSE_LIST" in
+          *tcp:8080*) ;;
+          *) fail_readiness "ADB_REVERSE_MISSING: tcp:8080 not present in adb reverse --list" ;;
+          esac
+          case "$REVERSE_LIST" in
+          *tcp:9099*) ;;
+          *) fail_readiness "ADB_REVERSE_MISSING: tcp:9099 not present in adb reverse --list" ;;
+          esac
+          echo "ADB_REVERSE_OK:"
+          echo "$REVERSE_LIST"
+
+          # Real TCP reachability probe through the reverse tunnel.
+          #
+          # The previous probe was `adb shell "ping -c1 -W2 127.0.0.1"`, which
+          # (a) is ICMP to the emulator's own loopback and never traverses
+          # tcp:8080/tcp:9099, and (b) succeeds even when the adb shell is
+          # unresponsive. It was a false positive on every run.
+          PROBE_TOOL=""
+          probe_port() {
+          # Redirect stdin from /dev/null so nc observes EOF immediately
+          # after connecting and exits 0 on success. Without this, adb shell
+          # keeps stdin open, nc blocks for the full -w timeout and then
+          # exits NON-ZERO even though the TCP connection succeeded — which
+          # would hard-fail a healthy runner as EMULATOR_PORT_UNREACHABLE.
+          if adb shell "toybox nc -w 3 127.0.0.1 $1 < /dev/null" >/dev/null 2>&1; then
+          PROBE_TOOL="toybox-nc"
+          return 0
           fi
+          if adb shell "nc -w 3 -z 127.0.0.1 $1" >/dev/null 2>&1; then
+          PROBE_TOOL="nc"
+          return 0
+          fi
+          return 1
+          }
+
+          for port in 8080 9099; do
+          reachable=0
+          for attempt in $(seq 1 10); do
+          if probe_port "$port"; then reachable=1; break; fi
+          echo "Waiting for emulator TCP reachability on 127.0.0.1:$port ($attempt/10)..."
+          sleep 3
+          done
+          if [ "$reachable" -eq 1 ]; then
+          echo "TCP_PROBE_OK: 127.0.0.1:$port reachable from emulator via $PROBE_TOOL through adb reverse"
+          else
+          if adb shell 'command -v toybox >/dev/null 2>&1 || command -v nc >/dev/null 2>&1'; then
+          fail_readiness "EMULATOR_PORT_UNREACHABLE: 127.0.0.1:$port not reachable from inside the emulator despite adb reverse being registered"
+          else
+          echo "::warning::TCP_PROBE_UNVERIFIED: no nc or toybox on this emulator image, so 127.0.0.1:$port could not be probed. adb reverse --list was verified; runtime connectivity is asserted by the test fixture."
+          fi
+          fi
+          done
 
           # Warm up the Auth emulator's sign-in endpoint. The first
           # signInAnonymously request to a freshly-started Auth emulator can
@@ -208,29 +428,80 @@ jobs:
             -d '{"returnSecureToken": true}' > /dev/null 2>&1 || true
           echo "Auth emulator warm-up complete"
 
-          # Capture logcat during test execution — critical for diagnosing hangs
+          # Capture diagnostic evidence immediately before Gradle test execution
+          {
+            echo "=== timestamp ==="
+            date -u +"%Y-%m-%dT%H:%M:%SZ"
+            echo "=== adb get-state ==="
+            adb get-state 2>&1 || true
+            echo "=== sys.boot_completed ==="
+            adb shell getprop sys.boot_completed 2>&1 || true
+            echo "=== sys.user.0.ce_available ==="
+            adb shell getprop sys.user.0.ce_available 2>&1 || true
+            echo "=== current user ==="
+            adb shell am get-current-user 2>&1 || true
+            echo "=== load ==="
+            adb shell cat /proc/loadavg 2>&1 || true
+            echo "=== memory ==="
+            adb shell cat /proc/meminfo 2>&1 | head -n 10 || true
+            echo "=== package service dump ==="
+            adb shell dumpsys activity services package 2>&1 | head -n 30 || true
+          } > pre-gradle-evidence.txt 2>&1 || true
+          cat pre-gradle-evidence.txt || true
+
+          # ddmlib's first property lookup has its own hard-coded 5s wait.
+          # A slow full getprop can yield API 1 for the installer check, then
+          # API 35 when the error is formatted (run 37398621639 attempt 3).
+          # CLI getprop does not populate a later ddmlib process's cache.
+          # Require complete property responses inside 4s, with three stable
+          # passes, instead of ignoring a potentially slow pre-warm response.
+          property_stable=0
+          for property_probe in $(seq 1 30); do
+            if timeout -k 1 4 adb shell getprop 2>&1 | tr -d '\r' > getprop-readiness.txt \
+              && grep -Fqx '[ro.build.version.sdk]: [35]' getprop-readiness.txt \
+              && grep -Fqx '[ro.build.version.codename]: [REL]' getprop-readiness.txt \
+              && grep -Fqx '[ro.product.cpu.abi]: [x86_64]' getprop-readiness.txt; then
+              property_stable=$((property_stable + 1))
+              echo "FULL_GETPROP_READY: response within 4s ($property_stable/3)"
+              if [ "$property_stable" -ge 3 ]; then break; fi
+            else
+              property_stable=0
+              echo "FULL_GETPROP_NOT_READY: probe $property_probe/30"
+            fi
+            sleep 5
+          done
+          if [ "$property_stable" -lt 3 ]; then
+            fail_readiness "DEVICE_NOT_READY: full getprop did not meet ddmlib's initial property-response window"
+          fi
+
+          # Configure logcat buffer size and clear stale boot logs before test execution.
+          # We dump the buffer with 'adb logcat -d' after tests complete (or on failure).
+          # Avoid an extra continuous ADB stream during test execution. Prior
+          # successful and failed runs both contain socket-flush warnings;
+          # reduced transport pressure is a mitigation hypothesis, not proven causality.
+          adb logcat -G 16M >/dev/null 2>&1 || true
           adb logcat -c
-          ( adb logcat -v threadtime > test-logcat.log 2>&1 ) &
-          LOGCAT_PID=$!
+          LOGCAT_PID=""
 
           # Run Android instrumentation tests — full androidTest suite.
           # No -Pandroid.testInstrumentationRunnerArguments.class filter: AndroidJUnitRunner
           # discovers all androidTest classes automatically (currently FirebaseRegistryRepositoryTest
           # + RegistryErrorStructuredCodeTest = 21 tests). This keeps CI in sync with the
           # complete intended suite and automatically includes future androidTest classes.
-          # timeout=120: per-test timeout (via AndroidJUnitRunner) catches hanging @Before/setup
-          # timeout -k 30s 30m: hard kill if tests hang beyond 30 min (well under 45m job limit;
-          # bumped from 20m → 30m to accommodate slow CI emulator boots: 21 androidTest tests
-          # can take up to ~15 min on a cold emulator, plus ~6-7 min APK install)
+          # timeout_msec=420000: per-test timeout (via AndroidJUnitRunner) catches hanging tests / setup
+          # timeout -k 30s 40m: hard kill if tests hang beyond 40 min (within 60m job limit;
+          # 21 androidTest tests take ~16m on software emulator under contention, plus ~7m APK install)
           TEST_EXIT=0
-          timeout -k 30s 30m ./gradlew :androidApp:connectedDebugAndroidTest \
+          timeout -k 30s 40m ./gradlew :androidApp:connectedDebugAndroidTest \
             --no-daemon \
+            --max-workers=2 \
+            -Pandroid.injected.adb.options.timeOutInMs=600000 \
             -Pandroid.testInstrumentationRunnerArguments.debug=false \
-            -Pandroid.testInstrumentationRunnerArguments.timeout=120 \
+            -Pandroid.testInstrumentationRunnerArguments.timeout_msec=420000 \
             || TEST_EXIT=$?
 
-          # Stop logcat capture
-          kill "$LOGCAT_PID" 2>/dev/null || true
+          # Dump complete test execution logcat from the in-memory ring buffer
+          adb logcat -d -v threadtime > test-logcat.log 2>&1 || true
 
           if [ "$TEST_EXIT" -ne 0 ]; then
             echo "::error::Instrumentation tests failed (exit code: $TEST_EXIT)"
@@ -295,18 +566,218 @@ jobs:
           SCRIPT
           chmod +x ci-run-tests.sh
 
-      # The emulator-runner action (v2) starts the Android emulator, runs the
-      # `script`, then stops the emulator. Firebase emulators are started/stopped
-      # inside ci-run-tests.sh via background PID + trap for deterministic cleanup.
-      - name: Boot Android emulator and run instrumentation tests
-        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+      # The workflow now owns the emulator lifecycle end-to-end instead of
+      # delegating to reactivecircus/android-emulator-runner.
+      #
+      # Why: the action treats `sys.boot_completed == 1` as sufficient device
+      # readiness and then immediately runs shell-dependent commands —
+      # unconditionally `adb shell input keyevent 82`, plus `settings put ...`
+      # when animations are disabled. On a slow software-emulated AVD those
+      # services are still unstable, producing Broken pipe (32) and adb exit
+      # 224. The action then aborts BEFORE `script:` is invoked, so a readiness
+      # gate inside ci-run-tests.sh can never run. Observed in run 37253333090:
+      #
+      #   Emulator booted.
+      #   adb shell input keyevent 82
+      #   Boot completed in 437842 ms
+      #   cmd: Failure calling service input: Broken pipe (32)
+      #   ##[error] ... adb ... failed with exit code 224
+      #
+      # Owning launch + readiness puts the stable-probe gate before the first
+      # fragile service interaction.
+      - name: Resolve Android SDK cache paths
+        id: sdk-cache
+        run: |
+          set -euo pipefail
+          SDK_CACHE_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_CACHE_ROOT" ] || [ ! -d "$SDK_CACHE_ROOT" ]; then
+            echo "::error::Android SDK root is unavailable for caching"
+            exit 1
+          fi
+          echo "root=$SDK_CACHE_ROOT" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      # Cache SDK packages only. Every run still creates a fresh AVD.
+      # sdkmanager below still checks/installs the requested packages on cache hits.
+      - name: Cache Android emulator SDK packages
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          api-level: 35
-          arch: x86_64
-          emulator-options: -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect
-          force-avd-creation: true
-          avd-name: test_emulator
-          script: ./ci-run-tests.sh
+          path: |
+            ${{ steps.sdk-cache.outputs.root }}/emulator
+            ${{ steps.sdk-cache.outputs.root }}/system-images/android-35/default/x86_64
+          key: android-sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.sdk-cache.outputs.image }}-api35-default-x86_64-${{ hashFiles('.github/workflows/android-integration.yml') }}
+
+      - name: Set up emulator and run instrumentation tests
+        run: |
+          set -euo pipefail
+
+          # --- Android SDK tool resolution ---
+          # GitHub's ubuntu runners install the Android command-line tools
+          # under the SDK root but do NOT put them on PATH. Resolve every
+          # tool explicitly and fail fast with diagnostics instead of dying
+          # later with 'command not found'.
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
+            echo "::error::Android SDK root not found or invalid: ANDROID_SDK_ROOT='${ANDROID_SDK_ROOT:-}' ANDROID_HOME='${ANDROID_HOME:-}'"
+            exit 1
+          fi
+          echo "SDK_ROOT=$SDK_ROOT"
+
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/avdmanager"
+          ADB="$SDK_ROOT/platform-tools/adb"
+          EMULATOR="$SDK_ROOT/emulator/emulator"
+
+          # sdkmanager/avdmanager must exist before any SDK package operation.
+          for tool in "$SDKMANAGER" "$AVDMANAGER"; do
+            if [ ! -x "$tool" ]; then
+              echo "::error::Required SDK tool missing or not executable: $tool"
+              ls -la "$SDK_ROOT" "$SDK_ROOT/cmdline-tools" 2>&1 || true
+              exit 1
+            fi
+          done
+
+          # Put the SDK on PATH so the child ./ci-run-tests.sh inherits it and
+          # its bare `adb` invocations resolve to THIS SDK.
+          export PATH="$SDK_ROOT/platform-tools:$SDK_ROOT/emulator:$SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          # Every normal adb invocation targets the intended emulator.
+          export ANDROID_SERIAL=emulator-5554
+          export ADB_INSTALL_TIMEOUT=10
+          # Align avdmanager and emulator directories: on Linux, avdmanager
+          # defaults to XDG (~/.config/.android/avd) when overrides are unset,
+          # whereas emulator specifically searches $ANDROID_AVD_HOME,
+          # $ANDROID_SDK_HOME/avd, and $HOME/.android/avd (not XDG).
+          # Exporting ANDROID_AVD_HOME deterministically guarantees both tools
+          # operate on the exact same AVD directory.
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          command -v sdkmanager
+          command -v avdmanager
+
+          # --- License acceptance ---
+          # `yes` dies by SIGPIPE (141) once sdkmanager stops reading; that is
+          # expected and must not fail the step. sdkmanager's OWN exit status
+          # must be checked — a blanket `|| true` would conceal a real failure.
+          set +e
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1
+          LICENSE_STATUSES=("${PIPESTATUS[@]}")
+          set -e
+          if [ "${LICENSE_STATUSES[1]}" -ne 0 ]; then
+            echo "::error::sdkmanager --licenses failed (exit ${LICENSE_STATUSES[1]})"
+            exit 1
+          fi
+          echo "SDK licenses accepted"
+
+          # --- SDK / AVD setup (parity with the previous wrapper) ---
+          "$SDKMANAGER" --install 'build-tools;37.0.0' platform-tools 'platforms;android-35' > /dev/null
+          "$SDKMANAGER" --install emulator --channel=0 > /dev/null
+          "$SDKMANAGER" --install 'system-images;android-35;default;x86_64' --channel=0 > /dev/null
+
+          # adb and emulator come from the packages installed above; verify
+          # them now, before AVD creation / launch depend on them.
+          for tool in "$ADB" "$EMULATOR"; do
+            if [ ! -x "$tool" ]; then
+              echo "::error::SDK tool missing after package install: $tool"
+              ls -la "$SDK_ROOT/platform-tools" "$SDK_ROOT/emulator" 2>&1 || true
+              exit 1
+            fi
+          done
+          command -v adb
+          command -v emulator
+
+          # AVD creation output is kept (not discarded): run 37256678364
+          # showed avdmanager can exit 0 yet produce no AVD at the assumed
+          # path — a silent failure that discarded output would hide.
+          echo no | "$AVDMANAGER" create avd --force -n test_emulator \
+            --package 'system-images;android-35;default;x86_64'
+
+          # Authoritative discovery of the created AVD path from avdmanager.
+          # Newer cmdline-tools follow XDG Base Directory conventions on Linux,
+          # placing AVDs under ~/.config/.android/avd when overrides are unset.
+          # Query avdmanager directly rather than guessing filesystem paths.
+          AVD_DIR="$("$AVDMANAGER" list avd 2>/dev/null | awk '
+            /^[[:space:]]*Name:[[:space:]]*test_emulator[[:space:]]*$/ { in_target=1; next }
+            in_target && /^[[:space:]]*Path:[[:space:]]*/ {
+              sub(/^[[:space:]]*Path:[[:space:]]*/, "");
+              gsub(/[[:space:]\r]+$/, "");
+              print;
+              exit;
+            }
+            in_target && /^[[:space:]]*Name:/ { in_target=0 }
+          ' || true)"
+
+          AVD_CONFIG=""
+          if [ -n "$AVD_DIR" ] && [ -f "$AVD_DIR/config.ini" ]; then
+            AVD_CONFIG="$AVD_DIR/config.ini"
+          fi
+
+          # Fallback: if list avd did not locate config.ini, check well-known locations
+          if [ -z "$AVD_CONFIG" ]; then
+            for candidate in \
+              ${XDG_CONFIG_HOME:+"$XDG_CONFIG_HOME/.android/avd/test_emulator.avd/config.ini"} \
+              "$HOME/.config/.android/avd/test_emulator.avd/config.ini" \
+              ${ANDROID_AVD_HOME:+"$ANDROID_AVD_HOME/test_emulator.avd/config.ini"} \
+              ${ANDROID_USER_HOME:+"$ANDROID_USER_HOME/avd/test_emulator.avd/config.ini"} \
+              ${ANDROID_SDK_HOME:+"$ANDROID_SDK_HOME/.android/avd/test_emulator.avd/config.ini"} \
+              "$HOME/.android/avd/test_emulator.avd/config.ini"; do
+              if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+                AVD_CONFIG="$candidate"
+                break
+              fi
+            done
+          fi
+
+          # Capture diagnostic evidence unconditionally for post-run analysis
+          {
+            echo "=== AVD environment evidence ==="
+            echo "HOME=$HOME"
+            echo "XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-}"
+            echo "ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-}"
+            echo "ANDROID_USER_HOME=${ANDROID_USER_HOME:-}"
+            echo "ANDROID_SDK_HOME=${ANDROID_SDK_HOME:-}"
+            echo "ANDROID_EMULATOR_HOME=${ANDROID_EMULATOR_HOME:-}"
+            echo "AVD_DIR=${AVD_DIR:-}"
+            echo "AVD_CONFIG=${AVD_CONFIG:-}"
+            echo "=== avdmanager list avd ==="
+            "$AVDMANAGER" list avd 2>&1 || true
+            echo "=== emulator -list-avds ==="
+            "$EMULATOR" -list-avds 2>&1 || true
+          } > avd-environment-evidence.txt 2>&1 || true
+          cat avd-environment-evidence.txt || true
+
+          if [ -z "$AVD_CONFIG" ]; then
+            echo "::error::test_emulator AVD config.ini not found in any known location"
+            exit 1
+          fi
+          echo "AVD_CONFIG=$AVD_CONFIG"
+          printf 'hw.cpu.ncore=2\n' >> "$AVD_CONFIG"
+
+          # --- Acceleration: decide explicitly and record it ---
+          ACCEL_ARGS=""
+          if [ -w /dev/kvm ]; then
+            echo "ACCELERATION: /dev/kvm writable, using hardware acceleration"
+          else
+            echo "ACCELERATION: /dev/kvm not available to this user, using software emulation (-accel off)"
+            ACCEL_ARGS="-accel off"
+          fi
+
+          echo "Launching emulator: $EMULATOR -port 5554 -avd test_emulator -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect $ACCEL_ARGS"
+          nohup "$EMULATOR" -port 5554 -avd test_emulator \
+            -no-snapshot -no-audio -no-window -no-boot-anim -gpu swiftshader_indirect \
+            $ACCEL_ARGS > emulator-launch.log 2>&1 &
+          EMULATOR_PID=$!
+          echo "Emulator launched (pid $EMULATOR_PID)"
+
+          cleanup_emulator() {
+            "$ADB" -s emulator-5554 emu kill > /dev/null 2>&1 || true
+            if [ -n "${EMULATOR_PID:-}" ]; then
+              kill "$EMULATOR_PID" > /dev/null 2>&1 || true
+              wait "$EMULATOR_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup_emulator EXIT
+
+          ./ci-run-tests.sh
 
       # Upload test result artifacts from BOTH runs.
       # No test re-execution — just collect what the test steps already produced.
@@ -318,6 +789,9 @@ jobs:
       # push commit (for push events). We prefer the source head when available.
       - name: Generate CI test metadata
         if: always()
+        env:
+          CI_HEAD_REF: ${{ github.head_ref || '' }}
+          CI_BASE_REF: ${{ github.base_ref || '' }}
         run: |
           SOURCE_HEAD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           cat > ci-test-metadata.txt <<EOF
@@ -326,8 +800,8 @@ jobs:
           workflow_sha=${{ github.sha }}
           source_head_sha=$SOURCE_HEAD_SHA
           github.ref=${{ github.ref }}
-          github.head_ref=${{ github.head_ref || '' }}
-          github.base_ref=${{ github.base_ref || '' }}
+          github.head_ref=$CI_HEAD_REF
+          github.base_ref=$CI_BASE_REF
           workflow_name=${{ github.workflow }}
           runner_os=${{ runner.os }}
           java_version=$(java -version 2>&1 | head -1)
@@ -349,7 +823,12 @@ jobs:
             # Connected-test reports (if generated)
             androidApp/build/reports/androidTests/connected/
             # Debug artifacts from the test job only
+            emulator-launch.log
             firebase-emulator.log
             firestore-debug.log
             test-logcat.log
+            adb-device-evidence.txt
+            pre-gradle-evidence.txt
+            getprop-readiness.txt
             ci-test-metadata.txt
+            avd-environment-evidence.txt
