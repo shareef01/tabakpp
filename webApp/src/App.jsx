@@ -335,7 +335,7 @@ const AppContent = () => {
       {/* DEFINITIVE ATMOSPHERE LAYER */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute inset-0 bg-[url('/noise.svg')] opacity-[0.05] mix-blend-overlay" />
-        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse:60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
+        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-size-[40px_40px] mask-[radial-gradient(ellipse:60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
       </div>
 
       {!user ? (
@@ -344,7 +344,7 @@ const AppContent = () => {
         </Suspense>
       ) : (
         <>
-          <div className="sticky top-0 z-[300] w-full bg-bg-panel pt-[env(safe-area-inset-top)]">
+          <div className="sticky top-0 z-300 w-full bg-bg-panel pt-[env(safe-area-inset-top)]">
             <OfflineBanner isOffline={!isOnline} />
             {(bootstrapError || registryError || settingsError || deleteError) && (
               <div className="w-full bg-red-500/10 border-b border-red-500/20">

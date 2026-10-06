@@ -423,7 +423,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isUploading}
                   aria-label="Change avatar"
-                  className="group relative flex items-center justify-center w-28 h-28 md:w-32 md:h-32 rounded-full bg-white/[0.03] ring-1 ring-inset ring-white/[0.08] overflow-hidden transition-all hover:ring-accent/40 focus-visible:ring-2 focus-visible:ring-accent/50 outline-none disabled:opacity-60"
+                  className="group relative flex items-center justify-center w-28 h-28 md:w-32 md:h-32 rounded-full bg-white/[0.03] ring-1 ring-inset ring-white/[0.08] overflow-hidden transition-all hover:ring-accent/40 focus-visible:ring-2 focus-visible:ring-accent/50 outline-hidden disabled:opacity-60"
                 >
                   {isUploading && (
                     <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/55">
@@ -527,7 +527,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                           if (!selected) safeUpd({ accent: x.v });
                         }}
                         className={cn(
-                          "group relative flex flex-col items-center gap-2.5 py-3 px-2 rounded-xl outline-none transition-all duration-200",
+                          "group relative flex flex-col items-center gap-2.5 py-3 px-2 rounded-xl outline-hidden transition-all duration-200",
                           "focus-visible:ring-2 focus-visible:ring-accent/50",
                           selected
                             ? "bg-white/[0.06] ring-1 ring-inset ring-white/15"
@@ -596,7 +596,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                             if (!selected) safeUpd({ widgetSize: sz.id });
                           }}
                           className={cn(
-                            "relative flex-1 h-11 flex items-center justify-center gap-2 rounded-full outline-none transition-colors duration-200",
+                            "relative flex-1 h-11 flex items-center justify-center gap-2 rounded-full outline-hidden transition-colors duration-200",
                             "focus-visible:ring-2 focus-visible:ring-accent/50",
                             selected ? "text-black" : "text-neutral-400 hover:text-neutral-200"
                           )}
@@ -608,8 +608,8 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                               transition={{ type: 'spring', stiffness: 420, damping: 32 }}
                             />
                           )}
-                          <sz.icon size={14} strokeWidth={selected ? 2.5 : 2} className="relative z-[1]" />
-                          <span className="relative z-[1] text-[10px] font-black uppercase tracking-widest hidden sm:inline">
+                          <sz.icon size={14} strokeWidth={selected ? 2.5 : 2} className="relative z-1" />
+                          <span className="relative z-1 text-[10px] font-black uppercase tracking-widest hidden sm:inline">
                             {sz.label}
                           </span>
                         </button>
@@ -658,7 +658,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 // h-11 keeps the drag target at 44px even though the painted
                 // track stays 8px tall (background-size/position below). An
                 // 8px-tall range input is close to unusable on a touch screen.
-                className="w-full h-11 bg-transparent rounded-full appearance-none cursor-pointer touch-manipulation accent-[var(--accent)]
+                className="w-full h-11 bg-transparent rounded-full appearance-none cursor-pointer touch-manipulation accent-(--accent)
                   [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full
                   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:-mt-1
                   [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:shadow-[0_0_0_3px_rgba(0,0,0,0.45)]
@@ -704,7 +704,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                     }}
                     className={cn(
                       "min-h-11 h-11 px-4 rounded-full text-[10px] font-black uppercase tracking-widest transition-all touch-manipulation",
-                      "ring-1 ring-inset outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+                      "ring-1 ring-inset outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50",
                       selected
                         ? "bg-accent text-black ring-accent"
                         : "bg-white/[0.03] text-neutral-400 ring-white/[0.06] hover:text-white hover:bg-white/[0.06]"
@@ -827,8 +827,8 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               </h3>
             </div>
             <div className="flex p-1 bg-black/60 rounded-full border border-white/5 mb-6 shadow-inner" role="radiogroup" aria-label="Purchase type">
-              <button type="button" role="radio" aria-checked={ecoMode === 'PACK'} onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Package size={14} /> Pack</button>
-              <button type="button" role="radio" aria-checked={ecoMode === 'POUCH'} onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Wind size={14} /> Pouch</button>
+              <button type="button" role="radio" aria-checked={ecoMode === 'PACK'} onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Package size={14} /> Pack</button>
+              <button type="button" role="radio" aria-checked={ecoMode === 'POUCH'} onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Wind size={14} /> Pouch</button>
             </div>
             <div className="grid grid-cols-2 gap-4 md:gap-6">
               <Input label={ecoMode === 'PACK' ? "Pack price (€)" : "Pouch price (€)"} type="number" step="0.01" min="0" inputMode="decimal" value={ecoMode === 'PACK' ? packPrice : pouchPrice} onChange={ecoMode === 'PACK' ? setPackPrice : setPouchPrice} isDark />
@@ -868,7 +868,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               href="/privacy.html"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center min-h-11 mb-2 text-[11px] font-bold text-neutral-400 underline underline-offset-4 hover:text-white outline-none focus-visible:ring-2 focus-visible:ring-accent/50 rounded"
+              className="inline-flex items-center min-h-11 mb-2 text-[11px] font-bold text-neutral-400 underline underline-offset-4 hover:text-white outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50 rounded-sm"
             >
               Privacy and data handling
             </a>
@@ -907,7 +907,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
 
       <AnimatePresence>
         {showDeleteAccount && (
-          <div className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center p-0 sm:p-8 isolate">
+          <div className="fixed inset-0 z-9999 flex items-end sm:items-center justify-center p-0 sm:p-8 isolate">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -925,7 +925,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               initial={{ opacity: 0, scale: 0.95, y: 16 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 16 }}
-              className="custom-scrollbar relative w-full max-w-[400px] z-[10000] max-h-[min(92dvh,92vh)] overflow-y-auto sm:pb-0"
+              className="custom-scrollbar relative w-full max-w-[400px] z-10000 max-h-[min(92dvh,92vh)] overflow-y-auto sm:pb-0"
               style={{ paddingBottom: `max(1.5rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 16)}px)` }}
             >
               <Card className="p-10 border-danger/30 bg-red-950/20 space-y-6">
