@@ -57,7 +57,7 @@ export const UndoToast = ({
             // sits at max(1.25rem,safe-area)+3.5rem on mobile and
             // max(2rem,safe-area)+4rem from md up. Without the md offset the
             // toast overlapped the nav's top edge by ~4px on desktop.
-            'fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] md:bottom-[calc(7rem+env(safe-area-inset-bottom))] left-1/2 z-[4000] -translate-x-1/2',
+            'fixed bottom-[calc(5.75rem+env(safe-area-inset-bottom))] md:bottom-[calc(7rem+env(safe-area-inset-bottom))] left-1/2 z-4000 -translate-x-1/2',
             'w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl',
             'bg-[#121214]/95 border border-white/[0.1] shadow-[0_24px_60px_rgba(0,0,0,0.75)]',
             'backdrop-blur-xl ring-1 ring-white/[0.04]',

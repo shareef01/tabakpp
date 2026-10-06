@@ -37,7 +37,7 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: gradle
-      - uses: gradle/actions/setup-gradle@07d1f8453baaff67fb503883367f8b13e6158a54 # v6
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           # Gradle User Home caching is already owned by actions/setup-java
           # (`cache: gradle`) above. Upstream docs advise against running both
