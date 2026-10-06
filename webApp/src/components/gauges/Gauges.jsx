@@ -31,7 +31,7 @@ export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, i
   // Precise Ignition State Logic
   const ignited = (count >= limit) && (limit > 0);
   const paperColor = 'bg-[#FAFAFA]';
-  const filterColors = 'bg-gradient-to-b from-[#F4A261] to-[#E76F3C]';
+  const filterColors = 'bg-linear-to-b/srgb from-[#F4A261] to-[#E76F3C]';
   const heightClass = GAUGE_HEIGHT[size] || (isLarge ? GAUGE_HEIGHT.lg : GAUGE_HEIGHT.md);
 
   return (
@@ -73,12 +73,12 @@ export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, i
           {!ignited && (
             <div className="absolute inset-0 opacity-[0.04] pointer-events-none flex justify-around">
               {Array.from({ length: 15 }).map((_, i) => (
-                <div key={i} className="w-[1px] h-full bg-black" />
+                <div key={i} className="w-px h-full bg-black" />
               ))}
             </div>
           )}
           {/* Surface Rounding Shading */}
-          <div className="absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/20 pointer-events-none" />
+          <div className="absolute inset-0 bg-linear-to-b/srgb from-black/10 via-transparent to-black/20 pointer-events-none" />
         </div>
 
         {/* 3. FILTER MODULE */}
@@ -87,7 +87,7 @@ export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, i
           style={{ width: `${filterPercent}%` }}
         >
           {/* Surface Rounding Shading */}
-          <div className="absolute inset-0 bg-gradient-to-b from-white/10 via-transparent to-black/30 pointer-events-none" />
+          <div className="absolute inset-0 bg-linear-to-b/srgb from-white/10 via-transparent to-black/30 pointer-events-none" />
         </div>
       </div>
     </div>

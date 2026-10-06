@@ -33,7 +33,7 @@ export const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message, confi
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center p-0 sm:p-8 isolate">
+        <div className="fixed inset-0 z-9999 flex items-end sm:items-center justify-center p-0 sm:p-8 isolate">
           {/* Obsidian Backdrop */}
           <motion.div
             initial={{ opacity: 0 }}
@@ -55,7 +55,7 @@ export const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message, confi
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 16 }}
             transition={{ type: 'spring', damping: 30, stiffness: 450 }}
-            className="custom-scrollbar relative w-full max-w-[400px] z-[10000] max-h-[min(92dvh,92vh)] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-0"
+            className="custom-scrollbar relative w-full max-w-[400px] z-10000 max-h-[min(92dvh,92vh)] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-0"
           >
             <Card className={cn("p-10 border-white/10 shadow-[0_40px_100px_rgba(0,0,0,0.9)] overflow-hidden bg-[#111111]", danger && "bg-red-950/20")}>
               <div className="flex flex-col items-center text-center space-y-8">
