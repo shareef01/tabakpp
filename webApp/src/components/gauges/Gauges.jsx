@@ -93,10 +93,3 @@ export const CigaretteGauge = React.memo(({ count = 0, limit = 1, type: _type, i
     </div>
   );
 });
-
-// Legacy adapters for existing code structure if needed
-export const ZigProgress = (props) => <CigaretteGauge {...props} type="CIGARETTE" />;
-export const KngProgress = (props) => <CigaretteGauge {...props} type="JOINT_KING" />;
-export const RyoRollProgress = (props) => <CigaretteGauge {...props} type="RYO_ROLL" />;
-export const SmokingProgress = (props) => <CigaretteGauge {...props} />;
-export const RingProgress = (props) => <CigaretteGauge {...props} type="SIMPLE" />;

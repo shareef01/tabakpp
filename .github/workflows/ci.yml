@@ -104,7 +104,7 @@ jobs:
         working-directory: webApp
         run: npm run lint && npm run audit:prod && npm run coverage && npm run build
       # Cross-platform domain contract fixtures (item 11) — see
-      # shared-tests/README.md. Also covered by `npm run test:run` above, but
+      # shared-tests/README.md. Also covered by `npm run coverage` above, but
       # named explicitly so a fixture-only regression is easy to spot in logs.
       - name: Cross-platform domain contract fixtures
         working-directory: webApp
