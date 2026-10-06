@@ -428,9 +428,6 @@ jobs:
             -d '{"returnSecureToken": true}' > /dev/null 2>&1 || true
           echo "Auth emulator warm-up complete"
 
-          # Pre-warm getprop cache so PropertyFetcher doesn't encounter a cold-cache stall
-          timeout -k 5 30 adb shell getprop >/dev/null 2>&1 || true
-
           # Capture diagnostic evidence immediately before Gradle test execution
           {
             echo "=== timestamp ==="
@@ -452,11 +449,36 @@ jobs:
           } > pre-gradle-evidence.txt 2>&1 || true
           cat pre-gradle-evidence.txt || true
 
+          # ddmlib's first property lookup has its own hard-coded 5s wait.
+          # A slow full getprop can yield API 1 for the installer check, then
+          # API 35 when the error is formatted (run 37398621639 attempt 3).
+          # CLI getprop does not populate a later ddmlib process's cache.
+          # Require complete property responses inside 4s, with three stable
+          # passes, instead of ignoring a potentially slow pre-warm response.
+          property_stable=0
+          for property_probe in $(seq 1 30); do
+            if timeout -k 1 4 adb shell getprop 2>&1 | tr -d '\r' > getprop-readiness.txt \
+              && grep -Fqx '[ro.build.version.sdk]: [35]' getprop-readiness.txt \
+              && grep -Fqx '[ro.build.version.codename]: [REL]' getprop-readiness.txt \
+              && grep -Fqx '[ro.product.cpu.abi]: [x86_64]' getprop-readiness.txt; then
+              property_stable=$((property_stable + 1))
+              echo "FULL_GETPROP_READY: response within 4s ($property_stable/3)"
+              if [ "$property_stable" -ge 3 ]; then break; fi
+            else
+              property_stable=0
+              echo "FULL_GETPROP_NOT_READY: probe $property_probe/30"
+            fi
+            sleep 5
+          done
+          if [ "$property_stable" -lt 3 ]; then
+            fail_readiness "DEVICE_NOT_READY: full getprop did not meet ddmlib's initial property-response window"
+          fi
+
           # Configure logcat buffer size and clear stale boot logs before test execution.
           # We dump the buffer with 'adb logcat -d' after tests complete (or on failure).
-          # Draining logcat continuously in the background over ADB during test execution
-          # saturates the ADB transport pipe and causes adbd socket flush timeouts on
-          # software-emulated AVDs, severing adb reverse connections.
+          # Avoid an extra continuous ADB stream during test execution. Prior
+          # successful and failed runs both contain socket-flush warnings;
+          # reduced transport pressure is a mitigation hypothesis, not proven causality.
           adb logcat -G 16M >/dev/null 2>&1 || true
           adb logcat -c
           LOGCAT_PID=""
@@ -767,6 +789,9 @@ jobs:
       # push commit (for push events). We prefer the source head when available.
       - name: Generate CI test metadata
         if: always()
+        env:
+          CI_HEAD_REF: ${{ github.head_ref || '' }}
+          CI_BASE_REF: ${{ github.base_ref || '' }}
         run: |
           SOURCE_HEAD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           cat > ci-test-metadata.txt <<EOF
@@ -775,8 +800,8 @@ jobs:
           workflow_sha=${{ github.sha }}
           source_head_sha=$SOURCE_HEAD_SHA
           github.ref=${{ github.ref }}
-          github.head_ref=${{ github.head_ref || '' }}
-          github.base_ref=${{ github.base_ref || '' }}
+          github.head_ref=$CI_HEAD_REF
+          github.base_ref=$CI_BASE_REF
           workflow_name=${{ github.workflow }}
           runner_os=${{ runner.os }}
           java_version=$(java -version 2>&1 | head -1)
@@ -804,5 +829,6 @@ jobs:
             test-logcat.log
             adb-device-evidence.txt
             pre-gradle-evidence.txt
+            getprop-readiness.txt
             ci-test-metadata.txt
             avd-environment-evidence.txt
