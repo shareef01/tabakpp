@@ -288,7 +288,7 @@ export const HistoryScreen = React.memo(({
           className={cn(
             'h-10 min-w-[2.75rem] px-4 rounded-full text-[10px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
             subView === 'history'
-              ? 'bg-white text-black shadow-sm'
+              ? 'bg-white text-black shadow-xs'
               : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
           )}
         >
@@ -301,7 +301,7 @@ export const HistoryScreen = React.memo(({
           className={cn(
             'h-10 min-w-[2.75rem] px-4 rounded-full text-[10px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
             subView === 'insights'
-              ? 'bg-white text-black shadow-sm'
+              ? 'bg-white text-black shadow-xs'
               : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
           )}
         >
@@ -370,7 +370,7 @@ export const HistoryScreen = React.memo(({
                 className={cn(
                   'h-11 min-w-[2.75rem] px-3 rounded-full text-[10px] font-black tracking-[0.14em] transition-all duration-200 touch-manipulation',
                   selected
-                    ? 'bg-white text-black shadow-sm'
+                    ? 'bg-white text-black shadow-xs'
                     : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
                 )}
               >
@@ -653,7 +653,7 @@ export const HistoryScreen = React.memo(({
       )}
 
         {actionError && (
-        <div className="fixed top-24 left-1/2 z-[4000] -translate-x-1/2 flex items-center gap-4 px-5 py-3 rounded-2xl bg-red-950/90 border border-red-500/30 shadow-[0_20px_60px_rgba(0,0,0,0.8)]">
+        <div className="fixed top-24 left-1/2 z-4000 -translate-x-1/2 flex items-center gap-4 px-5 py-3 rounded-2xl bg-red-950/90 border border-red-500/30 shadow-[0_20px_60px_rgba(0,0,0,0.8)]">
           <span className="text-[11px] font-black uppercase tracking-[0.16em] text-red-300">{actionError}</span>
           <button
             type="button"

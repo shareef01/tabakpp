@@ -4,8 +4,8 @@ import com.tabakpp.app.data.DayDocument
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.UserProfile
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
+import kotlin.time.Clock
+import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
