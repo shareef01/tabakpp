@@ -52,6 +52,12 @@ jobs:
       - name: Install Firebase CLI
         run: npm install -g firebase-tools@15.24.0
 
+      - name: Cache Firebase emulator downloads
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/android-integration.yml') }}
+
       - name: Install web dependencies
         working-directory: webApp
         run: npm ci
@@ -557,6 +563,28 @@ jobs:
       #
       # Owning launch + readiness puts the stable-probe gate before the first
       # fragile service interaction.
+      - name: Resolve Android SDK cache paths
+        id: sdk-cache
+        run: |
+          set -euo pipefail
+          SDK_CACHE_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_CACHE_ROOT" ] || [ ! -d "$SDK_CACHE_ROOT" ]; then
+            echo "::error::Android SDK root is unavailable for caching"
+            exit 1
+          fi
+          echo "root=$SDK_CACHE_ROOT" >> "$GITHUB_OUTPUT"
+          echo "image=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      # Cache SDK packages only. Every run still creates a fresh AVD.
+      # sdkmanager below still checks/installs the requested packages on cache hits.
+      - name: Cache Android emulator SDK packages
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ${{ steps.sdk-cache.outputs.root }}/emulator
+            ${{ steps.sdk-cache.outputs.root }}/system-images/android-35/default/x86_64
+          key: android-sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.sdk-cache.outputs.image }}-api35-default-x86_64-${{ hashFiles('.github/workflows/android-integration.yml') }}
+
       - name: Set up emulator and run instrumentation tests
         run: |
           set -euo pipefail
