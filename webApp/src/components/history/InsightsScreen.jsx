@@ -1,12 +1,11 @@
 import React, { useState, useMemo } from 'react';
-import { TrendingUp, TrendingDown, Minus, PiggyBank, Calendar, BarChart3 } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Calendar, BarChart3 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from 'recharts';
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
-import { formatDateDisplay } from '../../utils/formatters';
 
 const HISTORY_SUBVIEWS = [
   { key: 'velocity', label: 'Usage trend', title: 'Usage trend' },
@@ -15,7 +14,7 @@ const HISTORY_SUBVIEWS = [
 
 const RECENT_PERIOD_DAYS = 7;
 
-const MonthTrendTooltip = ({ active, payload, label }) => {
+const MonthTrendTooltip = ({ active, payload }) => {
   if (!active || !payload?.[0]) return null;
   const entry = payload[0].payload;
   return (
@@ -76,7 +75,7 @@ const TrendBadge = ({ trend }) => {
  * Domain logic: SmokingCalculator.aggregateMonthlyData / calculateTrend (shared JS/Kotlin).
  */
 export const InsightsScreen = React.memo(({
-  logs = [], dayDocs = [], configs = [], m, today, unitPrice = 0.5
+  logs = [], dayDocs = [], m, today, unitPrice = 0.5
 }) => {
   const [subView, setSubView] = useState('insights');
 

@@ -172,10 +172,10 @@ dependencies {
     }
 }
 
-// Exclude hamcrest-core (1.3) from androidTest configs because hamcrest:2.2
+// Exclude hamcrest-core (1.3) from androidTest configs because hamcrest:3.0
 // provides the same classes in an incompatible package layout.
 // hamcrest-core comes transitively from junit:4.13.2 (via kotlin("test") and
-// androidx.test.ext:junit). We want hamcrest:2.2 exclusively.
+// androidx.test.ext:junit). We want hamcrest:3.0 exclusively.
 configurations.configureEach {
     if (name.contains("androidTest")) {
         exclude(group = "org.hamcrest", module = "hamcrest-core")
