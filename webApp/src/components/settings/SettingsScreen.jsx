@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { User, Check, Plus, ArrowUp, ArrowDown, Edit2, Trash2, Camera, Loader2, Package, Wind, Moon, Square, Columns2, LayoutGrid, AlertTriangle, Download, Copy } from 'lucide-react';
+import { User, Check, Plus, ArrowUp, ArrowDown, Edit2, Trash2, Camera, Loader2, Package, Wind, Moon, Square, Columns2, LayoutGrid, AlertTriangle, Download } from 'lucide-react';
 import { updateProfile, EmailAuthProvider, GoogleAuthProvider, reauthenticateWithCredential, reauthenticateWithPopup, reauthenticateWithRedirect } from 'firebase/auth';
 import { deleteAuthUserAfterWipe, DELETE_INCOMPLETE_MESSAGE } from '../../utils/deleteAuthUserAfterWipe';
 import { auth } from '../../firebase';

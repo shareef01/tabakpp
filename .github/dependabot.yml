@@ -23,8 +23,8 @@ updates:
           - "*"
     open-pull-requests-limit: 3
 
-  # GitHub Actions — keeps the SHA-pinned `uses:` refs in ci.yml and
-  # release-android.yml current. Dependabot updates the pin AND
+  # GitHub Actions — keeps SHA-pinned `uses:` refs in all three workflows
+  # (CI, instrumentation, and release) current. Dependabot updates the pin AND
   # the trailing `# vX` comment together.
   - package-ecosystem: "github-actions"
     directory: "/"

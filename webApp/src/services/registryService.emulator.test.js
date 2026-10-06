@@ -417,7 +417,7 @@ describe('RegistryService against the real SDK and rules', () => {
     // Rapid concurrent increments — the web SDK serializes these in the
     // Firestore transaction, so no ABORTED error should be thrown.
     const results = await Promise.allSettled(
-      Array.from({ length: 10 }, (_, i) => RegistryService.adjustCounter(UID, 'cig', 1, date, 0.5))
+      Array.from({ length: 10 }, () => RegistryService.adjustCounter(UID, 'cig', 1, date, 0.5))
     );
     const failed = results.filter((r) => r.status === 'rejected');
     expect(failed).toHaveLength(0);
