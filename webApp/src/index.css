@@ -1,6 +1,18 @@
 @import 'tailwindcss';
 @config '../tailwind.config.js';
 
+/* Preserve v3 sibling spacing, including after screen-reader-only headings.
+   v4's margin-bottom selector changes those layouts even with identical tokens. */
+@utility space-y-* {
+  & > :not([hidden]) {
+    margin-bottom: 0;
+  }
+  & > :not([hidden]) ~ :not([hidden]) {
+    margin-top: calc(--value(number) * var(--spacing));
+    margin-bottom: 0;
+  }
+}
+
 /* Tailwind 3 used gray-200 when no explicit border color was set. */
 @layer base {
   *, ::before, ::after, ::backdrop, ::file-selector-button {
