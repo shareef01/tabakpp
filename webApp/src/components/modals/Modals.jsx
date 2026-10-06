@@ -10,7 +10,7 @@ export const LogoutModal = ({ isOpen, onClose, onConfirm }) => {
   const dialogRef = useDialogA11y(isOpen, onClose);
   return <AnimatePresence>
     {isOpen && (
-      <div className="fixed inset-0 z-[5000] flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
+      <div className="fixed inset-0 z-5000 flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -28,7 +28,7 @@ export const LogoutModal = ({ isOpen, onClose, onConfirm }) => {
           initial={{ opacity: 0, scale: 0.95, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 20 }}
-          className="relative w-full max-w-sm z-[5001] max-h-[min(92dvh,92vh)] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-0 px-6 sm:px-0"
+          className="relative w-full max-w-sm z-5001 max-h-[min(92dvh,92vh)] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-0 px-6 sm:px-0"
         >
           <Card className="p-10 border-white/10 text-center" danger>
             <div className="flex flex-col items-center space-y-8">
@@ -63,7 +63,7 @@ export const LogoutModal = ({ isOpen, onClose, onConfirm }) => {
 export const AlertOverlay = ({ isOpen, onClose, title, message, type = 'error' }) => (
   <AnimatePresence>
     {isOpen && (
-      <div className="fixed top-[max(2.5rem,calc(env(safe-area-inset-top)+0.75rem))] left-1/2 -translate-x-1/2 z-[10000] w-full max-w-sm px-6">
+      <div className="fixed top-[max(2.5rem,calc(env(safe-area-inset-top)+0.75rem))] left-1/2 -translate-x-1/2 z-10000 w-full max-w-sm px-6">
         <motion.div
           role={type === 'error' ? 'alert' : 'status'}
           aria-live={type === 'error' ? 'assertive' : 'polite'}

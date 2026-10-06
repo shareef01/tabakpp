@@ -188,7 +188,7 @@ export const InsightsScreen = React.memo(({
                 className={cn(
                   'h-10 min-w-[2.75rem] px-4 rounded-full text-[10px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
                   selected
-                    ? 'bg-white text-black shadow-sm'
+                    ? 'bg-white text-black shadow-xs'
                     : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
                 )}
               >

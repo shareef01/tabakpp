@@ -7,7 +7,7 @@ import { cn } from '../utils/utils';
  */
 export const UI = {
   CARD: "bg-bg-card border border-white/[0.05] rounded-card transition-all duration-500 ease-out shadow-2xl shadow-black ring-1 ring-white/[0.03]",
-  INPUT: "h-14 px-6 rounded-2xl border bg-bg-base border-white/[0.08] text-white placeholder:text-neutral-700 font-medium text-base focus:ring-1 focus:ring-accent/40 outline-none transition-all duration-300",
+  INPUT: "h-14 px-6 rounded-2xl border bg-bg-base border-white/[0.08] text-white placeholder:text-neutral-700 font-medium text-base focus:ring-1 focus:ring-accent/40 outline-hidden transition-all duration-300",
   BUTTON_BASE: "min-h-[56px] px-8 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center transition-all duration-300 ease-out active:scale-[0.94] disabled:opacity-40 select-none touch-manipulation",
   LABEL: "block mb-2 ml-1 text-[11px] font-black text-neutral-400 uppercase tracking-[0.16em] antialiased",
   GLASS_ACTION: "flex items-center justify-center min-h-[48px] min-w-[48px] p-3 rounded-xl bg-white/[0.03] border border-white/[0.05] text-neutral-400 hover:text-white hover:bg-white/[0.06] active:scale-90 transition-all duration-300",
@@ -85,7 +85,7 @@ export const Card = React.memo(({ children, className, danger, noPadding }) => (
     className
   )}>
     {/* 0.5dp Milled Top Highlight */}
-    <div className="absolute top-0 left-0 right-0 h-[1px] bg-white/[0.04] pointer-events-none" />
+    <div className="absolute top-0 left-0 right-0 h-px bg-white/[0.04] pointer-events-none" />
     {children}
   </div>
 ));

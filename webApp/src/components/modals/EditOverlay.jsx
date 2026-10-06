@@ -42,7 +42,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-[5000] flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
+    <div className="fixed inset-0 z-5000 flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
       {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
@@ -58,7 +58,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className={cn(UI.CARD, "custom-scrollbar w-full max-w-[500px] p-8 lg:p-12 shadow-[0_0_80px_rgba(0,0,0,0.9)] relative overflow-hidden overflow-y-auto max-h-[min(92dvh,92vh)] z-[5001] bg-[#111111] rounded-b-none sm:rounded-card")}
+        className={cn(UI.CARD, "custom-scrollbar w-full max-w-[500px] p-8 lg:p-12 shadow-[0_0_80px_rgba(0,0,0,0.9)] relative overflow-hidden overflow-y-auto max-h-[min(92dvh,92vh)] z-5001 bg-[#111111] rounded-b-none sm:rounded-card")}
         style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 24)}px)` }}
         role="dialog"
         aria-modal="true"
