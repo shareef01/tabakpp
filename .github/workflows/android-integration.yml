@@ -294,6 +294,9 @@ jobs:
               adb shell settings put global bluetooth_on 0 >/dev/null 2>&1 || true
               adb shell settings put secure location_mode 0 >/dev/null 2>&1 || true
               adb shell settings put global wifi_scan_always_enabled 0 >/dev/null 2>&1 || true
+              adb shell svc data disable >/dev/null 2>&1 || true
+              adb shell settings put global airplane_mode_on 1 >/dev/null 2>&1 || true
+              adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null 2>&1 || true
             fi
 
             # Verify ActivityManager can report the current user
@@ -443,10 +446,14 @@ jobs:
           } > pre-gradle-evidence.txt 2>&1 || true
           cat pre-gradle-evidence.txt || true
 
-          # Capture logcat during test execution — critical for diagnosing hangs
+          # Configure logcat buffer size and clear stale boot logs before test execution.
+          # We dump the buffer with 'adb logcat -d' after tests complete (or on failure).
+          # Draining logcat continuously in the background over ADB during test execution
+          # saturates the ADB transport pipe and causes adbd socket flush timeouts on
+          # software-emulated AVDs, severing adb reverse connections.
+          adb logcat -G 16M >/dev/null 2>&1 || true
           adb logcat -c
-          ( adb logcat -v threadtime > test-logcat.log 2>&1 ) &
-          LOGCAT_PID=$!
+          LOGCAT_PID=""
 
           # Run Android instrumentation tests — full androidTest suite.
           # No -Pandroid.testInstrumentationRunnerArguments.class filter: AndroidJUnitRunner
@@ -454,10 +461,10 @@ jobs:
           # + RegistryErrorStructuredCodeTest = 21 tests). This keeps CI in sync with the
           # complete intended suite and automatically includes future androidTest classes.
           # timeout_msec=420000: per-test timeout (via AndroidJUnitRunner) catches hanging tests / setup
-          # timeout -k 30s 38m: hard kill if tests hang beyond 38 min (within 60m job limit;
+          # timeout -k 30s 40m: hard kill if tests hang beyond 40 min (within 60m job limit;
           # 21 androidTest tests take ~16m on software emulator under contention, plus ~7m APK install)
           TEST_EXIT=0
-          timeout -k 30s 38m ./gradlew :androidApp:connectedDebugAndroidTest \
+          timeout -k 30s 40m ./gradlew :androidApp:connectedDebugAndroidTest \
             --no-daemon \
             --max-workers=2 \
             -Pandroid.injected.adb.options.timeOutInMs=600000 \
@@ -465,8 +472,8 @@ jobs:
             -Pandroid.testInstrumentationRunnerArguments.timeout_msec=420000 \
             || TEST_EXIT=$?
 
-          # Stop logcat capture
-          kill "$LOGCAT_PID" 2>/dev/null || true
+          # Dump complete test execution logcat from the in-memory ring buffer
+          adb logcat -d -v threadtime > test-logcat.log 2>&1 || true
 
           if [ "$TEST_EXIT" -ne 0 ]; then
             echo "::error::Instrumentation tests failed (exit code: $TEST_EXIT)"
