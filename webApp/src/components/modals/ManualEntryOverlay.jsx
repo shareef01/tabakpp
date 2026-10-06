@@ -51,7 +51,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
   };
 
   return (
-    <div className="fixed inset-0 z-[5000] flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
+    <div className="fixed inset-0 z-5000 flex items-end sm:items-center justify-center p-0 sm:p-6 isolate">
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -66,7 +66,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className={cn(UI.CARD, "custom-scrollbar w-full max-w-[500px] p-8 lg:p-12 shadow-[0_0_80px_rgba(0,0,0,0.9)] relative overflow-hidden z-[5001] bg-[#111111] max-h-[min(92dvh,92vh)] overflow-y-auto rounded-b-none sm:rounded-card")}
+        className={cn(UI.CARD, "custom-scrollbar w-full max-w-[500px] p-8 lg:p-12 shadow-[0_0_80px_rgba(0,0,0,0.9)] relative overflow-hidden z-5001 bg-[#111111] max-h-[min(92dvh,92vh)] overflow-y-auto rounded-b-none sm:rounded-card")}
         style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 24)}px)` }}
         role="dialog"
         aria-modal="true"
