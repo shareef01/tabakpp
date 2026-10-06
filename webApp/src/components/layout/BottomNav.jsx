@@ -17,7 +17,7 @@ export const BottomNav = React.memo(({ activeTab, onTabChange }) => {
   const activeIndex = tabs.findIndex(t => t.id === activeTab);
 
   return (
-    <nav className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] md:bottom-[max(2rem,env(safe-area-inset-bottom))] left-0 right-0 z-[100] px-5 pointer-events-none">
+    <nav className="fixed bottom-[max(1.25rem,env(safe-area-inset-bottom))] md:bottom-[max(2rem,env(safe-area-inset-bottom))] left-0 right-0 z-100 px-5 pointer-events-none">
       <div className="max-w-[300px] mx-auto h-14 md:h-16 bg-bg-panel border border-white/[0.08] rounded-full shadow-[0_40px_100px_rgba(0,0,0,1)] p-1.5 flex items-center relative pointer-events-auto ring-1 ring-white/[0.02]">
 
         {/* SLIDING ACTIVE INDICATOR */}

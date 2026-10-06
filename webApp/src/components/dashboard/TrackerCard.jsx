@@ -93,7 +93,7 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
             {isPending && (
               <Loader2 size={12} className="animate-spin text-accent" strokeWidth={2.5} aria-label="Syncing…" />
             )}
-            <span className="text-[10px] md:text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 px-2 py-0.5 rounded bg-white/[0.04] border border-white/[0.06]">
+            <span className="text-[10px] md:text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 px-2 py-0.5 rounded-sm bg-white/[0.04] border border-white/[0.06]">
               {limit}/day
             </span>
           </div>
