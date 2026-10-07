@@ -5,6 +5,26 @@ an installed Chromium (`PUPPETEER_EXECUTABLE_PATH` can select it). General CI
 runs this gate with its preinstalled Chrome; no additional browser dependency
 or browser download is required.
 
+The additional host cases use HTTPS on a dynamic loopback port, mapping
+`tabakpp.firebaseapp.com` and `tabakpp.web.app` in the isolated Chromium
+process. OpenSSL (preinstalled on Ubuntu; Git for Windows locally) generates
+a one-day temporary self-signed fixture certificate. Certificate errors are
+ignored only by that test browser, which also disables proxies. No hosts file,
+trust store, Firebase Console or deployed site is changed. Assertions require
+the actual hostname, secure context and controlling production worker.
+
+Both hosts cover root/index/unvisited offline routes, denied auth/API shell
+fallback, and real script/style requests on reserved `/__` and `/api` paths.
+Those public probe responses contain only an empty JS/CSS comment and test
+routing/cache policy; they do not simulate authentication or backend data.
+Cache assertions permit the application's own firebaseapp.com static assets
+while rejecting cross-origin responses, reserved paths and non-shell content.
+The first runtime route protects same-origin reserved paths and cross-origin
+Firebase/Google services; ordinary hosting requests reach normal PWA routes.
+Deliberately denied offline navigations can produce Workbox `no-response`
+worker rejections. Only exact messages for the tested denied URLs are recorded
+as expected network failures; every other worker error still fails the gate.
+
 The test builds the real application twice, serves production output with the
 Firebase Hosting SPA rewrite, and uses fresh browser contexts. It waits for
 service-worker control before navigating offline. Both Chromium's offline
