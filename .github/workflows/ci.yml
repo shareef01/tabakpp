@@ -103,6 +103,11 @@ jobs:
       - name: Lint, test, and build
         working-directory: webApp
         run: npm run lint && npm run audit:prod && npm run coverage && npm run build
+      - name: Production PWA offline navigation and deployment freshness
+        working-directory: webApp
+        run: npm run test:pwa
+        env:
+          PWA_TEST_REPORT: ${{ runner.temp }}/pwa-regression.json
       # Cross-platform domain contract fixtures (item 11) — see
       # shared-tests/README.md. Also covered by `npm run coverage` above, but
       # named explicitly so a fixture-only regression is easy to spot in logs.
