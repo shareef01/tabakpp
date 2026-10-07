@@ -181,6 +181,7 @@ const AppContent = () => {
   // Modal States
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
+  const [historyUpdate, setHistoryUpdate] = useState(null);
   const [editProtocol, setEditProtocol] = useState(null);
   const [isLogoutOpen, setIsLogoutOpen] = useState(false);
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
@@ -421,6 +422,7 @@ const AppContent = () => {
                       {!isHydrated || isRegistryLoading ? <DashboardSkeleton widgetSize={settings.widgetSize} /> : <HistoryScreen
                         logs={logs}
                         dayDocs={dayDocs}
+                        historyUpdate={historyUpdate}
                         configs={configs}
                         m={metrics}
                         onEdit={setEditTarget}
@@ -486,9 +488,18 @@ const AppContent = () => {
                 log={editTarget}
                 configs={configs}
                 onClose={() => setEditTarget(null)}
-                onSave={editTarget.__dayDoc
-                  ? (_id, counts) => updateHistoricalDay(editTarget.logDate, counts)
-                  : updateHistoricalLog}
+                onSave={async (id, counts) => {
+                  const uid = user.uid;
+                  if (editTarget.__dayDoc) {
+                    await updateHistoricalDay(editTarget.logDate, counts);
+                    const record = await RegistryService.getHistoricalDay(uid, editTarget.logDate);
+                    setHistoryUpdate({ uid, kind: 'day', record });
+                  } else {
+                    await updateHistoricalLog(id, counts);
+                    const record = await RegistryService.getHistoricalLog(uid, id);
+                    setHistoryUpdate({ uid, kind: 'log', record });
+                  }
+                }}
               />
             )}
             {isManualEntryOpen && (
