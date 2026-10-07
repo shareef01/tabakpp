@@ -15,6 +15,9 @@ concurrency:
   group: release-android
   cancel-in-progress: false
 
+env:
+  RELEASE_VERSION: ${{ github.event.inputs.version }}
+
 jobs:
   # Validation job: runs the full test+lint suite on the trusted
   # current main HEAD. Only if this passes does the release job
@@ -35,8 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       release_sha: ${{ steps.record.outputs.sha }}
+      release_version: ${{ steps.validate-version.outputs.version }}
 
     steps:
       - name: Verify dispatch from main
@@ -60,19 +65,24 @@ jobs:
           echo "Release SHA: ${RELEASE_SHA}"
 
       # Validate version input format (same SemVer policy used by the app).
+      - name: Test release input and acceptance guards
+        run: python3 .github/scripts/test-release-safety.py
+
       - name: Validate version input
+        id: validate-version
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Error: Version '$VERSION' does not match required SemVer format 'MAJOR.MINOR.PATCH'"
             exit 1
           fi
           echo "Validated version: $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       # Reject if the tag already exists remotely.
       - name: Check tag does not already exist
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           if git ls-remote --tags origin "v${VERSION}" | grep -q "v${VERSION}"; then
             echo "Error: Tag 'v${VERSION}' already exists remotely. Aborting release."
             exit 1
@@ -123,8 +133,13 @@ jobs:
 
       - name: Run full validation suite (mirrors ci.yml)
         run: |
-          ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:lintDebug --no-daemon
-          cd webApp && npm run lint && npm run audit:prod && npm run test:run && npm run test:contract && npm run test:rules
+          ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+          cd webApp && npm run lint && npm run audit:prod && npm run test:run && npm run test:contract && npm run test:rules && npm run build && npm run test:pwa
+
+      - name: Require exact-SHA main CI and Android instrumentation acceptance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/check-release-ci.py "${{ steps.record.outputs.sha }}"
 
       - name: Record validated SHA for release job
         run: |
@@ -138,6 +153,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: release
+    env:
+      RELEASE_VERSION: ${{ needs.require-ci.outputs.release_version }}
     permissions:
       contents: write
 
@@ -152,7 +169,7 @@ jobs:
 
       - name: Validate release tag format
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Error: Version '$VERSION' does not match required SemVer format 'MAJOR.MINOR.PATCH'"
             exit 1
@@ -203,7 +220,7 @@ jobs:
           TABAKPP_KEYSTORE_PASSWORD: ${{ secrets.TABAKPP_KEYSTORE_PASSWORD }}
           TABAKPP_KEY_ALIAS: ${{ secrets.TABAKPP_KEY_ALIAS }}
           TABAKPP_KEY_PASSWORD: ${{ secrets.TABAKPP_KEY_PASSWORD }}
-          TABAKPP_VERSION_NAME: ${{ github.event.inputs.version }}
+          TABAKPP_VERSION_NAME: ${{ needs.require-ci.outputs.release_version }}
         run: ./gradlew :androidApp:assembleRelease --no-daemon
 
       - name: Stage release artifact
@@ -214,13 +231,13 @@ jobs:
             echo "Error: No signed release APK found in androidApp/build/outputs/apk/release/"
             exit 1
           fi
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           cp "$APK_PATH" "dist/tabakpp-${VERSION}.apk"
 
       # Verify the APK signature using SDK apksigner BEFORE generating checksum or publishing.
       - name: Verify the APK signature
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           BUILD_TOOLS_DIR=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -type d | sort -V | tail -n 1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
           if [ ! -x "$APKSIGNER" ]; then
@@ -231,14 +248,14 @@ jobs:
 
       - name: Generate artifact checksum
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           cd dist
           sha256sum "tabakpp-${VERSION}.apk" > "tabakpp-${VERSION}.apk.sha256"
           cd ..
 
       - name: Verify release notes file exists
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           if [ ! -f ".github/release-notes/v${VERSION}.md" ]; then
             echo "Error: Release notes file .github/release-notes/v${VERSION}.md not found."
             echo "Create release notes before publishing v${VERSION}."
@@ -250,7 +267,7 @@ jobs:
       # notes validation fails, no tag is created.
       - name: Create annotated version tag
         run: |
-          VERSION="${{ github.event.inputs.version }}"
+          VERSION="$RELEASE_VERSION"
           RELEASE_SHA=$(git rev-parse HEAD)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -260,11 +277,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
-          tag_name: v${{ github.event.inputs.version }}
-          body_path: .github/release-notes/${{ github.event.inputs.version }}.md
+          tag_name: v${{ needs.require-ci.outputs.release_version }}
+          body_path: .github/release-notes/v${{ needs.require-ci.outputs.release_version }}.md
           files: |
-            dist/tabakpp-${{ github.event.inputs.version }}.apk
-            dist/tabakpp-${{ github.event.inputs.version }}.apk.sha256
+            dist/tabakpp-${{ needs.require-ci.outputs.release_version }}.apk
+            dist/tabakpp-${{ needs.require-ci.outputs.release_version }}.apk.sha256
           fail_on_unmatched_files: true
 
       - name: Cleanup decoded credentials

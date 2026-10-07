@@ -445,7 +445,17 @@ class RegistryViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    private fun mutationBlocked(): Boolean {
+        val profile = userProfile.value ?: return false
+        val lease = profile.smokingMigrationLeaseUntil
+        val leased = lease != null && lease.seconds * 1000 + lease.nanoseconds / 1_000_000 > Clock.System.now().toEpochMilliseconds()
+        if (!profile.deleting && !leased) return false
+        setError(Exception(if (profile.deleting) "ACCOUNT_DELETING" else "MIGRATION_IN_PROGRESS"),
+            if (profile.deleting) "Account deletion is in progress. Retry deletion from Settings." else "History migration is in progress. Try again shortly.")
+        return true
+    }
     fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to update this count.")
@@ -494,6 +504,7 @@ class RegistryViewModel(
     }
 
     fun decrement(trackerId: String) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if ((_activeCounts.value[trackerId] ?: 0.0) <= 0.0) return // Prevent negative counts
         if (!networkObserver.isOnline.value) {
@@ -573,6 +584,7 @@ class RegistryViewModel(
     }
 
     fun createManualEntry(date: String, counts: Map<String, Double>) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to save this entry.")
@@ -595,6 +607,7 @@ class RegistryViewModel(
     }
 
     fun deleteLog(log: LogEntry, onSuccess: () -> Unit = {}) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to delete this entry.")
@@ -612,6 +625,7 @@ class RegistryViewModel(
     }
 
     fun restoreLog(log: LogEntry) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to restore this entry.")
@@ -628,6 +642,7 @@ class RegistryViewModel(
     }
 
     fun addTracker(config: TrackerConfig) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         val currentConfigs = configs.value
         if (currentConfigs.size >= 8) {
@@ -653,6 +668,7 @@ class RegistryViewModel(
     }
 
     fun updateTracker(config: TrackerConfig) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         val sanitized = config.copy(
             name = InputSanitizer.trackerName(config.name),
@@ -671,6 +687,7 @@ class RegistryViewModel(
     }
 
     fun deleteTracker(configId: String) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to delete this tracker.")
@@ -687,6 +704,7 @@ class RegistryViewModel(
     }
 
     fun reorderTracker(index: Int, up: Boolean) {
+        if (mutationBlocked()) return
         val list = configs.value.toMutableList()
         if (up && index > 0) {
             val c1 = list[index]
@@ -715,6 +733,7 @@ class RegistryViewModel(
     }
 
     fun updateLog(logId: String, counts: Map<String, Double>) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to save this change.")
@@ -737,6 +756,7 @@ class RegistryViewModel(
 
     /** Edit a closed `days/{date}` record — the dated-model equivalent of [updateLog]. */
     fun updateDayRecord(date: String, counts: Map<String, Double>) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to save this change.")
@@ -758,6 +778,7 @@ class RegistryViewModel(
     }
 
     fun updateAvatar(avatar: String?) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         viewModelScope.launch {
             try {
@@ -769,6 +790,7 @@ class RegistryViewModel(
     }
 
     fun updateProfile(updater: (UserProfile) -> UserProfile) {
+        if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         viewModelScope.launch {
             profileWriteMutex.withLock {
@@ -797,6 +819,7 @@ class RegistryViewModel(
             a.dayStartHour == b.dayStartHour
 
     fun updateDisplayName(name: String) {
+        if (mutationBlocked()) return
         viewModelScope.launch {
             authRepository.updateDisplayName(name)
                 .onFailure { setError(it, "Could not update your display name. Try again.") }

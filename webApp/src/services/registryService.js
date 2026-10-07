@@ -1,7 +1,7 @@
 import {
-  collection, doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs,
+  collection, doc, setDoc, updateDoc, getDoc, getDocs,
   query, onSnapshot, orderBy, where, writeBatch, limit, serverTimestamp,
-  runTransaction, deleteField, startAfter
+  runTransaction, deleteField, startAfter, Timestamp
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { SmokingCalculator } from '../utils/smokingCalculator';
@@ -9,6 +9,7 @@ import { sanitizeTrackerName } from '../utils/security';
 
 /** Doc id always wins over any payload `id` field (Android parity). */
 const withDocId = (d) => ({ ...d.data(), id: d.id });
+const timestampMillis = (value) => value?.toMillis?.() ?? ((value?.seconds ?? 0) * 1000 + (value?.nanoseconds ?? 0) / 1000000);
 
 /**
  * Settings keys mirrored from Android `updateProfileSettings` — never counters/
@@ -344,53 +345,39 @@ export const RegistryService = {
    * Concurrency-safe (H-02 fix): guards against concurrent log mutations while scanning
    * outside the transaction, retrying if source totals shifted before commit.
    */
-  migrateSmokingUnitsIfNeeded: async (uid, maxRetries = 2) => {
+  migrateSmokingUnitsIfNeeded: async (uid) => {
     if (!uid) return;
     const userRef = doc(db, 'users', uid);
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const snap = await getDoc(userRef);
-      if (!snap.exists() || snap.data().smokingUnitsMigrated) return;
-      const initialAggs = snap.data().lifetimeAggregates || emptyAggregates();
-
-      const configs = await getConfigsOnce(uid);
-      const logs = await getAllLogs(uid);
-      const units = SmokingCalculator.sumSmokingUnitsFromLogs(logs, configs);
-
-      let retryNeeded = false;
-      await runTransaction(db, async (transaction) => {
-        const live = await transaction.get(userRef);
-        if (!live.exists() || live.data().smokingUnitsMigrated) return;
-        const liveData = live.data();
-        const liveAggs = liveData.lifetimeAggregates || emptyAggregates();
-
-        // Concurrency check: If lifetimeAggregates (saved/wasted/baselineSaved) shifted
-        // while we scanned logs outside the transaction, a concurrent mutation happened.
-        // We must not commit stale smokingUnits; abort and retry with fresh logs.
-        if (
-          Number(liveAggs.saved || 0) !== Number(initialAggs.saved || 0) ||
-          Number(liveAggs.wasted || 0) !== Number(initialAggs.wasted || 0) ||
-          Number(liveAggs.baselineSaved || 0) !== Number(initialAggs.baselineSaved || 0)
-        ) {
-          retryNeeded = true;
-          return;
-        }
-
-        transaction.update(userRef, {
-          lifetimeAggregates: {
-            saved: Number(liveAggs.saved || 0),
-            wasted: Number(liveAggs.wasted || 0),
-            smokingUnits: units,
-            baselineSaved: Number(liveAggs.baselineSaved || 0),
-          },
-          smokingUnitsMigrated: true
-        });
+    const leaseId = newClaimId();
+    const leaseUntil = Timestamp.fromMillis(Date.now() + 120000);
+    const acquired = await runTransaction(db, async (tx) => {
+      const snapshot = await tx.get(userRef);
+      if (!snapshot.exists()) return false;
+      const profile = snapshot.data();
+      if (profile.smokingUnitsMigrated || profile.deleting) return false;
+      if (timestampMillis(profile.smokingMigrationLeaseUntil) > Date.now()) return false;
+      tx.update(userRef, { smokingMigrationLeaseId: leaseId, smokingMigrationLeaseUntil: leaseUntil });
+      return true;
+    });
+    if (!acquired) return;
+    const configs = await getConfigsOnce(uid);
+    const logs = await getAllLogs(uid);
+    const days = await getAllDays(uid);
+    const units = SmokingCalculator.sumSmokingUnitsFromLogs(logs, configs)
+      + days.filter((day) => day.foldedIntoLifetime).reduce((sum, day) => sum
+        + (day.aggregateCredit?.smokingUnits ?? SmokingCalculator.sumSmokingUnits(day.counts, configs)), 0);
+    await runTransaction(db, async (tx) => {
+      const snapshot = await tx.get(userRef);
+      if (!snapshot.exists()) return;
+      const profile = snapshot.data();
+      if (profile.deleting || profile.smokingMigrationLeaseId !== leaseId) return;
+      if (timestampMillis(profile.smokingMigrationLeaseUntil) <= Date.now()) throw new Error('MIGRATION_LEASE_EXPIRED');
+      tx.update(userRef, {
+        'lifetimeAggregates.smokingUnits': units, smokingUnitsMigrated: true,
+        smokingMigrationLeaseId: deleteField(), smokingMigrationLeaseUntil: deleteField(),
       });
-
-      if (!retryNeeded) break;
-    }
+    });
   },
-
   /** Claim legacy counts under protocol 3, apply permanent per-tracker markers,
    * recover closed/overflow targets with unknown money, then atomically release
    * the profile fence and stamp completion. Each transaction may safely retry. */
@@ -583,7 +570,7 @@ export const RegistryService = {
    * `adjustCounter`). Idempotent: a day already folded just gets the
    * cosmetic `status: 'closed'` flip without re-crediting.
    */
-  closeDay: async (uid, date) => {
+  closeDay: async (uid, date, allowEmpty = false) => {
     if (!uid || !date) throw new Error('INVALID_PAYLOAD');
     const userRef = doc(db, 'users', uid);
     const dayRef = doc(db, 'users', uid, 'days', date);
@@ -592,7 +579,7 @@ export const RegistryService = {
       const daySnap = await transaction.get(dayRef);
       if (!daySnap.exists()) throw new Error('NOTHING_TO_ARCHIVE');
       const day = daySnap.data();
-      if (!SmokingCalculator.hasOpenSession(day.counts)) throw new Error('NOTHING_TO_ARCHIVE');
+      if (!allowEmpty && !SmokingCalculator.hasOpenSession(day.counts)) throw new Error('NOTHING_TO_ARCHIVE');
 
       if (day.foldedIntoLifetime) {
         if (day.status !== 'closed') transaction.update(dayRef, { status: 'closed', closedAt: serverTimestamp() });
@@ -640,7 +627,7 @@ export const RegistryService = {
       try {
         // Sequential is intentional: bounded (<=30), best-effort, one failure
         // must not abort the rest.
-        await RegistryService.closeDay(uid, d.id);
+        await RegistryService.closeDay(uid, d.id, true);
       } catch (e) {
         console.warn('[REGISTRY] reconcile failed for', d.id, e);
       }
@@ -925,11 +912,19 @@ export const RegistryService = {
    */
   deleteAllUserData: async (uid) => {
     if (!uid) throw new Error('INVALID_REF');
+    const userRef = doc(db, 'users', uid);
+    await runTransaction(db, async (tx) => {
+      const profile = await tx.get(userRef);
+      if (profile.exists()) tx.update(userRef, { deleting: true });
+      else tx.set(userRef, { deleting: true });
+    });
     await deleteCollectionDocs(uid, 'configs');
     await deleteCollectionDocs(uid, 'logs');
     await deleteCollectionDocs(uid, 'days');
     await deleteCollectionDocs(uid, 'meta');
-    await deleteDoc(doc(db, 'users', uid));
+    // Retain a minimal UID-keyed tombstone: old Auth tokens cannot recreate data.
+    // An Auth failure can retry the same fenced deletion safely.
+    await setDoc(userRef, { deleting: true });
   },
 
   /**

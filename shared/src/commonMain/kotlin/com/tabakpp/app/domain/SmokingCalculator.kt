@@ -140,7 +140,14 @@ object SmokingCalculator {
         val streakConfigs = getStreakConfigs(configs)
         if (streakConfigs.isEmpty()) return 0
 
-        val logged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs)
+        val logged = aggregateLoggedCounts(logs).toMutableMap()
+        dayDocs.forEach { day ->
+            val counts = if (day.date == trackingDay && day.status != "closed" && activeCounts.isNotEmpty()) activeCounts else day.counts
+            logged[day.date] = mergeCounts(logged[day.date], counts)
+        }
+        if (dayDocs.none { it.date == trackingDay } && activeCounts.isNotEmpty()) {
+            logged[trackingDay] = mergeCounts(logged[trackingDay], activeCounts)
+        }
         val snapshots = snapshotsByDate(dayDocs)
         val loggedDates = logged.keys.sortedDescending()
 
@@ -165,7 +172,7 @@ object SmokingCalculator {
         for (i in 0 until 366) {
             val cursorStr = cursor.toString()
             val dayCounts = if (cursorStr == trackingDay) {
-                mergeCounts(logged[cursorStr], activeCounts)
+                logged[cursorStr]
             } else {
                 logged[cursorStr]
             }
@@ -575,14 +582,15 @@ object SmokingCalculator {
         // mirroring how spentToday/budgetLeftToday already layer session on
         // top of lifetime.
         val sessionBaseline = calculateBaselineSavings(sessionCounts, configs, userPrice)
-        val baselineSavedLifetime = (lifetimeAggregates?.baselineSaved ?: 0.0) + sessionBaseline.moneySaved
+        val folded = dayDocs.any { it.date == trackingDay && it.foldedIntoLifetime }
+        val baselineSavedLifetime = (lifetimeAggregates?.baselineSaved ?: 0.0) + if (folded) 0.0 else sessionBaseline.moneySaved
         val hasAnyBaseline = sessionBaseline.hasBaseline || configs.any { it.baseline != null }
 
         val sessionFin = calculateFinancials(sessionCounts, configs, userPrice)
         val lifeLost = try {
             // Prefer transactional smokingUnits when aggregates are present (same pattern as saved).
             val archivedUnits = if (lifetimeAggregates != null) lifetimeAggregates.smokingUnits else null
-            calculateLifeLostMinutes(logs, configs, activeCounts, archivedUnits)
+            calculateLifeLostMinutes(logs, configs, if (folded) emptyMap() else activeCounts, archivedUnits)
         } catch (_: Exception) {
             0
         }
@@ -776,7 +784,8 @@ object SmokingCalculator {
         val baselineSaved: Double,
         val hasBaseline: Boolean,
         val isCurrentMonth: Boolean,
-        val isComplete: Boolean
+        val isComplete: Boolean,
+        val unknownEconomics: Boolean = false
     )
 
     data class TrendResult(
@@ -828,16 +837,10 @@ object SmokingCalculator {
     /**
      * Aggregate daily tracking data into monthly summaries for historical insights.
      *
-     * Uses the canonical merge semantics: [aggregateLoggedCounts] merges legacy log
-     * archives + manual entries per date, then [mergeDayDocsIntoLogged] additively
-     * overlays `days/{date}` documents — identical to existing streak and velocity
-     * calculations. In production, each date is written by exactly one source
-     * (the day-doc schema ships forward from the migration point), so overlap is
-     * a no-op. Where both exist, the merge is additive — the established domain
-     * behavior, not an Insights-specific choice.
-     *
-     * Historical economics use each day's stamped [TrackerSnapshot]s via
-     * [computeDayCredit] — NEVER current configs.
+     * Manual and legacy records remain additive. For the open current day, active
+     * counts replace its persisted projection; closed dated days remain authoritative.
+     * Economics use stamped credits or reliable frozen snapshots. Missing economics
+     * are flagged as unknown rather than reconstructed from current prices.
      *
      * Missing-day semantics: only dates present in the merged set count as "tracked
      * days." Untracked calendar days are excluded from the denominator (tracked-day
@@ -847,7 +850,7 @@ object SmokingCalculator {
      * @param dayDocs List<DayDocument> with date, counts, trackerSnapshots, aggregateCredit
      * @param trackingDay today's YYYY-MM-DD
      * @param activeCounts { [trackerId]: count } for the still-open session
-     * @param defaultUnitPrice fallback price for legacy data without snapshots
+     * @param defaultUnitPrice retained for API compatibility; historical prices are never inferred
      * @param monthsToInclude how many complete recent months + current MTD to include
      * @returns Pair(months list, currentMonthMtd)
      */
@@ -859,45 +862,40 @@ object SmokingCalculator {
         defaultUnitPrice: Double = 0.5,
         monthsToInclude: Int = 6
     ): Pair<List<MonthSummary>, MonthSummary?> {
-        val logged = aggregateLoggedCounts(logs)
-        val merged = mergeDayDocsIntoLogged(logged, dayDocs)
-
+        val merged = aggregateLoggedCounts(logs).toMutableMap()
+        dayDocs.forEach { day ->
+            val counts = if (day.date == trackingDay && day.status != "closed" && activeCounts.isNotEmpty()) activeCounts else day.counts
+            merged[day.date] = mergeCounts(merged[day.date] ?: emptyMap(), counts)
+        }
+        if (activeCounts.isNotEmpty() && dayDocs.none { it.date == trackingDay }) {
+            merged[trackingDay] = mergeCounts(merged[trackingDay] ?: emptyMap(), activeCounts)
+        }
         val snapshotsByDate = dayDocs.associate { it.date to it.trackerSnapshots }
-        val dayCreditByDate: Map<String, LifetimeAggregates> = dayDocs
-            .filter { it.aggregateCredit != null }
-            .associate { it.date to it.aggregateCredit!! }
-
-        // Build per-day records
+        val dayCreditByDate = dayDocs.mapNotNull { day -> day.aggregateCredit?.let { day.date to it } }.toMap()
+        val credits = mutableMapOf<String, LifetimeAggregates>()
+        val unknown = mutableSetOf<String>()
+        val baselineDates = mutableSetOf<String>()
+        fun add(date: String, credit: LifetimeAggregates?, isUnknown: Boolean, hasBaseline: Boolean) {
+            if (isUnknown) unknown.add(date)
+            if (hasBaseline || (credit?.baselineSaved ?: 0.0) != 0.0) baselineDates.add(date)
+            if (credit != null) credits[date] = RegistryMutations.applyCredit(credits[date] ?: LifetimeAggregates(), credit)
+        }
+        logs.forEach { log -> add(log.logDate, log.aggregateCredit,
+            log.aggregateCredit == null || log.economicStatus == "UNKNOWN", log.trackerSnapshots.values.any { it.baseline != null }) }
+        dayDocs.forEach { day ->
+            val snapshots = day.trackerSnapshots
+            val known = snapshots.isNotEmpty() && snapshots.values.all { !it.isFinanciallyTracked || it.unitPrice != null }
+            val counts = if (day.date == trackingDay && day.status != "closed" && activeCounts.isNotEmpty()) activeCounts else day.counts
+            val credit = if (known && day.status != "closed") computeDayCredit(counts, snapshots, defaultUnitPrice)
+                else day.aggregateCredit ?: if (known) computeDayCredit(counts, snapshots, defaultUnitPrice) else null
+            add(day.date, credit, credit == null, snapshots.values.any { it.baseline != null })
+        }
         val dayRecords = mutableMapOf<String, DayRecord>()
         merged.forEach { (date, counts) ->
-            val isToday = date == trackingDay
-            val dayCounts = if (isToday) mergeCounts(counts, activeCounts) else counts
-
-            val units = dayCounts.values.sumOf { max(0.0, it) }.toInt()
-
-            var spent = 0.0
-            var saved = 0.0
-            var baselineSaved = 0.0
-            var hasBaseline = false
-
-            dayCreditByDate[date]?.let { credit ->
-                spent = credit.wasted
-                saved = credit.saved
-                baselineSaved = credit.baselineSaved
-                hasBaseline = baselineSaved > 0
-            } ?: run {
-                snapshotsByDate[date]?.let { snapshots ->
-                    val credit = computeDayCredit(dayCounts, snapshots, defaultUnitPrice)
-                    spent = credit.wasted
-                    saved = credit.saved
-                    baselineSaved = credit.baselineSaved
-                    hasBaseline = baselineSaved > 0
-                }
-            }
-
-            dayRecords[date] = DayRecord(units, spent, saved, baselineSaved, hasBaseline)
+            val credit = credits[date] ?: LifetimeAggregates()
+            dayRecords[date] = DayRecord(counts.values.sumOf { max(0.0, it) }.toInt(), credit.wasted,
+                credit.saved, credit.baselineSaved, date in baselineDates, date in unknown || date !in credits)
         }
-
         // Group by calendar month (YYYY-MM)
         val monthsMap = mutableMapOf<String, MutableList<Pair<String, DayRecord>>>()
         dayRecords.forEach { (date, record) ->
@@ -936,7 +934,8 @@ object SmokingCalculator {
         val spent: Double,
         val saved: Double,
         val baselineSaved: Double,
-        val hasBaseline: Boolean
+        val hasBaseline: Boolean,
+        val unknownEconomics: Boolean = false
     )
 
     private fun buildMonthSummary(
@@ -968,6 +967,7 @@ object SmokingCalculator {
             baselineSaved = totalBaselineSaved,
             hasBaseline = hasBaseline,
             isCurrentMonth = isCurrentMonth,
+            unknownEconomics = days.any { it.second.unknownEconomics },
             isComplete = !isCurrentMonth
         )
     }

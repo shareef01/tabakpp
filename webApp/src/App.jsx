@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { AlertCircle, Loader2, Plus } from 'lucide-react';
 import { RegistryService } from './services/registryService';
+import { clearAppStorage, importWithRecovery } from './utils/appRecovery';
 import { auth } from './firebase';
 
 // --- CONSTANTS & UTILS ---
@@ -51,15 +52,8 @@ import { ManualEntryOverlay } from './components/modals/ManualEntryOverlay';
 import { UndoToast, UNDO_TOAST_MS } from './components/feedback/UndoToast';
 
 // --- LAZY LOADED SCREENS ---
-const lazyWithRetry = (componentImport) => lazy(async () => {
-  try {
-    return await componentImport();
-  } catch (error) {
-    console.error("[ARCH] Dynamic import failure, forcing refresh...", error);
-    window.location.reload();
-    return { default: () => null };
-  }
-});
+const lazyWithRetry = (componentImport) => lazy(() => importWithRecovery(componentImport,
+  typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'initial'));
 
 const AuthScreen = lazyWithRetry(() => import('./components/auth/AuthScreen').then(m => ({ default: m.AuthScreen })));
 const TrackerCard = lazyWithRetry(() => import('./components/dashboard/TrackerCard').then(m => ({ default: m.TrackerCard })));
@@ -109,7 +103,7 @@ class GlobalErrorBoundary extends React.Component {
           <div className="p-8 mb-8 bg-red-600/10 rounded-[32px] text-red-500 border border-red-600/20 shadow-2xl"><AlertCircle size={48} /></div>
           <h2 className="mb-4 text-3xl font-black uppercase tracking-tighter leading-none">Something went wrong</h2>
           <p className="max-w-md mb-10 text-sm font-bold leading-relaxed text-white/60">{this.state.error?.toString() || "Sync error."}</p>
-          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } localStorage.clear(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reset app</button>
+          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } clearAppStorage(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reset app</button>
         </div>
       );
     }

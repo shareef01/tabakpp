@@ -79,6 +79,19 @@ const mergeDayDocsIntoLogged = (logged, dayDocs) => {
   return out;
 };
 
+const projectLoggedCounts = (logs, dayDocs, trackingDay, activeCounts = {}) => {
+  const out = aggregateLoggedCounts(logs);
+  const hasActive = Object.keys(activeCounts).length > 0;
+  (dayDocs || []).forEach((day) => {
+    const counts = day.date === trackingDay && day.status !== 'closed' && hasActive ? activeCounts : day.counts;
+    out[day.date] = mergeCounts(out[day.date], counts || {});
+  });
+  if (hasActive && !(dayDocs || []).some((day) => day.date === trackingDay)) {
+    out[trackingDay] = mergeCounts(out[trackingDay], activeCounts);
+  }
+  return out;
+};
+
 /** `{ [date]: trackerSnapshots }` for every day-doc that has one. */
 const snapshotsByDate = (dayDocs) => {
   const out = {};
@@ -140,6 +153,7 @@ export const SmokingCalculator = {
   mergeCounts,
   aggregateLoggedCounts,
   mergeDayDocsIntoLogged,
+  projectLoggedCounts,
   snapshotsByDate,
   computeDayCredit,
   LIFE_MINUTES_PER_UNIT,
@@ -331,7 +345,7 @@ export const SmokingCalculator = {
       : all.filter((c) => c.isPrimaryTracked !== false);
     if (streakConfigs.length === 0 || !trackingDay) return 0;
 
-    const logged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs);
+    const logged = projectLoggedCounts(logs, dayDocs, trackingDay, activeCounts);
     const snapshots = snapshotsByDate(dayDocs);
     const loggedDates = Object.keys(logged).sort().reverse();
     const yesterday = shiftDate(trackingDay, -1);
@@ -344,9 +358,7 @@ export const SmokingCalculator = {
     let streak = 0;
     let cursor = trackingDay;
     for (let i = 0; i < 366; i++) {
-      const dayCounts = cursor === trackingDay
-        ? mergeCounts(logged[cursor], activeCounts || {})
-        : logged[cursor];
+      const dayCounts = logged[cursor];
       if (cursor !== trackingDay && !dayCounts) break;
       const snapshotsForDay = snapshots[cursor];
       const withinLimits = streakConfigs.every((c) => {
@@ -593,7 +605,8 @@ export const SmokingCalculator = {
     // mirroring how spentToday/budgetLeftToday already layer session-on-top
     // -of-lifetime.
     const sessionBaseline = SmokingCalculator.calculateBaselineSavings(sessionCounts, configs, userPrice);
-    const baselineSavedLifetime = (lifetimeAggregates?.baselineSaved || 0) + sessionBaseline.moneySaved;
+    const folded = (dayDocs || []).some((day) => day.date === trackingDay && day.foldedIntoLifetime);
+    const baselineSavedLifetime = (lifetimeAggregates?.baselineSaved || 0) + (folded ? 0 : sessionBaseline.moneySaved);
     const hasAnyBaseline = sessionBaseline.hasBaseline || (configs || []).some((c) => c.baseline != null);
 
     const sessionFin = SmokingCalculator.calculateDayFinancials(sessionCounts, configs, userPrice);
@@ -603,7 +616,7 @@ export const SmokingCalculator = {
       const archivedUnits = lifetimeAggregates != null
         ? (lifetimeAggregates.smokingUnits ?? 0)
         : null;
-      lifeLost = SmokingCalculator.calculateLifeLostMinutes(logs, configs, activeCounts, archivedUnits);
+      lifeLost = SmokingCalculator.calculateLifeLostMinutes(logs, configs, folded ? {} : activeCounts, archivedUnits);
       recovered = SmokingCalculator.calculateRecoveryMinutes(logs, configs, activeCounts, trackingDay);
     } catch { /* keep 0 */ }
 
@@ -657,57 +670,34 @@ export const SmokingCalculator = {
    * @returns {{ months: Array<{ month: string, label: string, units: number, trackedDays: number, avgUnitsPerTrackedDay: number, spent: number, saved: number, baselineSaved: number, hasBaseline: boolean, isCurrentMonth: boolean }>, currentMonthMtd: object }}
    */
   aggregateMonthlyData: (logs, dayDocs = [], trackingDay, activeCounts = {}, defaultUnitPrice = 0.5, monthsToInclude = 6) => {
-    const merged = SmokingCalculator.mergeDayDocsIntoLogged(
-      SmokingCalculator.aggregateLoggedCounts(logs), dayDocs
-    );
-
-    // Build per-day records: { date, units, spent, saved, baselineSaved, hasBaseline }
-    // For dayDocs with trackerSnapshots, use computeDayCredit for historical economics.
-    // For legacy logs without dayDocs, fall back to aggregateLoggedCounts data.
-    const snapshotsByDate = {};
-    (dayDocs || []).forEach((d) => {
-      if (d.date && d.trackerSnapshots) snapshotsByDate[d.date] = d.trackerSnapshots;
+    const merged = projectLoggedCounts(logs, dayDocs, trackingDay, activeCounts);
+    const economics = {};
+    const add = (date, credit, unknown = false, baseline = false) => {
+      const item = economics[date] ||= { spent: 0, saved: 0, baselineSaved: 0, hasBaseline: false, unknownEconomics: false };
+      item.spent += credit?.wasted ?? 0;
+      item.saved += credit?.saved ?? 0;
+      item.baselineSaved += credit?.baselineSaved ?? 0;
+      item.hasBaseline ||= baseline || (credit?.baselineSaved ?? 0) !== 0;
+      item.unknownEconomics ||= unknown;
+    };
+    (logs || []).forEach((log) => add(log.logDate, log.aggregateCredit,
+      !log.aggregateCredit || log.economicStatus === 'UNKNOWN',
+      Object.values(log.trackerSnapshots || {}).some((snap) => snap.baseline != null)));
+    (dayDocs || []).forEach((day) => {
+      const snapshots = day.trackerSnapshots || {};
+      const knownSnapshots = Object.keys(snapshots).length > 0 && Object.values(snapshots)
+        .every((snap) => snap.isFinanciallyTracked === false || snap.unitPrice != null);
+      const counts = day.date === trackingDay && day.status !== 'closed' && Object.keys(activeCounts).length ? activeCounts : day.counts;
+      const credit = knownSnapshots && day.status !== 'closed'
+        ? SmokingCalculator.computeDayCredit(counts, snapshots, defaultUnitPrice)
+        : day.aggregateCredit || (knownSnapshots ? SmokingCalculator.computeDayCredit(counts, snapshots, defaultUnitPrice) : null);
+      add(day.date, credit, !credit, Object.values(snapshots).some((snap) => snap.baseline != null));
     });
-
-    const dayCreditByDate = {};
-    (dayDocs || []).forEach((d) => {
-      if (d.date && d.aggregateCredit) {
-        dayCreditByDate[d.date] = d.aggregateCredit;
-      }
-    });
-
     const dayRecords = {};
     Object.entries(merged).forEach(([date, counts]) => {
-      let isToday = date === trackingDay;
-      let dayCounts = counts || {};
-
-      // If today is still open, merge active counts
-      if (isToday) {
-        dayCounts = SmokingCalculator.mergeCounts(dayCounts, activeCounts || {});
-      }
-
-      const units = Object.values(dayCounts).reduce((sum, v) => sum + Math.max(0, v || 0), 0);
-
-      // Compute financials: prefer stamped dayDoc.aggregateCredit, then computeDayCredit from snapshots,
-      // then fall back to zero (legacy logs without economics).
-      let spent = 0, saved = 0, baselineSaved = 0, hasBaseline = false;
-      if (dayCreditByDate[date]) {
-        const credit = dayCreditByDate[date];
-        spent = credit.wasted || 0;
-        saved = credit.saved || 0;
-        baselineSaved = credit.baselineSaved || 0;
-        hasBaseline = baselineSaved > 0;
-      } else if (snapshotsByDate[date]) {
-        const credit = SmokingCalculator.computeDayCredit(dayCounts, snapshotsByDate[date], defaultUnitPrice);
-        spent = credit.wasted || 0;
-        saved = credit.saved || 0;
-        baselineSaved = credit.baselineSaved || 0;
-        hasBaseline = baselineSaved > 0;
-      }
-
-      dayRecords[date] = { units, spent, saved, baselineSaved, hasBaseline };
+      const units = Object.values(counts || {}).reduce((sum, value) => sum + Math.max(0, value || 0), 0);
+      dayRecords[date] = { units, ...(economics[date] || { spent: 0, saved: 0, baselineSaved: 0, hasBaseline: false, unknownEconomics: true }) };
     });
-
     // Group by calendar month (YYYY-MM)
     const monthsMap = {};
     Object.entries(dayRecords).forEach(([date, record]) => {
@@ -745,6 +735,7 @@ export const SmokingCalculator = {
         saved: totalSaved,
         baselineSaved: totalBaselineSaved,
         hasBaseline,
+        unknownEconomics: monthData.days.some((d) => d.unknownEconomics),
         isCurrentMonth,
         // Only complete months have MTD data
         isComplete: !isCurrentMonth,
