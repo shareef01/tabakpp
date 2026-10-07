@@ -18,7 +18,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 // registryService imports `db` from '../firebase', which needs VITE_* env at
 // import time. Swap it for the emulator-backed, authenticated instance. The
@@ -101,6 +101,21 @@ afterAll(async () => {
 });
 
 describe('RegistryService against the real SDK and rules', () => {
+  it('supports eight full trackers through counter, close, historical edit and manual entry', async () => {
+    await seed();
+    await updateDoc(doc(holder.db, 'users', UID), { unitPrice: 0.8 });
+    await updateDoc(doc(holder.db, 'users', UID, 'configs', 'cig'), { pricePerUnit: null, baseline: 20 });
+    for (let i = 1; i < 8; i++) await RegistryService.addProtocol(UID, { ...cigConfig, name: `Tracker ${i}`, order: i, pricePerUnit: null, baseline: 20 });
+    await expect(RegistryService.addProtocol(UID, { ...cigConfig, name: 'Ninth' })).rejects.toThrow('TRACKER_LIMIT');
+    const ids = (await getDocs(collection(holder.db, 'users', UID, 'configs'))).docs.map((d) => d.id);
+    for (const id of ids) await RegistryService.adjustCounter(UID, id, 1, '2026-08-01', 0.8);
+    expect(Object.keys((await dayDoc('2026-08-01')).trackerSnapshots)).toHaveLength(8);
+    await RegistryService.closeDay(UID, '2026-08-01');
+    await RegistryService.updateHistoricalDay(UID, '2026-08-01', Object.fromEntries(ids.map((id) => [id, 2])));
+    expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(12.8);
+    await RegistryService.createManualEntry(UID, '2026-07-01', Object.fromEntries(ids.map((id) => [id, 1])), 0.8, '2026-08-02');
+    expect((await logs())[0].trackerSnapshots).toBeDefined();
+  });
   it('adjustCounter creates/increments the dated day doc and clamps at zero', async () => {
     await seed();
     await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
@@ -197,7 +212,7 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(all[0].logDate).toBe('2026-07-28');
     expect(all[0].counts).toEqual({ cig: 3 });
     expect(all[0].isManual).toBe(true);
-    expect(all[0].aggregateCredit).toEqual({ saved: 7, wasted: 3, smokingUnits: 3 });
+    expect(all[0].aggregateCredit).toEqual({ saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 });
     expect((await profile()).lifetimeAggregates).toEqual({ saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 });
   });
 
@@ -218,7 +233,7 @@ describe('RegistryService against the real SDK and rules', () => {
 
     const [updated] = await logs();
     expect(updated.counts).toEqual({ cig: 8 });
-    expect(updated.aggregateCredit).toEqual({ saved: 2, wasted: 8, smokingUnits: 8 });
+    expect(updated.aggregateCredit).toEqual({ saved: 2, wasted: 8, smokingUnits: 8, baselineSaved: 0 });
   });
 
   it('updateHistoricalLog preserves counts for deleted trackers', async () => {
@@ -228,8 +243,9 @@ describe('RegistryService against the real SDK and rules', () => {
         id: '2026-07-28_MANUAL',
         logDate: '2026-07-28',
         counts: { cig: 3, retired: 5 },
+        trackerSnapshots: { cig: SmokingCalculator.buildTrackerSnapshot(cigConfig), retired: { target: 0, unitPrice: 0, type: 'SIMPLE', isFinanciallyTracked: false } },
         origin: 'MANUAL_ENTRY',
-        aggregateCredit: { saved: 7, wasted: 3, smokingUnits: 3 },
+        aggregateCredit: { saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 },
       });
       await setDoc(
         doc(context.firestore(), 'users', UID),
@@ -423,5 +439,103 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(failed).toHaveLength(0);
     const day = await dayDoc(date);
     expect(day.counts.cig).toBe(15); // 5 + 10
+  });
+});
+
+describe('audit release blocker regressions', () => {
+  it('freezes inherited manual prices and baseline credit through config changes', async () => {
+    await seed();
+    await updateDoc(doc(holder.db, 'users', UID), { unitPrice: 0.8 });
+    await updateDoc(doc(holder.db, 'users', UID, 'configs', 'cig'), { pricePerUnit: null, baseline: 20 });
+    await RegistryService.createManualEntry(UID, '2026-07-01', { cig: 2 });
+    const [entry] = await logs();
+    expect(entry.trackerSnapshots.cig.unitPrice).toBe(0.8);
+    await updateDoc(doc(holder.db, 'users', UID), { unitPrice: 4 });
+    await updateDoc(doc(holder.db, 'users', UID, 'configs', 'cig'), { limit: 1, baseline: 1, pricePerUnit: 5 });
+    await RegistryService.updateHistoricalLog(UID, entry.id, { cig: 3 });
+    const [edited] = await logs();
+    expect(edited.aggregateCredit.wasted).toBeCloseTo(2.4);
+    expect(edited.aggregateCredit.saved).toBeCloseTo(5.6);
+    expect(edited.aggregateCredit.baselineSaved).toBeCloseTo(13.6);
+    expect((await profile()).lifetimeAggregates.baselineSaved).toBeCloseTo(13.6);
+  });
+
+  it('recovers a closed-target claim once across concurrent clients', async () => {
+    await seed();
+    const date = '2026-07-01';
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users', UID, 'days', date), {
+        date, counts: { cig: 2 }, trackerSnapshots: { cig: SmokingCalculator.buildTrackerSnapshot(cigConfig) },
+        status: 'closed', foldedIntoLifetime: true, aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 },
+      });
+      await updateDoc(doc(context.firestore(), 'users', UID), {
+        migratingLegacyCounts: { cig: 3 }, migratingLegacyDate: date,
+        lifetimeAggregates: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 },
+      });
+    });
+    await Promise.all([RegistryService.migrateLegacyActiveCounts(UID), RegistryService.migrateLegacyActiveCounts(UID)]);
+    expect((await dayDoc(date)).counts).toEqual({ cig: 2 });
+    const recovered = await logs();
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ origin: 'LEGACY_RECOVERY', economicStatus: 'UNKNOWN', counts: { cig: 3 } });
+    expect((await profile()).lifetimeAggregates).toEqual({ saved: 8, wasted: 2, smokingUnits: 5, baselineSaved: 0 });
+    await RegistryService.migrateLegacyActiveCounts(UID);
+    expect(await logs()).toHaveLength(1);
+    expect((await profile()).migratingLegacyCounts).toBeUndefined();
+  });
+
+  it('rejects old-client claim cleanup and day folding while the resumable fence is held', async () => {
+    await seed();
+    await updateDoc(doc(holder.db, 'users', UID), {
+      migratingLegacyCounts: { cig: 1 }, migratingLegacyDate: '2026-07-01',
+      migratingLegacyId: 'claim1', migratingLegacyVersion: 3, migratingLegacyUnitPrice: 0.5,
+    });
+    const { deleteField } = await import('firebase/firestore');
+    await expect(updateDoc(doc(holder.db, 'users', UID), {
+      migratingLegacyCounts: deleteField(), migratingLegacyDate: deleteField(),
+    })).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(setDoc(doc(holder.db, 'users', UID, 'days', '2026-07-01'), {
+      date: '2026-07-01', counts: { cig: 1 }, legacyMigrationApplied: true,
+    })).rejects.toMatchObject({ code: 'permission-denied' });
+    await RegistryService.migrateLegacyActiveCounts(UID);
+    expect((await dayDoc('2026-07-01')).counts).toEqual({ cig: 1 });
+    expect((await profile()).migratingLegacyVersion).toBeUndefined();
+  });
+
+  it('pages tied log dates without duplicates even after deleting the cursor', async () => {
+    await seed();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await Promise.all(Array.from({ length: 7 }, (_, i) => setDoc(doc(context.firestore(), 'users', UID, 'logs', `log${i}`), {
+        logDate: '2026-07-01', counts: { cig: 1 },
+      })));
+    });
+    const first = await RegistryService.fetchOlderLogs(UID, { pageSize: 3 });
+    await deleteDoc(doc(holder.db, 'users', UID, 'logs', first.nextCursorDocId));
+    const second = await RegistryService.fetchOlderLogs(UID, {
+      pageSize: 3, cursorLogDate: first.nextCursor, cursorLogId: first.nextCursorDocId,
+    });
+    const third = await RegistryService.fetchOlderLogs(UID, {
+      pageSize: 3, cursorLogDate: second.nextCursor, cursorLogId: second.nextCursorDocId,
+    });
+    expect(new Set([...first.items, ...second.items, ...third.items].map((l) => l.id)).size).toBe(7);
+    expect(third.items).toHaveLength(1);
+  });
+
+  it('exports dated history beyond the 400-day live window', async () => {
+    await seed();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const { writeBatch } = await import('firebase/firestore');
+      const db = context.firestore();
+      const batch = writeBatch(db);
+      for (let i = 0; i < 405; i++) {
+        const date = new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10);
+        batch.set(doc(db, 'users', UID, 'days', date), { date, counts: {}, status: 'closed' });
+      }
+      await batch.commit();
+    });
+    const exported = await RegistryService.readCompleteExportSnapshot(UID);
+    expect(exported.days).toHaveLength(405);
+    const page = await RegistryService.fetchOlderDays(UID, { cursorDate: exported.days[399].date });
+    expect(page.items).toHaveLength(5);
   });
 });

@@ -74,6 +74,7 @@ const contributionFrom = (counts, configs, price) => {
     saved: fin.saved,
     wasted: fin.wasted,
     smokingUnits: SmokingCalculator.sumSmokingUnits(counts || {}, configs),
+    baselineSaved: 0,
   };
 };
 
@@ -92,22 +93,87 @@ const resolveContribution = (storedCredit, counts, configs, price) => {
       saved: storedCredit.saved,
       wasted: storedCredit.wasted,
       smokingUnits: storedCredit.smokingUnits,
+      baselineSaved: storedCredit.baselineSaved ?? 0,
     };
   }
   return contributionFrom(counts, configs, price);
 };
 
 /** Preserve counts for trackers deleted since the log was written (Kotlin parity). */
-const mergeHistoricalEditCounts = (incoming, previous, liveConfigIds) => {
+const mergeHistoricalEditCounts = (incoming, previous, liveConfigIds, historicalIds = []) => {
   const live = new Set(liveConfigIds);
+  const editable = new Set(historicalIds);
   const merged = { ...incoming };
   Object.entries(previous || {}).forEach(([id, value]) => {
-    if (!live.has(id)) merged[id] = value;
+    if (!live.has(id) && (!editable.has(id) || !Object.hasOwn(incoming, id))) merged[id] = value;
   });
   return merged;
 };
 
+const newClaimId = () => globalThis.crypto?.randomUUID?.() ?? (Date.now().toString(36) + '_' + Math.random().toString(36).slice(2));
+
 const emptyAggregates = () => ({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
+
+const countsEqual = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)])]
+  .every((id) => (a[id] ?? 0) === (b[id] ?? 0));
+
+// Old null-price snapshots cannot safely be reconstructed from today's price.
+// No-op edits preserve their credit; changed edits must explicitly fail.
+const requireHistoricalPrices = (counts, snapshots) => {
+  if (Object.keys(snapshots).length === 0 || Object.keys(counts).some((id) => !snapshots[id])
+    || Object.values(snapshots).some((s) => s.isFinanciallyTracked !== false && s.unitPrice == null)) {
+    throw new Error('HISTORICAL_PRICE_UNAVAILABLE');
+  }
+};
+
+// A closed day is never reopened or restamped. Preserve stranded legacy
+// consumption as independently visible records with explicitly unknown money.
+// A separate permanent marker survives a user deleting the recovered row
+// before claim cleanup; each small transaction is independently resumable.
+const applyLegacyClaim = async (uid, claim, configById) => {
+  const userRef = doc(db, 'users', uid);
+  const dayRef = doc(db, 'users', uid, 'days', claim.date);
+  const ids = Object.keys(claim.counts).sort();
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    const marker = doc(db, 'users', uid, 'meta', `legacy_${claim.date}_${claim.id}_${i}`);
+    const log = doc(db, 'users', uid, 'logs', `${claim.date}_LEGACY_${claim.id}_${i}`);
+    await runTransaction(db, async (tx) => {
+      if ((await tx.get(marker)).exists()) return;
+      const daySnap = await tx.get(dayRef);
+      const day = daySnap.exists() ? daySnap.data() : null;
+      const previousSnapshots = day?.trackerSnapshots || {};
+      if (day?.status !== 'closed'
+        && (day?.counts?.[id] || 0) + claim.counts[id] <= 10000
+        && (Object.hasOwn(previousSnapshots, id) || Object.keys(previousSnapshots).length < 8)) {
+        const counts = { ...(day?.counts || {}), [id]: (day?.counts?.[id] || 0) + claim.counts[id] };
+        const trackerSnapshots = { ...previousSnapshots, [id]: previousSnapshots[id] || SmokingCalculator.buildTrackerSnapshot(
+          configById[id] || { name: 'Removed tracker', type: 'SIMPLE', isFinanciallyTracked: false }, claim.price) };
+        const payload = { date: claim.date, counts, trackerSnapshots, updatedTrackerId: id,
+          aggregateCredit: SmokingCalculator.computeDayCredit(counts, trackerSnapshots),
+          status: 'open', updatedAt: serverTimestamp() };
+        if (day) tx.update(dayRef, payload);
+        else tx.set(dayRef, { ...payload, createdAt: serverTimestamp() });
+        tx.set(marker, { date: claim.date, applied: true });
+        return;
+      }
+      const existing = await tx.get(log);
+      const user = await tx.get(userRef);
+      if (existing.exists()) throw new Error('LEGACY_RECOVERY_CONFLICT');
+      const counts = { [id]: claim.counts[id] };
+      const trackerSnapshots = { [id]: SmokingCalculator.buildTrackerSnapshot({
+        ...(configById[id] || { name: 'Removed tracker', type: 'SIMPLE' }),
+        limit: 0, baseline: null, pricePerUnit: 0, isFinanciallyTracked: false,
+      }, 0) };
+      const credit = SmokingCalculator.computeDayCredit(counts, trackerSnapshots);
+      tx.set(log, { logDate: claim.date, counts, trackerSnapshots, aggregateCredit: credit,
+        origin: 'LEGACY_RECOVERY', economicStatus: 'UNKNOWN', clientTimestamp: serverTimestamp() });
+      tx.set(marker, { date: claim.date, applied: true });
+      tx.update(userRef, { 'lifetimeAggregates.smokingUnits':
+        (user.data()?.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits });
+    });
+  }
+};
 
 /**
  * RegistryService (Model Layer)
@@ -134,6 +200,14 @@ const emptyAggregates = () => ({ saved: 0, wasted: 0, smokingUnits: 0, baselineS
  * `users/{uid}/meta/profile` — see `updateAvatar`.
  */
 export const RegistryService = {
+  getHistoricalDay: async (uid, date) => {
+    const snap = await getDoc(doc(db, 'users', uid, 'days', date));
+    return snap.exists() ? { ...snap.data(), date } : null;
+  },
+  getHistoricalLog: async (uid, id) => {
+    const snap = await getDoc(doc(db, 'users', uid, 'logs', id));
+    return snap.exists() ? { ...snap.data(), id } : null;
+  },
 
   // --- CONFIGURATIONS ---
 
@@ -149,6 +223,7 @@ export const RegistryService = {
   },
 
   addProtocol: async (uid, data) => {
+    if ((await getConfigsOnce(uid)).length >= 8) throw new Error('TRACKER_LIMIT');
     const ref = doc(collection(db, 'users', uid, 'configs'));
     return setDoc(ref, {
       ...sanitizeConfigPayload(data),
@@ -316,129 +391,65 @@ export const RegistryService = {
     }
   },
 
-  /**
-   * One-shot, idempotent migration of legacy `activeCounts` into the dated
-   * daily-document model.
-   *
-   * Whatever is sitting in `activeCounts` at the moment this runs is folded
-   * into `days/{date}`, where `date` is computed with the EXACT SAME
-   * `getTrackingDate(now, dayStartHour)` rule the old `endDay()` used — i.e.
-   * the date the old app would have archived those counts under had the user
-   * pressed "End day" at this instant. This is a deterministic mapping, not a
-   * guess: it never invents a date, and it never discards counts.
-   *
-   * Runs as TWO single-document transactions rather than one atomic
-   * users+days commit. A combined commit was tried first and measurably hit
-   * Firestore's hard per-commit rules-evaluation ceiling ("maximum of 1000
-   * expressions") in the emulator once `days` validation was added — that is
-   * a platform limit, not a bug in the math, and splitting the write is the
-   * documented fix (see firestore.rules `validDayShape`'s comment). Each
-   * phase is independently idempotent and safe to resume after a crash
-   * between them, from any device:
-   *   Phase 1 (single doc: users/{uid}) atomically CLAIMS `activeCounts` —
-   *     stamps it onto `migratingLegacyCounts` + `migratingLegacyDate`,
-   *     clears `activeCounts`, bumps `schemaVersion`. Guarded so it can only
-   *     ever claim once.
-   *   Phase 2 (single doc: users/{uid}/days/{date}) folds the claim into
-   *     that day, marks the day `legacyMigrationApplied`, and (separately)
-   *     clears the claim fields from the profile. A crash after phase 2's
-   *     day-write but before the profile cleanup just leaves a harmless,
-   *     already-applied claim that the next run detects and clears without
-   *     re-folding (`legacyMigrationApplied` guards against double credit).
-   */
+  /** Claim legacy counts under protocol 3, apply permanent per-tracker markers,
+   * recover closed/overflow targets with unknown money, then atomically release
+   * the profile fence and stamp completion. Each transaction may safely retry. */
   migrateLegacyActiveCounts: async (uid) => {
     if (!uid) return;
     const userRef = doc(db, 'users', uid);
-
+    const clearClaim = { migratingLegacyCounts: deleteField(), migratingLegacyDate: deleteField(),
+      migratingLegacyId: deleteField(), migratingLegacyVersion: deleteField(), migratingLegacyUnitPrice: deleteField() };
     let claim = null;
-    await runTransaction(db, async (transaction) => {
-      const snap = await transaction.get(userRef);
+    await runTransaction(db, async (tx) => {
+      claim = null; // A retried callback must not retain a superseded claim.
+      const snap = await tx.get(userRef);
       if (!snap.exists()) return;
       const profile = snap.data();
-
       const pending = normalizeCounts(profile.migratingLegacyCounts || {});
       if (profile.migratingLegacyDate && Object.values(pending).some((v) => v > 0)) {
-        claim = { counts: pending, date: profile.migratingLegacyDate };
-        return; // resume an interrupted phase 2
+        // An old atomic migration may have committed before claim cleanup.
+        if (!profile.migratingLegacyId) {
+          const day = await tx.get(doc(db, 'users', uid, 'days', profile.migratingLegacyDate));
+          if (day.exists() && day.data().legacyMigrationApplied) {
+            tx.update(userRef, clearClaim);
+            return;
+          }
+        }
+        const id = profile.migratingLegacyId || newClaimId();
+        const price = profile.migratingLegacyUnitPrice ?? profile.unitPrice ?? 0.5;
+        tx.update(userRef, { migratingLegacyId: id, migratingLegacyVersion: 3, migratingLegacyUnitPrice: price });
+        claim = { counts: pending, date: profile.migratingLegacyDate, id, price };
+        return;
       }
-      if ((profile.schemaVersion || 0) >= CURRENT_SCHEMA_VERSION) return; // fully migrated already
-
       const legacy = normalizeCounts(profile.activeCounts || {});
       if (!Object.values(legacy).some((v) => v > 0)) {
-        transaction.update(userRef, { schemaVersion: CURRENT_SCHEMA_VERSION, activeCounts: deleteField() });
+        if ((profile.schemaVersion || 0) < CURRENT_SCHEMA_VERSION || profile.migratingLegacyVersion) {
+          tx.update(userRef, { ...clearClaim, schemaVersion: CURRENT_SCHEMA_VERSION, activeCounts: deleteField() });
+        }
         return;
       }
-
       const date = SmokingCalculator.getTrackingDate(new Date(), profile.dayStartHour ?? 6);
-      transaction.update(userRef, {
-        schemaVersion: CURRENT_SCHEMA_VERSION,
-        activeCounts: deleteField(),
-        migratingLegacyCounts: legacy,
-        migratingLegacyDate: date,
-      });
-      claim = { counts: legacy, date };
+      const id = newClaimId();
+      const price = profile.unitPrice ?? 0.5;
+      tx.update(userRef, { schemaVersion: CURRENT_SCHEMA_VERSION, activeCounts: deleteField(),
+        migratingLegacyCounts: legacy, migratingLegacyDate: date, migratingLegacyId: id,
+        migratingLegacyVersion: 3, migratingLegacyUnitPrice: price });
+      claim = { counts: legacy, date, id, price };
     });
-
     if (!claim) return;
-
-    // Read non-transactionally: no concurrent-modification stakes worth a
-    // transactional config read here (see the cost note above) — worst case
-    // on a config edited in the gap before the commit below, one migrated
-    // tracker's snapshot is a moment stale, self-corrected on its next tap.
     const configById = Object.fromEntries((await getConfigsOnce(uid)).map((c) => [c.id, c]));
-    const dayRef = doc(db, 'users', uid, 'days', claim.date);
-
-    let claimResolved = false;
-    await runTransaction(db, async (transaction) => {
-      const daySnap = await transaction.get(dayRef);
-      const existing = daySnap.exists() ? daySnap.data() : null;
-      if (existing?.legacyMigrationApplied) {
-        claimResolved = true; // already folded by a prior run — safe to clean up
-        return;
-      }
-
-      if (existing?.status === 'closed') {
-        // Exceptionally rare: closed by a newer client in the window between
-        // the claim and this commit. The claim is already safely parked on
-        // the profile (migratingLegacyCounts/-Date) — leave it there rather
-        // than guessing a different date or discarding it. claimResolved
-        // stays false, so the cleanup below is correctly skipped.
-        return;
-      }
-
-      const mergedCounts = SmokingCalculator.mergeCounts(existing?.counts, claim.counts);
-      const trackerSnapshots = { ...(existing?.trackerSnapshots || {}) };
-      Object.keys(claim.counts).forEach((id) => {
-        if (configById[id]) trackerSnapshots[id] = SmokingCalculator.buildTrackerSnapshot(configById[id]);
-      });
-      const aggregateCredit = SmokingCalculator.computeDayCredit(mergedCounts, trackerSnapshots, 0.5);
-
-      const payload = {
-        date: claim.date,
-        counts: mergedCounts,
-        trackerSnapshots,
-        aggregateCredit,
-        status: 'open',
-        legacyMigrationApplied: true,
-        updatedAt: serverTimestamp(),
-      };
-      if (existing) transaction.update(dayRef, payload);
-      else transaction.set(dayRef, { ...payload, createdAt: serverTimestamp() });
-      claimResolved = true;
+    await applyLegacyClaim(uid, claim, configById);
+    // Clear the fence and stamp completion atomically, so an old in-flight
+    // transaction must retry and observe completion rather than re-add counts.
+    await runTransaction(db, async (tx) => {
+      const user = await tx.get(userRef);
+      const dayRef = doc(db, 'users', uid, 'days', claim.date);
+      const day = await tx.get(dayRef);
+      if (user.data()?.migratingLegacyId !== claim.id) return;
+      tx.update(userRef, clearClaim);
+      if (day.exists() && day.data().status !== 'closed') tx.update(dayRef, { legacyMigrationApplied: true });
     });
-
-    if (!claimResolved) return; // day was closed underneath us — claim stays parked for a future run
-
-    // Cleanup (separate single-document write): only reached once the day
-    // fold above is either freshly applied or was already applied by a prior
-    // run. A crash between the two leaves a harmless, idempotently-resumable
-    // claim — the next call re-detects it via migratingLegacyDate.
-    await updateDoc(userRef, {
-      migratingLegacyCounts: deleteField(),
-      migratingLegacyDate: deleteField(),
-    }).catch(() => { /* best-effort — next run retries the cleanup */ });
   },
-
   /**
    * One-shot, best-effort migration of the legacy root-level `avatar` field
    * into `users/{uid}/meta/profile` (item 12 — decouples large, rarely-
@@ -540,12 +551,14 @@ export const RegistryService = {
       const daySnap = await transaction.get(dayRef);
       const existing = daySnap.exists() ? daySnap.data() : null;
       if (existing?.status === 'closed') throw new Error('DAY_CLOSED');
+      if (!Object.hasOwn(existing?.trackerSnapshots || {}, counterId)
+        && Object.keys(existing?.trackerSnapshots || {}).length >= 8) throw new Error('TRACKER_LIMIT');
 
       const counts = { ...(existing?.counts || {}) };
       counts[counterId] = Math.max(0, (counts[counterId] || 0) + delta);
       const trackerSnapshots = {
         ...(existing?.trackerSnapshots || {}),
-        [counterId]: SmokingCalculator.buildTrackerSnapshot(config),
+        [counterId]: SmokingCalculator.buildTrackerSnapshot(config, defaultUnitPrice),
       };
       const aggregateCredit = SmokingCalculator.computeDayCredit(counts, trackerSnapshots, defaultUnitPrice);
 
@@ -556,6 +569,7 @@ export const RegistryService = {
         aggregateCredit,
         status: 'open',
         updatedAt: serverTimestamp(),
+        updatedTrackerId: counterId,
       };
       if (existing) transaction.update(dayRef, payload);
       else transaction.set(dayRef, { ...payload, createdAt: serverTimestamp() });
@@ -651,6 +665,8 @@ export const RegistryService = {
       if (!daySnap.exists()) throw new Error('DAY_NOT_FOUND');
       const day = daySnap.data();
       const mergedCounts = { ...(day.counts || {}), ...normalized };
+      if (countsEqual(mergedCounts, day.counts || {})) return;
+      requireHistoricalPrices(mergedCounts, day.trackerSnapshots || {});
       const newCredit = SmokingCalculator.computeDayCredit(mergedCounts, day.trackerSnapshots || {});
 
       if (day.foldedIntoLifetime) {
@@ -693,11 +709,14 @@ export const RegistryService = {
    */
   fetchOlderLogs: async (uid, { cursorLogDate, cursorLogId, pageSize = 200 } = {}) => {
     if (!uid) return { items: [], hasMore: false };
-    let q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), limit(pageSize));
-    if (cursorLogId) {
+    const ref = collection(db, 'users', uid, 'logs');
+    let q = query(ref, orderBy('logDate', 'desc'), orderBy('__name__', 'desc'), limit(pageSize));
+    if (cursorLogId && cursorLogDate) {
+      q = query(q, startAfter(cursorLogDate, cursorLogId));
+    } else if (cursorLogId) {
       const cursorSnap = await getDoc(doc(db, 'users', uid, 'logs', cursorLogId));
       if (cursorSnap.exists()) {
-        q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), startAfter(cursorSnap), limit(pageSize));
+        q = query(q, startAfter(cursorSnap));
       }
     } else if (cursorLogDate) {
       const cursorDocs = await getDocs(
@@ -716,6 +735,15 @@ export const RegistryService = {
       nextCursor: lastItem ? lastItem.logDate : null,
       nextCursorDocId: lastItem ? lastItem.id : null,
     };
+  },
+
+  fetchOlderDays: async (uid, { cursorDate, pageSize = 200 } = {}) => {
+    if (!uid) return { items: [], hasMore: false, nextCursor: null };
+    let q = query(collection(db, 'users', uid, 'days'), orderBy('date', 'desc'), limit(pageSize));
+    if (cursorDate) q = query(q, startAfter(cursorDate));
+    const snap = await getDocs(q);
+    const items = snap.docs.map((d) => ({ ...d.data(), date: d.id }));
+    return { items, hasMore: items.length === pageSize, nextCursor: items.at(-1)?.date ?? null };
   },
 
   /**
@@ -742,15 +770,20 @@ export const RegistryService = {
       const price = profile.unitPrice ?? unitPrice;
       const oldLog = logSnap.data();
       const oldCounts = oldLog.counts || {};
-      const mergedCounts = mergeHistoricalEditCounts(normalized, oldCounts, configIds);
-      const oldCredit = resolveContribution(oldLog.aggregateCredit, oldCounts, configs, price);
-      const newCredit = contributionFrom(mergedCounts, configs, price);
+      const historicalIds = Object.keys(oldLog.trackerSnapshots || {});
+      const mergedCounts = mergeHistoricalEditCounts(normalized, oldCounts, configIds, historicalIds);
+      if (countsEqual(mergedCounts, oldCounts)) return;
+      requireHistoricalPrices(mergedCounts, oldLog.trackerSnapshots || {});
+      const oldCredit = resolveContribution(oldLog.aggregateCredit
+        || SmokingCalculator.computeDayCredit(oldCounts, oldLog.trackerSnapshots), oldCounts, configs, price);
+      const newCredit = SmokingCalculator.computeDayCredit(mergedCounts, oldLog.trackerSnapshots);
 
       transaction.update(logRef, { counts: mergedCounts, aggregateCredit: newCredit });
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - oldCredit.saved + newCredit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - oldCredit.wasted + newCredit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldCredit.smokingUnits + newCredit.smokingUnits
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldCredit.smokingUnits + newCredit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0)
       });
     });
   },
@@ -764,6 +797,7 @@ export const RegistryService = {
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const configIds = await listConfigIds(uid);
+
 
     return runTransaction(db, async (transaction) => {
       const logSnap = await transaction.get(logRef);
@@ -781,7 +815,8 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - credit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - credit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - credit.smokingUnits
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - credit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) - (credit.baselineSaved || 0)
       });
     });
   },
@@ -814,7 +849,8 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + credit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + credit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) + (credit.baselineSaved || 0)
       });
     });
   },
@@ -848,6 +884,10 @@ export const RegistryService = {
     const logId = `${date}_M${now}_${entropy}`;
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const configIds = await listConfigIds(uid);
+    if (configIds.length > 8) throw new Error('TRACKER_LIMIT');
+    if (Object.entries(normalized).some(([id, value]) => value > 0 && !configIds.includes(id))) {
+      throw new Error('INVALID_TRACKER');
+    }
 
     return runTransaction(db, async (transaction) => {
       const userSnap = await transaction.get(userRef);
@@ -856,7 +896,9 @@ export const RegistryService = {
 
       const profile = userSnap.data();
       const price = profile.unitPrice ?? unitPrice;
-      const credit = contributionFrom(normalized, configs, price);
+      const trackerSnapshots = Object.fromEntries(configs
+        .map((c) => [c.id, SmokingCalculator.buildTrackerSnapshot(c, price)]));
+      const credit = SmokingCalculator.computeDayCredit(normalized, trackerSnapshots);
 
       transaction.set(logRef, {
         id: logId,
@@ -865,12 +907,14 @@ export const RegistryService = {
         isManual: true,
         origin: 'MANUAL_ENTRY',
         aggregateCredit: credit,
+        trackerSnapshots,
         clientTimestamp: serverTimestamp()
       });
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + credit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + credit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) + (credit.baselineSaved || 0)
       });
     });
   },
@@ -1015,7 +1059,7 @@ async function getAllDays(uid, pageSize = 400) {
   while (true) {
     let base = query(
       collection(db, 'users', uid, 'days'),
-      orderBy('dayDate', 'desc'),
+      orderBy('date', 'desc'),
       limit(pageSize)
     );
     if (lastDoc) base = query(base, startAfter(lastDoc));
