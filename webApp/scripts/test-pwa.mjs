@@ -100,6 +100,9 @@ async function pageFor(context) {
     if (event.type === 'Document') evidence.documents.push({ requestId: event.requestId, url: event.response.url, worker: event.response.fromServiceWorker, status: event.response.status });
   });
   await session.send('ServiceWorker.enable');
+  session.on('ServiceWorker.workerVersionUpdated', event => {
+    evidence.workerVersions = event.versions;
+  });
   session.on('ServiceWorker.workerErrorReported', event => evidence.workerErrors.push(event.errorMessage));
   sessions.set(page, session);
   return { page, session };
@@ -195,10 +198,29 @@ async function run() {
     assert.deepEqual(evidence.consoleErrors.filter(error => error !== fixtureDiagnostic), [], 'no fatal browser errors');
     assert.deepEqual(evidence.warnings, []);
     console.log(`PWA regression passed: ${evidence.scenarios.length} scenarios; ${evidence.browser}`);
+  } catch (error) {
+    evidence.failureState = await Promise.all((await browser.pages()).map(page => page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration();
+      const cacheContents = {};
+      for (const name of await caches.keys()) cacheContents[name] = (await (await caches.open(name)).keys()).map(request => request.url);
+      return {
+        url: location.href, build: localStorage.getItem('tabak_build_id'),
+        controller: navigator.serviceWorker.controller?.scriptURL,
+        active: registration?.active?.state, installing: registration?.installing?.state,
+        waiting: registration?.waiting?.state, cacheContents,
+      };
+    }).catch(failure => ({ diagnosticError: failure.message }))));
+    throw error;
   } finally { await browser.close(); }
 }
 
-try { await run(); } catch (error) { evidence.failure = error.stack; console.error(error); process.exitCode = 1; }
+try { await run(); } catch (error) {
+  evidence.failure = error.stack;
+  console.error(error);
+  // Log full fixture-only evidence on CI failure, including worker lifecycle.
+  console.error(JSON.stringify(evidence, null, 2));
+  process.exitCode = 1;
+}
 finally {
   server.closeAllConnections(); server.close();
   fs.mkdirSync(path.dirname(output), { recursive: true });
