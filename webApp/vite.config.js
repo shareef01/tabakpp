@@ -46,13 +46,17 @@ export default defineConfig({
         navigateFallback: null,
         runtimeCaching: [
           {
-            // Firebase / Google APIs — never cache auth or Firestore payloads
+            // Reserved hosting helpers/APIs stay network-only, including script
+            // and style requests. Cross-origin Firebase/Google traffic must not
+            // shadow the app's own firebaseapp.com navigation or static assets.
             urlPattern: ({ url }) =>
-              url.hostname.includes('googleapis.com') ||
-              url.hostname.includes('firebaseio.com') ||
-              url.hostname.includes('firebaseapp.com') ||
-              url.hostname.includes('gstatic.com') ||
-              url.hostname.includes('google.com'),
+              (url.origin === self.location.origin && /^\/(?:api|__)/.test(url.pathname)) ||
+              (url.origin !== self.location.origin && (
+                url.hostname.includes('googleapis.com') ||
+                url.hostname.includes('firebaseio.com') ||
+                url.hostname.includes('firebaseapp.com') ||
+                url.hostname.includes('gstatic.com') ||
+                url.hostname.includes('google.com'))),
             handler: 'NetworkOnly',
           },
           {

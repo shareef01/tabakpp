@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -13,16 +14,26 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'tabakpp-pwa-'));
 const evidence = { builds: {}, scenarios: [], documents: [], workerErrors: [], consoleErrors: [], warnings: [], caches: {} };
 const output = process.env.PWA_TEST_REPORT || path.join(temporary, 'results.json');
 const sessions = new WeakMap();
+const deniedNavigationURLs = new Set();
+evidence.expectedNetworkFailures = [];
 const fixtureDiagnostic = '[firebase] App Check site key missing in production. Configure the site key and follow SETUP_GUIDE.md before enabling enforcement.';
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 let directory;
 let online = true;
 let documentResponses = 0;
-const server = http.createServer((request, response) => {
+let secureServer;
+const serve = (request, response) => {
   // CDP offline alone can vary between page and SW targets. No server response
   // can succeed during offline scenarios, even if a worker bypasses emulation.
   if (!online) return request.socket.destroy();
   const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
+  // Public routing probes exercise script/style destinations on reserved paths,
+  // without authentication or simulated Firebase backend availability.
+  if (/^\/(?:__|api)\//.test(pathname) && /\.(?:js|css)$/.test(pathname)) {
+    response.setHeader('Content-Type', pathname.endsWith('.js') ? 'text/javascript' : 'text/css');
+    response.setHeader('Cache-Control', 'no-store');
+    return response.end('/* network-only reserved-path probe */');
+  }
   let file = path.resolve(directory, `.${pathname}`);
   if (!file.startsWith(`${directory}${path.sep}`) && file !== directory) {
     response.writeHead(403); return response.end();
@@ -32,7 +43,17 @@ const server = http.createServer((request, response) => {
   response.setHeader('Cache-Control', pathname.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache, no-store, must-revalidate');
   if (path.extname(file) === '.html') documentResponses++;
   fs.createReadStream(file).pipe(response);
-});
+};
+const server = http.createServer(serve);
+
+function certificate() {
+  const openssl = process.platform === 'win32' ? 'C:/Program Files/Git/usr/bin/openssl.exe' : 'openssl';
+  const key = path.join(temporary, 'loopback.key'), cert = path.join(temporary, 'loopback.crt');
+  const result = spawnSync(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+    '-subj', '/CN=tabakpp.firebaseapp.com', '-keyout', key, '-out', cert], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  return { key: fs.readFileSync(key), cert: fs.readFileSync(cert) };
+}
 
 function executable() {
   const candidates = [process.env.PUPPETEER_EXECUTABLE_PATH, process.env.CHROME_BIN, '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
@@ -78,7 +99,12 @@ async function caches(page, label) {
   assert(!Object.keys(contents).includes('tabak-pages'), 'no competing runtime HTML cache');
   const urls = Object.values(contents).flat();
   assert(urls.some(url => new URL(url).pathname.startsWith('/assets/')), 'static assets precached');
-  assert(!urls.some(url => /heic2any|googleapis\.com|firebaseio\.com|firebaseapp\.com|gstatic\.com|google\.com/.test(url)), 'no HEIC/API/user-data caching');
+  const origin = new URL(page.url()).origin;
+  assert(urls.every(value => {
+    const url = new URL(value);
+    return url.origin === origin && !/^\/(?:api|__)/.test(url.pathname) && !url.pathname.includes('heic2any') &&
+      (url.pathname.startsWith('/assets/') || /^\/(?:offline-shell\.html|noise\.svg|favicon\.svg|icon-\d+\.png|apple-touch-icon\.png|splash-[\dx]+\.png)$/.test(url.pathname));
+  }), 'only same-origin public static shell/assets; no reserved/API/user-data caching');
   return urls;
 }
 
@@ -103,7 +129,14 @@ async function pageFor(context) {
   session.on('ServiceWorker.workerVersionUpdated', event => {
     evidence.workerVersions = event.versions;
   });
-  session.on('ServiceWorker.workerErrorReported', event => evidence.workerErrors.push(event.errorMessage));
+  session.on('ServiceWorker.workerErrorReported', event => {
+    const error = event.errorMessage;
+    // Explicit NetworkOnly denial rejects respondWith while offline. Only the
+    // exact no-response errors for deliberately tested denied URLs are expected.
+    const expected = [...deniedNavigationURLs].some(url => error.errorMessage ===
+      `Uncaught (in promise) no-response: no-response :: ${JSON.stringify([{ url, error: {} }])}`);
+    (expected ? evidence.expectedNetworkFailures : evidence.workerErrors).push(error);
+  });
   sessions.set(page, session);
   return { page, session };
 }
@@ -135,8 +168,12 @@ async function run() {
   }
   directory = build('pwa-regression-A');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  secureServer = https.createServer(certificate(), serve);
+  await new Promise(resolve => secureServer.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const browser = await puppeteer.launch({ executablePath: executable(), headless: true, args: ['--no-sandbox'] });
+  const browser = await puppeteer.launch({ executablePath: executable(), headless: true, args: ['--no-sandbox',
+    '--no-proxy-server', '--ignore-certificate-errors',
+    '--host-resolver-rules=MAP tabakpp.web.app 127.0.0.1, MAP tabakpp.firebaseapp.com 127.0.0.1'] });
   evidence.browser = await browser.version();
   try {
     const context = await browser.createBrowserContext(); // Fresh SW/cache/IDB/local state.
@@ -150,6 +187,7 @@ async function run() {
     // History/settings were never visited online; these are real app paths.
     for (const route of ['/', '/index.html', '/history', '/settings']) await shell(page, base, route, 'pwa-regression-A', true);
     for (const route of ['/api/probe', '/__/auth/handler']) {
+      deniedNavigationURLs.add(base + route);
       await assert.rejects(page.goto(base + route, { waitUntil: 'domcontentloaded', timeout: 10000 }), /ERR_INTERNET_DISCONNECTED|ERR_FAILED|ERR_EMPTY_RESPONSE/);
       evidence.scenarios.push({ route, excludedFromShell: true });
     }
@@ -216,6 +254,40 @@ async function run() {
       return true;
     });
     await mobile.screenshot({ path: path.join(temporary, 'mobile-offline.png') });
+    await mobileContext.close();
+    for (const host of ['tabakpp.firebaseapp.com', 'tabakpp.web.app']) {
+      online = true;
+      const hostingContext = await browser.createBrowserContext();
+      const { page: hosting } = await pageFor(hostingContext);
+      const hostingBase = `https://${host}:${secureServer.address().port}`;
+      await shell(hosting, hostingBase, '/', 'pwa-regression-B');
+      await hosting.evaluate(() => navigator.serviceWorker.ready);
+      await hosting.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+      assert.equal(await hosting.evaluate(() => location.hostname), host);
+      assert(await hosting.evaluate(() => isSecureContext), 'real secure SW origin');
+      await hosting.evaluate(async () => {
+        for (const prefix of ['/__', '/api']) for (const extension of ['js', 'css']) {
+          await new Promise((resolve, reject) => {
+            const element = document.createElement(extension === 'js' ? 'script' : 'link');
+            if (extension === 'js') element.src = `${prefix}/routing-probe.js`;
+            else { element.rel = 'stylesheet'; element.href = `${prefix}/routing-probe.css`; }
+            element.onload = resolve; element.onerror = reject; document.head.append(element);
+          });
+        }
+      });
+      await hosting.waitForNetworkIdle({ idleTime: 500 });
+      await caches(hosting, `${host}-reserved-resources`);
+      evidence.scenarios.push({ host, reservedScriptsAndStylesUncached: true });
+      online = false;
+      await hosting.setOfflineMode(true);
+      for (const route of ['/', '/index.html', '/history', '/settings']) await shell(hosting, hostingBase, route, 'pwa-regression-B', true);
+      for (const route of ['/__/auth/handler', '/api/probe']) {
+        deniedNavigationURLs.add(hostingBase + route);
+        await assert.rejects(hosting.goto(hostingBase + route, { waitUntil: 'domcontentloaded', timeout: 10000 }), /ERR_INTERNET_DISCONNECTED|ERR_FAILED|ERR_EMPTY_RESPONSE/);
+        evidence.scenarios.push({ host, route, excludedFromShell: true });
+      }
+      await hostingContext.close();
+    }
     assert.deepEqual(evidence.workerErrors, [], 'no SW initialization/runtime errors');
     assert.deepEqual(evidence.consoleErrors.filter(error => error !== fixtureDiagnostic), [], 'no fatal browser errors');
     assert.deepEqual(evidence.warnings, []);
@@ -245,6 +317,7 @@ try { await run(); } catch (error) {
 }
 finally {
   server.closeAllConnections(); server.close();
+  secureServer?.closeAllConnections(); secureServer?.close();
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, JSON.stringify(evidence, null, 2));
   console.log(`PWA evidence: ${output}`);
