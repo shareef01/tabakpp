@@ -140,7 +140,7 @@ async function run() {
   evidence.browser = await browser.version();
   try {
     const context = await browser.createBrowserContext(); // Fresh SW/cache/IDB/local state.
-    const { page, session } = await pageFor(context);
+    const { page } = await pageFor(context);
     await shell(page, base, '/', 'pwa-regression-A');
     await page.evaluate(() => navigator.serviceWorker.ready);
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
@@ -163,7 +163,20 @@ async function run() {
     // The A worker must prefer online B HTML even before we request a SW update.
     await shell(page, base, '/history?deployment=B', 'pwa-regression-B');
     assert(documentResponses > offlineCount, 'online deployment really reaches server');
-    await session.send('ServiceWorker.updateRegistration', { scopeURL: `${base}/` });
+    // The build-id effect sets localStorage immediately before its one-shot
+    // reload. Let that navigation finish before asking the browser to update.
+    await page.waitForNetworkIdle({ idleTime: 500 });
+    await page.waitForSelector('input[type="email"]');
+    // Use the real browser update API, then a normal online refresh. Chrome's
+    // DevTools updateRegistration can stop a worker mid-activation; it is not
+    // the app's update path. Never force skipWaiting/activation from the test.
+    await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update()).catch(error => {
+      // autoUpdate may reload the calling document as the new worker claims it.
+      if (!error.message.includes('Execution context was destroyed')) throw error;
+    });
+    await page.waitForNetworkIdle({ idleTime: 500 });
+    await page.waitForSelector('input[type="email"]');
+    await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(async entry => {
       const registration = await navigator.serviceWorker.getRegistration();
       if (registration.active?.state !== 'activated' || registration.waiting) return false;
@@ -171,7 +184,7 @@ async function run() {
         if (await (await window.caches.open(name)).match(entry)) return true;
       }
       return false;
-    }, { timeout: 30000 }, evidence.builds['pwa-regression-B'].entry);
+    }, { timeout: 30000, polling: 100 }, evidence.builds['pwa-regression-B'].entry);
     await page.waitForNetworkIdle({ idleTime: 500 });
     await page.waitForSelector('input[type="email"]');
     assert(navigations <= 4, `no SW/build-identity reload loop (${navigations})`);
@@ -193,6 +206,15 @@ async function run() {
     await mobile.setOfflineMode(true);
     await shell(mobile, base, '/settings', 'pwa-regression-B', true);
     await caches(mobile, 'mobile-B');
+    // Wait for the real sign-in entrance animation before visual evidence.
+    await mobile.waitForFunction(() => {
+      let element = document.querySelector('input[type="email"]');
+      if (!element) return false;
+      for (; element; element = element.parentElement) {
+        if (Number(getComputedStyle(element).opacity) < 0.99) return false;
+      }
+      return true;
+    });
     await mobile.screenshot({ path: path.join(temporary, 'mobile-offline.png') });
     assert.deepEqual(evidence.workerErrors, [], 'no SW initialization/runtime errors');
     assert.deepEqual(evidence.consoleErrors.filter(error => error !== fixtureDiagnostic), [], 'no fatal browser errors');
