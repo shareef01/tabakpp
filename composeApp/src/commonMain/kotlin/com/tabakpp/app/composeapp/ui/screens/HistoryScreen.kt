@@ -46,12 +46,15 @@ fun HistoryScreen(
     innerPadding: PaddingValues = PaddingValues(0.dp),
     snackbarHostState: SnackbarHostState
 ) {
-    val logs by viewModel.logs.collectAsStateWithLifecycle()
+    val logs by viewModel.historyLogs.collectAsStateWithLifecycle()
     val metrics by viewModel.metrics.collectAsStateWithLifecycle()
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val trackingDay by viewModel.trackingDay.collectAsStateWithLifecycle()
     val historyIsTruncated by viewModel.historyIsTruncated.collectAsStateWithLifecycle()
-    val dayDocs by viewModel.dayDocs.collectAsStateWithLifecycle()
+    val dayDocs by viewModel.historyDays.collectAsStateWithLifecycle()
+    val loadingOlder by viewModel.loadingOlderHistory.collectAsStateWithLifecycle()
+    val hasOlder by viewModel.hasOlderHistory.collectAsStateWithLifecycle()
+    val records = remember(logs, dayDocs) { com.tabakpp.app.domain.historyRecords(logs, dayDocs) }
     val configs by viewModel.configs.collectAsStateWithLifecycle()
     var historySubView by rememberSaveable { mutableStateOf("history") }
 
@@ -59,18 +62,19 @@ fun HistoryScreen(
     val accentColor = LocalAccentColor.current
 
     var logToEditId by rememberSaveable { mutableStateOf<String?>(null) }
-    val logToEdit = logs.firstOrNull { it.id == logToEditId }
+    val recordToEdit = records.firstOrNull { it.key == logToEditId }
+    val logToEdit = recordToEdit?.displayLog()
     var logPendingDelete by remember { mutableStateOf<LogEntry?>(null) }
     var showAddEntry by rememberSaveable { mutableStateOf(false) }
     var historyPeriod by rememberSaveable { mutableStateOf(30) }
-    val periodLogs = remember(logs, historyPeriod, trackingDay) {
+    val periodLogs = remember(records, historyPeriod, trackingDay) {
         val anchor = runCatching { LocalDate.parse(trackingDay) }.getOrElse {
             Clock.System.todayIn(TimeZone.currentSystemDefault())
         }
         val cutoff = anchor.minus(historyPeriod - 1, DateTimeUnit.DAY)
-        logs.filter { runCatching { LocalDate.parse(it.logDate) >= cutoff }.getOrDefault(false) }
+        records.filter { runCatching { LocalDate.parse(it.date) >= cutoff }.getOrDefault(false) }.map { it.displayLog() }
     }
-    val groupedLogs = remember(logs) { SmokingCalculator.groupLogsByDate(logs) }
+    val groupedLogs = remember(records) { records.groupBy { it.date } }
     val sortedDates = remember(groupedLogs) { groupedLogs.keys.sortedDescending() }
 
     Box(
@@ -169,7 +173,7 @@ fun HistoryScreen(
                                 Spacer(modifier = Modifier.height(24.dp))
                                 HistoryChart(
                                     logs = periodLogs,
-                                    activeCount = metrics?.count ?: 0,
+                                    activeCount = if (dayDocs.any { it.date == trackingDay && it.foldedIntoLifetime }) 0 else metrics?.count ?: 0,
                                     accentColor = accentColor, 
                                     modifier = Modifier.height(180.dp).padding(horizontal = 8.dp)
                                 )
@@ -245,7 +249,7 @@ fun HistoryScreen(
                 if (historyIsTruncated) {
                     item {
                         Text(
-                            "Showing the most recent 1,200 entries. Trend and streak views exclude older entries; lifetime totals remain authoritative.",
+                            "The live window is bounded. Load older history below to view earlier records; lifetime totals remain authoritative.",
                             style = TabakTypography.bodySmall,
                             color = WarningColor,
                             modifier = Modifier.padding(horizontal = 4.dp)
@@ -253,7 +257,7 @@ fun HistoryScreen(
                     }
                 }
 
-                if (logs.isEmpty()) {
+                if (records.isEmpty()) {
                     item {
                         Text(
                             "Your tracked days will appear here.",
@@ -272,13 +276,20 @@ fun HistoryScreen(
                         }
                         items(
                             items = groupedLogs[date].orEmpty(),
-                            key = { log -> log.id }
-                        ) { log ->
+                            key = { record -> record.key }
+                        ) { record ->
                             LogItem(
-                                log = log,
-                                onEdit = { logToEditId = log.id },
-                                onDelete = { logPendingDelete = log }
+                                log = record.displayLog(),
+                                onEdit = { logToEditId = record.key },
+                                onDelete = if (record is com.tabakpp.app.domain.HistoryRecord.Log) ({ logPendingDelete = record.value }) else null
                             )
+                        }
+                    }
+                }
+                if (hasOlder) {
+                    item {
+                        TextButton(onClick = viewModel::loadOlderHistory, enabled = !loadingOlder, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (loadingOlder) "Loading…" else "Load older history")
                         }
                     }
                 }
@@ -294,11 +305,15 @@ fun HistoryScreen(
         ) {
             val configs by viewModel.configs.collectAsStateWithLifecycle()
             ManualEntryForm(
-                configs = configs,
+                configs = com.tabakpp.app.domain.historyEditConfigs(logToEdit, configs),
                 initialLog = logToEdit,
                 accentColor = accentColor,
                 onSave = { _, counts ->
-                    viewModel.updateLog(logToEdit.id, counts)
+                    when (recordToEdit) {
+                        is com.tabakpp.app.domain.HistoryRecord.Day -> viewModel.updateDayRecord(recordToEdit.date, counts)
+                        is com.tabakpp.app.domain.HistoryRecord.Log -> viewModel.updateLog(recordToEdit.value.id, counts)
+                        null -> Unit
+                    }
                     logToEditId = null
                 },
                 onDismiss = { logToEditId = null }
@@ -395,7 +410,7 @@ private fun HistoryGroupHeader(title: String) {
 fun LogItem(
     log: LogEntry,
     onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    onDelete: (() -> Unit)?,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -422,6 +437,8 @@ fun LogItem(
                 Text(
                     text = when (log.origin) {
                         "DAY_RESET" -> "Ended day"
+                        "DAY_RECORD" -> "Tracked day"
+                        "LEGACY_RECOVERY" -> "Recovered legacy counts · historical money unknown"
                         "MANUAL_ENTRY" -> "Manual entry"
                         else -> log.origin.lowercase().replace('_', ' ')
                     },
@@ -434,7 +451,7 @@ fun LogItem(
                 IconButton(onClick = onEdit, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit history entry", tint = TextMuted, modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) {
+                if (onDelete != null) IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Default.Delete, contentDescription = "Delete history entry", tint = ErrorColor, modifier = Modifier.size(18.dp))
                 }
             }

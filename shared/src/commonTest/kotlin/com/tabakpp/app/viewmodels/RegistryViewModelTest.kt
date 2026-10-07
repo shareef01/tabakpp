@@ -58,6 +58,16 @@ private class FakeRegistryRepository : RegistryRepository {
     /** Today's dated day doc (item 1) — this, not the profile, is where live counts come from. */
     val dayFlow = MutableStateFlow<DayDocument?>(null)
     val daysFlow = MutableStateFlow<List<DayDocument>>(emptyList())
+    var olderDayPage = com.tabakpp.app.domain.HistoryPage<DayDocument>()
+    var olderLogPage = com.tabakpp.app.domain.HistoryPage<LogEntry>()
+    val olderDayCalls = mutableListOf<com.tabakpp.app.domain.HistoryCursor?>()
+    val olderLogCalls = mutableListOf<com.tabakpp.app.domain.HistoryCursor?>()
+    override suspend fun fetchOlderDays(uid: String, cursor: com.tabakpp.app.domain.HistoryCursor?, pageSize: Int): com.tabakpp.app.domain.HistoryPage<DayDocument> {
+        maybeFail(); olderDayCalls.add(cursor); return olderDayPage
+    }
+    override suspend fun fetchOlderLogs(uid: String, cursor: com.tabakpp.app.domain.HistoryCursor?, pageSize: Int): com.tabakpp.app.domain.HistoryPage<LogEntry> {
+        maybeFail(); olderLogCalls.add(cursor); return olderLogPage
+    }
     val avatarFlow = MutableStateFlow<ProfileExtra?>(null)
 
     /** When set, every mutating call throws it (init bootstrap calls do not). */
@@ -159,6 +169,26 @@ class RegistryViewModelTest {
         val vm = RegistryViewModel(auth, reg, FakeLocalSettings(), networkObserver)
         scheduler.runCurrent() // let Eagerly authUser + init collectors settle (loop stays parked)
         return Triple(vm, reg, networkObserver)
+    }
+
+    @Test fun olderHistoryPagesBothLedgersAndStopsWhenBothExhaust() {
+        val (vm, reg, _) = build()
+        val day = DayDocument(date = "2025-01-01", status = "closed")
+        val log = LogEntry(id = "old", logDate = "2025-01-01")
+        reg.olderDayPage = com.tabakpp.app.domain.HistoryPage(listOf(day), com.tabakpp.app.domain.HistoryCursor(day.date, day.date), false)
+        reg.olderLogPage = com.tabakpp.app.domain.HistoryPage(listOf(log), com.tabakpp.app.domain.HistoryCursor(log.logDate, log.id), false)
+        val dayJob = bg.launch { vm.historyDays.collect {} }
+        val logJob = bg.launch { vm.historyLogs.collect {} }
+        scheduler.runCurrent()
+        vm.loadOlderHistory(); scheduler.runCurrent()
+        assertEquals(listOf(day), vm.historyDays.value)
+        assertEquals(listOf(log), vm.historyLogs.value)
+        assertFalse(vm.hasOlderHistory.value)
+        assertFalse(vm.loadingOlderHistory.value)
+        vm.loadOlderHistory(); scheduler.runCurrent()
+        assertEquals(1, reg.olderDayCalls.size)
+        assertEquals(1, reg.olderLogCalls.size)
+        dayJob.cancel(); logJob.cancel()
     }
 
     @Test

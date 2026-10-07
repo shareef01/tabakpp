@@ -49,14 +49,16 @@ object RegistryMutations {
         LifetimeAggregates(
             saved = current.saved + credit.saved,
             wasted = current.wasted + credit.wasted,
-            smokingUnits = current.smokingUnits + credit.smokingUnits
+            smokingUnits = current.smokingUnits + credit.smokingUnits,
+            baselineSaved = current.baselineSaved + credit.baselineSaved
         )
 
     fun applyDebit(current: LifetimeAggregates, credit: LifetimeAggregates): LifetimeAggregates =
         LifetimeAggregates(
             saved = current.saved - credit.saved,
             wasted = current.wasted - credit.wasted,
-            smokingUnits = current.smokingUnits - credit.smokingUnits
+            smokingUnits = current.smokingUnits - credit.smokingUnits,
+            baselineSaved = current.baselineSaved - credit.baselineSaved
         )
 
     fun applyReplace(
@@ -67,7 +69,8 @@ object RegistryMutations {
         LifetimeAggregates(
             saved = current.saved - oldCredit.saved + newCredit.saved,
             wasted = current.wasted - oldCredit.wasted + newCredit.wasted,
-            smokingUnits = current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits
+            smokingUnits = current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits,
+            baselineSaved = current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved
         )
 
     /** Credit a single log's financials and smoking units (manual entry, restore). */
@@ -106,12 +109,14 @@ object RegistryMutations {
     fun mergeHistoricalEditCounts(
         incoming: Map<String, Double>,
         previous: Map<String, Double>,
-        liveConfigIds: Collection<String>
+        liveConfigIds: Collection<String>,
+        historicalIds: Collection<String> = emptyList()
     ): Map<String, Double> {
         val live = liveConfigIds.toSet()
+        val editable = historicalIds.toSet()
         val merged = incoming.toMutableMap()
         previous.forEach { (id, value) ->
-            if (id !in live) merged[id] = value
+            if (id !in live && (id !in editable || id !in incoming)) merged[id] = value
         }
         return merged
     }

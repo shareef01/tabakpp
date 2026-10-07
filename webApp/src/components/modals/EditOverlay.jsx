@@ -6,8 +6,15 @@ import { cn } from '../../utils/utils';
 import { formatDateDisplay } from '../../utils/formatters';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
+import { mapFirestoreError } from '../../utils/errorHandlers';
 
 export const EditOverlay = ({ log, configs, onClose, onSave }) => {
+  const historical = Object.entries(log.trackerSnapshots || {});
+  if (historical.length) configs = historical.map(([id, snapshot]) => ({
+    id, name: snapshot.name, type: snapshot.type, limit: snapshot.target,
+    pricePerUnit: snapshot.unitPrice, baseline: snapshot.baseline,
+    isFinanciallyTracked: snapshot.isFinanciallyTracked, isPrimaryTracked: snapshot.isPrimaryTracked,
+  }));
   const keyboardInset = useKeyboardInset();
   const [counts, setCounts] = useState(log.counts || {});
   const [saving, setSaving] = useState(false);
@@ -28,7 +35,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
       onClose();
     } catch (e) {
       console.error('[SYS] History override failed', e);
-      setError('Could not save overrides. Check your connection and try again.');
+      setError(mapFirestoreError(e, 'Could not save overrides. Check your connection and try again.'));
     } finally {
       setSaving(false);
     }

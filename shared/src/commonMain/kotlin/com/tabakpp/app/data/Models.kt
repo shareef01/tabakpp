@@ -145,6 +145,9 @@ data class UserProfile(
     /** In-flight claim from `migrateLegacyActiveCounts` phase 1, resumed by phase 2. Always paired with [migratingLegacyDate]. */
     val migratingLegacyCounts: Map<String, Double> = emptyMap(),
     val migratingLegacyDate: String? = null,
+    val migratingLegacyId: String? = null,
+    val migratingLegacyVersion: Int? = null,
+    val migratingLegacyUnitPrice: Double? = null,
     @Serializable(with = TimestampOrLongSerializer::class) val createdAt: Timestamp? = null,
     @Serializable(with = TimestampOrLongSerializer::class) val updatedAt: Timestamp? = null
 )
@@ -154,6 +157,9 @@ data class UserProfile(
 data class ProfileExtra(
     val avatar: String? = null
 )
+
+@Serializable
+data class LegacyMigrationMarker(val date: String, val applied: Boolean = true)
 
 @Serializable
 data class TrackerConfig(
@@ -213,7 +219,8 @@ data class DayDocument(
     val legacyMigrationApplied: Boolean = false,
     @Serializable(with = BaseTimestampOrLongSerializer::class) val createdAt: BaseTimestamp? = null,
     @Serializable(with = BaseTimestampOrLongSerializer::class) val updatedAt: BaseTimestamp? = null,
-    @Serializable(with = BaseTimestampOrLongSerializer::class) val closedAt: BaseTimestamp? = null
+    @Serializable(with = BaseTimestampOrLongSerializer::class) val closedAt: BaseTimestamp? = null,
+    val updatedTrackerId: String? = null
 )
 
 @Serializable
@@ -233,7 +240,10 @@ data class LogEntry(
     @Serializable(with = BaseTimestampOrLongSerializer::class)
     val finalizedAt: BaseTimestamp? = null,
     @Serializable(with = BaseTimestampOrLongSerializer::class)
-    val clientTimestamp: BaseTimestamp? = null
+    val clientTimestamp: BaseTimestamp? = null,
+    /** Effective economic inputs at creation; absent on older, ambiguous logs. */
+    val trackerSnapshots: Map<String, TrackerSnapshot> = emptyMap(),
+    val economicStatus: String? = null
 )
 
 
