@@ -1,6 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { copyFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 /**
  * Build identity (item 17): a stable identifier for THIS commit/release, not
@@ -21,17 +23,27 @@ const BUILD_ID = process.env.VITE_BUILD_ID || process.env.GITHUB_SHA || 'dev';
 export default defineConfig({
   plugins: [
     react(),
+    {
+      name: 'offline-shell-snapshot',
+      // Copy the final, hashed production HTML before VitePWA's closeBundle
+      // precache scan. A separate URL keeps normal index/root requests out of
+      // the precache route, so available deployments still win on the network.
+      writeBundle(output) {
+        copyFileSync(resolve(output.dir, 'index.html'), resolve(output.dir, 'offline-shell.html'));
+      },
+    },
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png', 'splash-*.png'],
       manifest: false, // use public/manifest.json
       workbox: {
-        // App shell only — never precache HTML as sticky; network-first navigations.
-        globPatterns: ['**/*.{js,css,ico,png,svg,woff2}'],
+        // Versioned offline snapshot only; normal HTML stays network-first.
+        globPatterns: ['**/*.{js,css,ico,png,svg,woff2}', 'offline-shell.html'],
         // Keep HEIC converter out of the install precache (lazy-loaded on demand).
         globIgnores: ['**/heic2any*.js'],
-        navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/api/, /^\/__/],
+        // generateSW's NavigationRoute would serve precached HTML before the
+        // runtime strategy. Use one network-first route with an error fallback.
+        navigateFallback: null,
         runtimeCaching: [
           {
             // Firebase / Google APIs — never cache auth or Firestore payloads
@@ -56,13 +68,15 @@ export default defineConfig({
             },
           },
           {
-            // App shell navigations — prefer network so deploys win quickly
-            urlPattern: ({ request }) => request.mode === 'navigate',
-            handler: 'NetworkFirst',
+            // No runtime HTML cache: it could retain old asset references after
+            // precache activation. Only a network failure uses the
+            // revisioned snapshot; API/auth endpoints never receive that shell.
+            urlPattern: ({ request, url }) =>
+              request.mode === 'navigate' && url.origin === self.location.origin &&
+              !/^\/(?:api|__)/.test(url.pathname),
+            handler: 'NetworkOnly',
             options: {
-              cacheName: 'tabak-pages',
-              networkTimeoutSeconds: 4,
-              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 },
+              precacheFallback: { fallbackURL: '/offline-shell.html' },
             },
           },
         ],
