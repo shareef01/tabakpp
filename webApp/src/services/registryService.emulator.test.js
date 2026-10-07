@@ -539,3 +539,63 @@ describe('audit release blocker regressions', () => {
     expect(page.items).toHaveLength(5);
   });
 });
+describe('remaining audit concurrency regressions', () => {
+  it('makes empty stale days terminal so later days can reconcile', async () => {
+    await seed();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const { writeBatch } = await import('firebase/firestore');
+      const batch = writeBatch(context.firestore());
+      for (let i = 0; i < 31; i++) {
+        const date = new Date(Date.UTC(2026, 0, i + 1)).toISOString().slice(0, 10);
+        batch.set(doc(context.firestore(), 'users', UID, 'days', date), {
+          date, status: 'open', counts: i === 30 ? { cig: 2 } : {},
+          trackerSnapshots: i === 30 ? { cig: SmokingCalculator.buildTrackerSnapshot(cigConfig) } : {},
+          aggregateCredit: i === 30 ? { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 } : { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 },
+        });
+      }
+      await batch.commit();
+    });
+    await RegistryService.reconcileStaleDays(UID, '2026-02-01');
+    await RegistryService.reconcileStaleDays(UID, '2026-02-01');
+    expect((await dayDoc('2026-01-31')).status).toBe('closed');
+    expect((await profile()).lifetimeAggregates.smokingUnits).toBe(2);
+  });
+
+  it('fences every scan input during smoking migration and resumes an expired lease', async () => {
+    await seed();
+    const { Timestamp } = await import('firebase/firestore');
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await updateDoc(doc(context.firestore(), 'users', UID), { smokingUnitsMigrated: false });
+      await setDoc(doc(context.firestore(), 'users', UID, 'logs', 'zero_price'), {
+        logDate: '2026-01-01', counts: { cig: 3 }, aggregateCredit: { saved: 0, wasted: 0, smokingUnits: 3, baselineSaved: 0 },
+      });
+    });
+    await updateDoc(doc(holder.db, 'users', UID), { smokingMigrationLeaseId: 'scan', smokingMigrationLeaseUntil: Timestamp.fromMillis(Date.now() + 60000) });
+    const other = testEnv.authenticatedContext(UID).firestore();
+    await expect(setDoc(doc(other, 'users', UID, 'logs', 'race'), { logDate: '2026-01-01', counts: { cig: 1 } })).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(updateDoc(doc(other, 'users', UID, 'configs', 'cig'), { type: 'SIMPLE' })).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(deleteDoc(doc(other, 'users', UID, 'logs', 'zero_price'))).rejects.toMatchObject({ code: 'permission-denied' });
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await updateDoc(doc(context.firestore(), 'users', UID), { smokingMigrationLeaseUntil: Timestamp.fromMillis(Date.now() - 1000) });
+    });
+    await RegistryService.migrateSmokingUnitsIfNeeded(UID);
+    expect((await profile()).lifetimeAggregates.smokingUnits).toBe(3);
+    expect((await profile()).smokingUnitsMigrated).toBe(true);
+    expect((await profile()).smokingMigrationLeaseId).toBeUndefined();
+  });
+
+  it('keeps deletion fenced across interruption, retry and old Auth tokens', async () => {
+    await seed();
+    await RegistryService.createManualEntry(UID, '2026-01-01', { cig: 2 });
+    await updateDoc(doc(holder.db, 'users', UID), { deleting: true });
+    const other = testEnv.authenticatedContext(UID).firestore();
+    await expect(setDoc(doc(other, 'users', UID, 'configs', 'new'), cigConfig)).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(updateDoc(doc(other, 'users', UID), { unitPrice: 2 })).rejects.toMatchObject({ code: 'permission-denied' });
+    await RegistryService.deleteAllUserData(UID);
+    await RegistryService.deleteAllUserData(UID);
+    expect(await profile()).toEqual({ deleting: true });
+    for (const name of ['configs', 'logs', 'days', 'meta']) expect((await getDocs(collection(holder.db, 'users', UID, name))).empty).toBe(true);
+    await expect(deleteDoc(doc(other, 'users', UID))).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(setDoc(doc(other, 'users', UID, 'logs', 'late'), { logDate: '2026-01-01', counts: {} })).rejects.toMatchObject({ code: 'permission-denied' });
+  });
+});

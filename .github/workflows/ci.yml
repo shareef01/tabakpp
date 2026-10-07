@@ -22,6 +22,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Run validator self-tests
         run: python3 .github/scripts/test-validate-action-pins.py
+      - name: Test release input and acceptance guards
+        run: python3 .github/scripts/test-release-safety.py
       - name: Validate GitHub Action pins (immutable SHA policy)
         run: python3 .github/scripts/validate-action-pins.py
         env:

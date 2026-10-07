@@ -112,6 +112,9 @@ data class LifetimeAggregates(
 
 @Serializable
 data class UserProfile(
+    val deleting: Boolean = false,
+    val smokingMigrationLeaseId: String? = null,
+    @Serializable(with = TimestampOrLongSerializer::class) val smokingMigrationLeaseUntil: Timestamp? = null,
     val name: String = "",
     val accent: String = "#FF5F5F",
     val widgetSize: WidgetSize = WidgetSize.MEDIUM,

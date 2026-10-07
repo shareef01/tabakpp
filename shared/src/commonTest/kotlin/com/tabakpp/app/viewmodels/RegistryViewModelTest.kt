@@ -191,6 +191,18 @@ class RegistryViewModelTest {
         dayJob.cancel(); logJob.cancel()
     }
 
+    @Test fun deletionStateStopsLocalMutations() {
+        val (vm, reg, _) = build()
+        val job = bg.launch { vm.userProfile.collect {} }
+        reg.profileFlow.value = UserProfile(deleting = true)
+        scheduler.runCurrent()
+        vm.increment("cig"); vm.addTracker(TrackerConfig("new", "New", 1, 0))
+        scheduler.runCurrent()
+        assertTrue(reg.liveCounterCalls.isEmpty())
+        assertTrue(reg.addConfigCalls.isEmpty())
+        job.cancel()
+    }
+
     @Test
     fun increment_withUser_incrementsByOne() {
         val (vm, reg, _) = build()

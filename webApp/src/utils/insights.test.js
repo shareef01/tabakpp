@@ -224,10 +224,10 @@ describe('aggregateMonthlyData', () => {
     expect(result.months[0].saved).toBe(4.0);  // (20-12) * 0.5 (stamped), NOT (5-12)*2.0
   });
 
-  it('15. merges activeCounts for today (open session)', () => {
+  it('15. ignores a separate active projection for an already closed day', () => {
     const dayDocs = [dayDoc('2026-09-15', { cig: 3 })];
     const result = SmokingCalculator.aggregateMonthlyData([], dayDocs, '2026-09-15', { cig: 2 });
-    expect(result.months[0].units).toBe(5); // 3 + 2 from active session
+    expect(result.months[0].units).toBe(3); // closed dated record is authoritative
   });
 
   it('16. limits completed months to monthsToInclude', () => {
@@ -482,5 +482,31 @@ describe('aggregateMonthlyData — one completed month', () => {
     expect(result.currentMonthMtd).toBeNull();
     expect(result.completedMonths[0].units).toBe(10);
     expect(result.completedMonths[0].trackedDays).toBe(1);
+  });
+});
+
+describe('audit monthly ledger regression', () => {
+  it('sums manual credits, overlays live day counts and preserves unknown legacy status', () => {
+    const date = '2026-09-15';
+    const snap = { type: 'CIGARETTE', target: 10, baseline: 20, unitPrice: 0.8, isFinanciallyTracked: true };
+    const logs = [{ id: 'manual', logDate: date, counts: { cig: 4 }, aggregateCredit: { wasted: 3.2, saved: 4.8, smokingUnits: 4, baselineSaved: 12.8 } }];
+    const days = [{ date, status: 'open', counts: { cig: 1 }, trackerSnapshots: { cig: snap } }];
+    const month = SmokingCalculator.aggregateMonthlyData(logs, days, date, { cig: 2 }).currentMonthMtd;
+    expect(month.units).toBe(6);
+    expect(month.spent).toBeCloseTo(4.8);
+    expect(month.saved).toBeCloseTo(11.2);
+    expect(month.baselineSaved).toBeCloseTo(27.2);
+    expect(month.unknownEconomics).toBe(false);
+    const unknown = SmokingCalculator.aggregateMonthlyData([{ id: 'old', logDate: date, counts: { cig: 3 } }], [], date).currentMonthMtd;
+    expect(unknown.unknownEconomics).toBe(true);
+    expect(unknown.spent).toBe(0);
+  });
+  it('does not add folded today to lifetime savings or smoking units again', () => {
+    const config = { id: 'cig', type: 'CIGARETTE', limit: 10, baseline: 20, pricePerUnit: 0.8 };
+    const metrics = SmokingCalculator.getGlobalMetrics([], [config], { cig: 2 }, '2026-09-15', 0.8,
+      { saved: 6.4, wasted: 1.6, smokingUnits: 2, baselineSaved: 14.4 },
+      [{ date: '2026-09-15', status: 'closed', foldedIntoLifetime: true, counts: { cig: 2 } }]);
+    expect(metrics.baselineSavedLifetime).toBeCloseTo(14.4);
+    expect(metrics.lifeLost).toBe(22);
   });
 });

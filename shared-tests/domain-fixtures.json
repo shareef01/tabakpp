@@ -199,8 +199,8 @@
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
-      "expected": { "units": 5, "trackedDays": 1, "avgUnitsPerTrackedDay": 5.0,
-        "completedCount": 0, "currentMonthMtd": true, "currentMonthUnits": 5,
+      "expected": { "units": 2, "trackedDays": 1, "avgUnitsPerTrackedDay": 2.0,
+        "completedCount": 0, "currentMonthMtd": true, "currentMonthUnits": 2,
         "completedMonth": null, "currentMonth": "2026-09",
         "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
 

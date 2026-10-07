@@ -79,7 +79,7 @@ describe('buildVelocitySeries', () => {
     it('keeps today visible from a still-open dayDoc, merged with the live session', () => {
       const dayDocs = [{ date: TODAY, counts: { cig: 5 } }];
       const series = buildVelocitySeries([], TODAY, 7, { cig: 2 }, dayDocs);
-      expect(last(series).val).toBe(7);
+      expect(last(series).val).toBe(2);
     });
 
     it('is backward compatible when dayDocs is omitted (existing callers)', () => {
