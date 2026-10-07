@@ -29,3 +29,7 @@ If you discover a security vulnerability in `tabak++`, please report it responsi
    - Any proposed mitigations or fixes.
 
 We will acknowledge receipt within 48 hours and work toward timely remediation and coordinated disclosure.
+
+## Account lifecycle and migration fences
+
+The audit follow-up rules fence account writes during smoking-unit migration and after deletion begins. Deletion retains a minimal UID-keyed marker to prevent surviving tokens from recreating data. These guarantees require deploying the follow-up rules before the corresponding clients. See [audit follow-up](docs/audit-follow-up-2026-10-07.md) for rollout limits and dependency triage.

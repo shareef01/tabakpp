@@ -261,7 +261,7 @@ service cloud.firestore {
         'pouchPrice', 'estimatedYield', 'dayStartHour', 'activeCounts',
         'lifetimeAggregates', 'smokingUnitsMigrated', 'avatar', 'createdAt', 'updatedAt',
         'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield',
-        'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
+        'deleting', 'smokingMigrationLeaseId', 'smokingMigrationLeaseUntil', 'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
           'migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice'
       ]);
     }
@@ -279,6 +279,38 @@ service cloud.firestore {
         && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
     }
 
+    function smokingLeaseHeld(d) {
+      let until = d.get('smokingMigrationLeaseUntil', null);
+      return until is timestamp && request.time < until;
+    }
+    function accountWritable(uid) {
+      let path = /databases/$(database)/documents/users/$(uid);
+      return !existsAfter(path) || (getAfter(path).data.get('deleting', false) != true && !smokingLeaseHeld(getAfter(path).data));
+    }
+    function accountDeletable(uid) {
+      let path = /databases/$(database)/documents/users/$(uid);
+      return !exists(path) || !smokingLeaseHeld(get(path).data) || get(path).data.get('deleting', false) == true;
+    }
+    function validSmokingLease(d) {
+      return (d.get('smokingMigrationLeaseId', null) == null || validCountKey(d.smokingMigrationLeaseId))
+        && (d.get('smokingMigrationLeaseUntil', null) == null
+          || (d.smokingMigrationLeaseUntil is timestamp && d.smokingMigrationLeaseUntil > request.time
+            && d.smokingMigrationLeaseUntil <= request.time + duration.value(180, 's')));
+    }
+    function smokingMigrationFinish(d, before) {
+      let old = before.get('lifetimeAggregates', {});
+      return smokingLeaseHeld(before) && d.get('smokingUnitsMigrated', false) == true
+        && !('smokingMigrationLeaseId' in d) && !('smokingMigrationLeaseUntil' in d)
+        && d.diff(before).affectedKeys().hasOnly(['smokingUnitsMigrated', 'smokingMigrationLeaseId', 'smokingMigrationLeaseUntil', 'lifetimeAggregates'])
+        && d.lifetimeAggregates.get('saved', 0) == old.get('saved', 0)
+        && d.lifetimeAggregates.get('wasted', 0) == old.get('wasted', 0)
+        && d.lifetimeAggregates.get('baselineSaved', 0) == old.get('baselineSaved', 0)
+        && validLifetimeAggregates(d.lifetimeAggregates);
+    }
+    function validDeletionUpdate(d, before) {
+      return d.get('deleting', false) == true
+        && (d.keys().hasOnly(['deleting']) || d.diff(before).affectedKeys().hasOnly(['deleting']));
+    }
     function validLegacyClaimMetadata(d) {
       return (d.get('migratingLegacyId', null) == null || validCountKey(d.migratingLegacyId))
         && (d.get('migratingLegacyVersion', null) == null || d.migratingLegacyVersion == 3)
@@ -287,7 +319,8 @@ service cloud.firestore {
     }
     function validUserProfile() {
       let d = request.resource.data;
-      return validUserKeys(d) && validLegacyClaimMetadata(d)
+      return validUserKeys(d) && validLegacyClaimMetadata(d) && validSmokingLease(d)
+        && d.get('deleting', false) == false
         && validSettingsShape(d)
         && (!('lifetimeAggregates' in d) || validLifetimeAggregates(d.lifetimeAggregates))
         && (!('activeCounts' in d) || validCountMap(d.activeCounts))
@@ -304,7 +337,8 @@ service cloud.firestore {
       // and migratingLegacyCounts must always be empty on a fresh create.
       // This avoids exceeding Firestore's 1000-expression evaluation budget
       // for the 17-field UserProfile bootstrap document.
-      return validUserKeys(d) && validLegacyClaimMetadata(d)
+      return validUserKeys(d) && validLegacyClaimMetadata(d) && validSmokingLease(d)
+        && d.get('deleting', false) == false
         && validSettingsShape(d)
         && (!('lifetimeAggregates' in d) || zeroAggregates(d.lifetimeAggregates))
         && (!('activeCounts' in d) || d.activeCounts.size() == 0)
@@ -328,7 +362,10 @@ service cloud.firestore {
       // it is still "changed" but no longer present to validate. Referencing
       // a missing map field inside validCountMap's unrolled checks is what
       // was blowing Firestore's per-commit rules expression budget here.
-      return (!changed.hasAny(['activeCounts']) || !('activeCounts' in d) || validCountMap(d.activeCounts))
+      return (!changed.hasAny(['smokingMigrationLeaseId', 'smokingMigrationLeaseUntil']) || validSmokingLease(d))
+        && (!changed.hasAny(['smokingUnitsMigrated']) || d.smokingUnitsMigrated != true || smokingMigrationFinish(d, resource.data))
+        && (!changed.hasAny(['deleting']))
+        && (!changed.hasAny(['activeCounts']) || !('activeCounts' in d) || validCountMap(d.activeCounts))
         && (!changed.hasAny(['lifetimeAggregates']) || validLifetimeAggregates(d.lifetimeAggregates))
         && (!changed.hasAny(['smokingUnitsMigrated']) || d.smokingUnitsMigrated is bool)
         && (!changed.hasAny(['schemaVersion']) || (isWholeNumber(d.schemaVersion) && d.schemaVersion >= 0 && d.schemaVersion <= 1000))
@@ -395,7 +432,7 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys()
         .hasOnly([
           'activeCounts', 'lifetimeAggregates', 'smokingUnitsMigrated', 'updatedAt',
-          'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
+          'deleting', 'smokingMigrationLeaseId', 'smokingMigrationLeaseUntil', 'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
           'migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice'
         ]);
     }
@@ -529,51 +566,50 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isOwner(userId);
-      allow create: if isOwner(userId) && validCreateProfile();
-      allow update: if isOwner(userId) && (
-        (isMutationOnlyUpdate() && validMutationUpdate()) ||
-        (isSettingsOnlyUpdate() && validSettingsUpdate())
-      );
-      allow delete: if isOwner(userId);
+      allow create: if isOwner(userId) && (validCreateProfile() || request.resource.data.keys().hasOnly(['deleting']) && request.resource.data.deleting == true);
+      allow update: if isOwner(userId) && (validDeletionUpdate(request.resource.data, resource.data)
+        || (resource.data.get('deleting', false) != true && (smokingMigrationFinish(request.resource.data, resource.data)
+          || (!smokingLeaseHeld(resource.data) && ((isMutationOnlyUpdate() && validMutationUpdate()) || (isSettingsOnlyUpdate() && validSettingsUpdate()))))));
+      allow delete: if isOwner(userId) && resource.data.get('deleting', false) != true && !smokingLeaseHeld(resource.data);
 
       match /configs/{configId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && validConfig();
-        allow delete: if isOwner(userId);
+        allow create, update: if isOwner(userId) && accountWritable(userId) && validConfig();
+        allow delete: if isOwner(userId) && accountDeletable(userId);
       }
 
       match /logs/{logId} {
         allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && validLogEntry();
+        allow create: if isOwner(userId) && accountWritable(userId) && validLogEntry();
         // logDate is immutable: an edit may only re-count the day it already
         // belongs to. Relabelling a log to another date would move counts
         // between days while lifetimeAggregates stayed put.
-        allow update: if isOwner(userId)
+        allow update: if isOwner(userId) && accountWritable(userId)
           && validLogEntry()
           && request.resource.data.logDate == resource.data.logDate
           && request.resource.data.get('trackerSnapshots', {}) == resource.data.get('trackerSnapshots', {});
-        allow delete: if isOwner(userId);
+        allow delete: if isOwner(userId) && accountDeletable(userId);
       }
 
       match /days/{date} {
         allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && validDayCreate(date);
-        allow update: if isOwner(userId) && validDayUpdate(date);
+        allow create: if isOwner(userId) && accountWritable(userId) && validDayCreate(date);
+        allow update: if isOwner(userId) && accountWritable(userId) && validDayUpdate(date);
         // Deletion is intentionally still permitted (Spark account wipe, and
         // an owner's general right to erase their own data) — it does not
         // rewrite a day's meaning, only remove the record entirely.
-        allow delete: if isOwner(userId);
+        allow delete: if isOwner(userId) && accountDeletable(userId);
       }
 
       match /meta/{metaId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && (
+        allow create, update: if isOwner(userId) && accountWritable(userId) && (
           (metaId == 'profile' && validMetaShape()) ||
           (metaId.matches('^legacy_[0-9-]+_[A-Za-z0-9_-]+_[0-9]+$')
             && request.resource.data.keys().hasOnly(['date', 'applied'])
             && isDateString(request.resource.data.date)
             && request.resource.data.applied == true));
-        allow delete: if isOwner(userId);
+        allow delete: if isOwner(userId) && accountDeletable(userId);
       }
     }
 

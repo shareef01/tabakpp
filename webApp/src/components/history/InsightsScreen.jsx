@@ -29,6 +29,7 @@ const MonthTrendTooltip = ({ active, payload }) => {
       <p className="mt-1 text-[11px] text-neutral-400">
         {entry.trackedDays} {entry.trackedDays === 1 ? 'day' : 'days'} tracked
       </p>
+      {entry.unknownEconomics && <p className="text-[11px] text-neutral-400">Some historical money is unknown.</p>}
       {entry.hasBaseline && (
         <p className="mt-0.5 text-[11px] text-accent">
           {SmokingCalculator.formatCurrency(entry.baselineSaved)} saved vs baseline
@@ -129,6 +130,7 @@ export const InsightsScreen = React.memo(({
       trackedDays: month.trackedDays,
       avgUnitsPerTrackedDay: month.avgUnitsPerTrackedDay,
       hasBaseline: month.hasBaseline,
+      unknownEconomics: month.unknownEconomics,
       baselineSaved: month.baselineSaved,
       isCurrentMonth: month.isCurrentMonth,
     }));
@@ -251,6 +253,7 @@ export const InsightsScreen = React.memo(({
                   <h3 className="text-xl font-black tracking-tight text-white leading-none">
                     {insightData.currentMonthMtd.label}
                   </h3>
+                  {insightData.currentMonthMtd.unknownEconomics && <p className="text-xs text-neutral-400">Some historical money is unknown.</p>}
                 </div>
                 {insightData.currentMonthMtd.hasBaseline && (
                   <span className="text-[10px] font-black uppercase tracking-wider text-accent">
@@ -359,6 +362,7 @@ export const InsightsScreen = React.memo(({
                     <div className="flex items-center gap-3">
                       <Calendar size={14} className="text-neutral-500" />
                       <span className="font-black text-white text-sm tabular-nums">{month.label}</span>
+                      {month.unknownEconomics && <span className="text-xs text-neutral-400">Some historical money is unknown.</span>}
                       <span className="text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">
                         {month.trackedDays} {month.trackedDays === 1 ? 'day' : 'days'}
                       </span>
