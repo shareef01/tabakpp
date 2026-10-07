@@ -183,6 +183,9 @@ fun HistoricalInsightsContent(
                                 icon = Icons.Rounded.TrendingUp,
                                 modifier = Modifier.weight(1f)
                             )
+                            if (mtd.unknownEconomics) {
+                                Text("Some historical money is unknown.", style = TabakTypography.bodySmall, color = TextMuted)
+                            }
                             if (mtd.hasBaseline) {
                                 InsightMetricBlock(
                                     value = SmokingCalculator.formatCurrency(mtd.baselineSaved),
@@ -322,6 +325,9 @@ private fun CompletedMonthsList(
                         style = TabakTypography.bodySmall,
                         color = TextMuted
                     )
+                    if (month.unknownEconomics) {
+                        Text("Some historical money is unknown.", style = TabakTypography.bodySmall, color = TextMuted)
+                    }
                     if (month.hasBaseline) {
                         Text(
                             "Saved ${SmokingCalculator.formatCurrency(month.baselineSaved)} vs baseline",
