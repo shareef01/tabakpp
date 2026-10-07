@@ -130,7 +130,7 @@ export function buildJson(snapshot, generatedAt = null) {
  * stamped snapshots when available; otherwise numeric fields are blank (null).
  *
  * @param {object} snapshot - CompleteExportSnapshot
- * @param {number} defaultUnitPrice - fallback price for missing config prices
+ * @param {number} _defaultUnitPrice - retained for call compatibility; historical prices never fall back
  * @returns {string} CSV string
  */
 export function buildCsv(snapshot, _defaultUnitPrice = 0.5) {

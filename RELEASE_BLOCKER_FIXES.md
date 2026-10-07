@@ -10,4 +10,4 @@ Legacy migration uses protocol 3 while retaining schema version 2. A unique fenc
 
 Deploy updated Firestore rules before releasing either client. New claim metadata and markers require these rules. This patch performs no production deployment or historical rewrite. iOS runtime validation is outside this work's scope.
 
-Other medium audit findings remain follow-up work, including lifetime/today projections outside History, reconciliation starvation, App Check enforcement and release policy.
+Other medium audit findings remain follow-up work, including lifetime/today projection issues, reconciliation starvation, App Check enforcement and release policy.
