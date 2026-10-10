@@ -1061,15 +1061,17 @@ export const RegistryService = {
   },
 
   /**
-   * Spark-safe account wipe: delete configs + logs + days + meta in batches,
-   * then user doc. Caller must reauthenticate and Auth.deleteUser afterward.
+   * Spark-safe account wipe: delete every user subcollection in batches, then
+   * the user doc. Firestore does not cascade, so a subcollection missing from
+   * USER_SUBCOLLECTIONS outlives the account. The profile goes LAST: the rules'
+   * financialLocked() reads it to authorize the subcollection deletes.
+   * Caller must reauthenticate and Auth.deleteUser afterward.
    */
   deleteAllUserData: async (uid) => {
     if (!uid) throw new Error('INVALID_REF');
-    await deleteCollectionDocs(uid, 'configs');
-    await deleteCollectionDocs(uid, 'logs');
-    await deleteCollectionDocs(uid, 'days');
-    await deleteCollectionDocs(uid, 'meta');
+    for (const sub of USER_SUBCOLLECTIONS) {
+      await deleteCollectionDocs(uid, sub);
+    }
     await deleteDoc(doc(db, 'users', uid));
   },
 
@@ -1184,6 +1186,11 @@ async function loadConfigsInTransaction(transaction, uid, configIds) {
 /**
  * Paginated collection wipe for Spark (no Admin recursive delete).
  */
+/** Every subcollection under users/{uid} (firestore.rules match blocks). */
+export const USER_SUBCOLLECTIONS = [
+  'configs', 'logs', 'days', 'meta', 'dailyFinancials', 'financialOperations',
+];
+
 async function deleteCollectionDocs(uid, subcollection, pageSize = 400) {
   const colRef = collection(db, 'users', uid, subcollection);
   while (true) {

@@ -17,6 +17,11 @@ private data class FinancialModeDoc(val financialMode: String = "LEGACY")
 /** Schema version marking the dated-daily-document migration. */
 private const val CURRENT_SCHEMA_VERSION = 2
 
+/** Every subcollection under `users/{uid}` (firestore.rules match blocks). */
+internal val USER_SUBCOLLECTIONS = listOf(
+    "configs", "logs", "days", "meta", "dailyFinancials", "financialOperations",
+)
+
 private fun nowTimestamp(): Timestamp {
     val ms = Clock.System.now().toEpochMilliseconds()
     return Timestamp(ms / 1000, ((ms % 1000) * 1_000_000).toInt())
@@ -1305,12 +1310,18 @@ class FirebaseRegistryRepository(
         }
     }
 
+    /**
+     * Firestore does not cascade deletes, so every subcollection under
+     * `users/{uid}` must be listed here (parity with the web
+     * `USER_SUBCOLLECTIONS`). The profile goes LAST: the rules'
+     * `financialLocked()` reads it to authorize the subcollection deletes.
+     */
     override suspend fun deleteAllUserData(uid: String) {
-        deleteCollectionPaged(firestore.collection("users").document(uid).collection("configs"))
-        deleteCollectionPaged(firestore.collection("users").document(uid).collection("logs"))
-        deleteCollectionPaged(firestore.collection("users").document(uid).collection("days"))
-        deleteCollectionPaged(firestore.collection("users").document(uid).collection("meta"))
-        firestore.collection("users").document(uid).delete()
+        val userDoc = firestore.collection("users").document(uid)
+        for (sub in USER_SUBCOLLECTIONS) {
+            deleteCollectionPaged(userDoc.collection(sub))
+        }
+        userDoc.delete()
     }
 
     private suspend fun deleteCollectionPaged(collection: CollectionReference) {
