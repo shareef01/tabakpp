@@ -48,5 +48,7 @@ __pycache__/
 # Local repro artifacts for rules investigation — keep locally, never commit
 *.rules.old.repro
 *.rules.repro.test.js
+# CI evidence bundles (Android instrumentation + emulator logs) — keep locally, never commit
+artifacts_*/
 # CI-only Firebase emulator config (created on-the-fly by workflow)
 firebase.ci.json

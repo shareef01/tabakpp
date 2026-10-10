@@ -261,7 +261,9 @@ jobs:
         uses: softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b # v3
         with:
           tag_name: v${{ github.event.inputs.version }}
-          body_path: .github/release-notes/${{ github.event.inputs.version }}.md
+          # Must match the file the "Verify release notes file exists" gate
+          # checks above (`.github/release-notes/v${VERSION}.md`).
+          body_path: .github/release-notes/v${{ github.event.inputs.version }}.md
           files: |
             dist/tabakpp-${{ github.event.inputs.version }}.apk
             dist/tabakpp-${{ github.event.inputs.version }}.apk.sha256

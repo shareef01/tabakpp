@@ -197,7 +197,7 @@ const AppContent = () => {
     return () => clearInterval(id);
   }, [settings.dayStartHour]);
 
-  const registry = useRegistry(user, today, settings.unitPrice);
+  const registry = useRegistry(user, today, settings.unitPrice, settings.dayStartHour, setToday);
 
   const {
     configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings,

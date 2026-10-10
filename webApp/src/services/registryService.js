@@ -6,6 +6,53 @@ import {
 import { db } from '../firebase';
 import { SmokingCalculator } from '../utils/smokingCalculator';
 import { sanitizeTrackerName } from '../utils/security';
+import { TrustedFinancial } from './trustedFinancial';
+
+/**
+ * OPTION B routing gate (Phase 2 wiring).
+ *
+ * A mutation is routed through the canonical daily ledger ONLY when BOTH hold:
+ *  1. the build enables the ledger (`VITE_OPTION_B_LEDGER=1`); and
+ *  2. the authenticated account's server-side `financialMode === 'OPTION_B'`
+ *     (read live each time — a client cannot set its own mode here; the rules
+ *     enforce the one-way LEGACY→OPTION_B transition).
+ *
+ * Fail-closed: if the profile read throws, the error propagates — we never fall
+ * back to the legacy writer (which would corrupt an Option-B account's ledger).
+ */
+const optionBLedgerActive = async (uid) => {
+  if (!TrustedFinancial.isEnabled()) return false;
+  const snap = await getDoc(doc(db, 'users', uid));
+  return snap.exists() && snap.data()?.financialMode === 'OPTION_B';
+};
+
+/** OPTION B write gate — routing read; see optionBLedgerActive below. */
+
+/**
+ * Mirror of the rules' `financialLocked`: once an account is MIGRATING or
+ * OPTION_B the trusted boundary owns ALL financial state (the Admin SDK
+ * bypasses rules), so the client must not even attempt a protected write —
+ * it would be denied mid-transaction and, for a multi-document transaction,
+ * rely on the rules for atomicity rather than failing deterministically here.
+ * A missing profile is LEGACY (same default as the rules).
+ */
+const financialWritesLocked = async (uid) => {
+  const snap = await getDoc(doc(db, 'users', uid));
+  const mode = snap.exists() ? snap.data()?.financialMode : null;
+  return mode === 'MIGRATING' || mode === 'OPTION_B';
+};
+
+/** Stable FNV-1a hash of a canonical JSON form — deterministic operation ids
+ *  for the same logical edit (idempotent retries), distinct across edits. */
+const stableHash = (value) => {
+  const s = JSON.stringify(value);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+};
 
 /** Doc id always wins over any payload `id` field (Android parity). */
 const withDocId = (d) => ({ ...d.data(), id: d.id });
@@ -25,6 +72,17 @@ const LEGACY_ECO_KEYS = ['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryo
 
 /** Schema version marking the dated-daily-document migration. */
 const CURRENT_SCHEMA_VERSION = 2;
+
+/**
+ * Hard cap on simultaneously-configured trackers (AUD-005).
+ *
+ * `firestore.rules` bounds a day document's `trackerSnapshots` map to 8 entries
+ * (see validSnapshotMap) to stay within Firestore's per-commit rules-evaluation
+ * budget. Since a snapshot entry is stamped for every tracker touched on a day,
+ * a 9th tracker makes the day write fail with permission-denied mid-use. The cap
+ * is enforced here so users are told up-front instead of hitting that wall.
+ */
+export const MAX_TRACKERS = 8;
 
 const normalizeCounts = (counts) => Object.fromEntries(
   Object.entries(counts || {})
@@ -70,9 +128,14 @@ const sanitizeConfigPayload = (data = {}) => {
 /** Absolute lifetime contribution of a counts map (legacy `logs` path only). */
 const contributionFrom = (counts, configs, price) => {
   const fin = SmokingCalculator.calculateDayFinancials(counts || {}, configs, price);
+  const baseline = SmokingCalculator.calculateBaselineSavings(counts || {}, configs, price);
   return {
     saved: fin.saved,
     wasted: fin.wasted,
+    // Baseline savings (item 3 / AUD-007): must move together with `saved`,
+    // which is derived from `target`. Omitting it made the two money metrics
+    // drift apart for every manual-entry / legacy-log write.
+    baselineSaved: baseline.moneySaved,
     smokingUnits: SmokingCalculator.sumSmokingUnits(counts || {}, configs),
   };
 };
@@ -92,6 +155,8 @@ const resolveContribution = (storedCredit, counts, configs, price) => {
       saved: storedCredit.saved,
       wasted: storedCredit.wasted,
       smokingUnits: storedCredit.smokingUnits,
+      // Legacy stamps predate baselineSaved — absent means 0, never a guess.
+      baselineSaved: Number.isFinite(storedCredit.baselineSaved) ? storedCredit.baselineSaved : 0,
     };
   }
   return contributionFrom(counts, configs, price);
@@ -170,7 +235,18 @@ export const RegistryService = {
    * touching a closed/historical day — deleting a tracker must not make past
    * records uninterpretable (item 2); its trackerSnapshot there is untouched.
    */
-  deleteProtocol: async (uid, pid, trackingDate) => {
+  deleteProtocol: async (uid, pid, trackingDate, operationId = null) => {
+    // OPTION_B: the trusted backend deletes the config and drops the tracker from
+    // the CURRENT open day + ledger (historical/closed days keep frozen state).
+    if (await optionBLedgerActive(uid)) {
+      return TrustedFinancial.execute('TRACKER_DELETE', {
+        operationId: operationId || `del_${pid}_${trackingDate || 'current'}`,
+        date: trackingDate, trackerId: pid,
+      });
+    }
+    // MIGRATING (or OPTION_B without the ledger flag): no trusted route — fail
+    // closed deterministically before any read/write.
+    if (await financialWritesLocked(uid)) throw new Error('TRACKER_DELETE_UNSUPPORTED');
     const userRef = doc(db, 'users', uid);
     const configRef = doc(db, 'users', uid, 'configs', pid);
     const dayRef = trackingDate ? doc(db, 'users', uid, 'days', trackingDate) : null;
@@ -271,6 +347,10 @@ export const RegistryService = {
    */
   migrateSmokingUnitsIfNeeded: async (uid, maxRetries = 2) => {
     if (!uid) return;
+    // One-time LEGACY back-fill of `lifetimeAggregates.smokingUnits`. For a
+    // MIGRATING/OPTION_B account the aggregates are server-owned (the trusted
+    // migration function owns this), so skip rather than attempt a denied write.
+    if (await financialWritesLocked(uid)) return;
     const userRef = doc(db, 'users', uid);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -348,6 +428,10 @@ export const RegistryService = {
    */
   migrateLegacyActiveCounts: async (uid) => {
     if (!uid) return;
+    // Legacy activeCounts -> dated `days`/`logs` migration. Server-owned for a
+    // MIGRATING/OPTION_B account (the trusted `migrateAccount` callable owns it),
+    // so skip rather than attempt a denied write.
+    if (await financialWritesLocked(uid)) return;
     const userRef = doc(db, 'users', uid);
 
     let claim = null;
@@ -494,6 +578,23 @@ export const RegistryService = {
     }, onError);
   },
 
+  /**
+   * OPTION B canonical daily ledgers (bounded window, newest first). These are
+   * the AUTHORITATIVE financial projection for a date — read-only here; the
+   * trusted callable is the only writer.
+   */
+  subscribeToLedgers: (uid, onSuccess, onError, maxDays = 400) => {
+    if (!uid) return () => {};
+    const q = query(
+      collection(db, 'users', uid, 'dailyFinancials'),
+      orderBy('date', 'desc'),
+      limit(maxDays),
+    );
+    return onSnapshot(q, (s) => {
+      onSuccess(s.docs.map((d) => ({ ...d.data(), date: d.id })));
+    }, onError);
+  },
+
   /** Bounded window (comfortably covers the 366-day streak lookback) for chart/streak use. */
   subscribeToDays: (uid, onSuccess, onError, maxDays = 400) => {
     if (!uid) return () => {};
@@ -524,10 +625,16 @@ export const RegistryService = {
    * `users/{uid}` — keeping the hottest write path in the app fully
    * decoupled from the profile document (item 12).
    */
-  adjustCounter: async (uid, counterId, delta, trackingDate, defaultUnitPrice = 0.5) => {
+  adjustCounter: async (uid, counterId, delta, trackingDate, defaultUnitPrice = 0.5, operationId = null) => {
     if (!uid || !counterId) throw new Error('INVALID_REF');
     if (!trackingDate || !SmokingCalculator.isValidDate(trackingDate)) {
       throw new Error('INVALID_TRACKING_DATE');
+    }
+    if (await optionBLedgerActive(uid)) {
+      return TrustedFinancial.execute(delta >= 0 ? 'COUNTER_INCREMENT' : 'COUNTER_DECREMENT', {
+        operationId: operationId || `ac_${counterId}_${trackingDate}_${Date.now()}`,
+        date: trackingDate, trackerId: counterId, delta, defaultUnitPrice,
+      });
     }
     const configRef = doc(db, 'users', uid, 'configs', counterId);
     const dayRef = doc(db, 'users', uid, 'days', trackingDate);
@@ -569,8 +676,19 @@ export const RegistryService = {
    * `adjustCounter`). Idempotent: a day already folded just gets the
    * cosmetic `status: 'closed'` flip without re-crediting.
    */
-  closeDay: async (uid, date) => {
+  closeDay: async (uid, date, operationId = null) => {
     if (!uid || !date) throw new Error('INVALID_PAYLOAD');
+    // OPTION_B: the trusted backend owns day closure (source status + canonical
+    // ledger + lifetime fold + receipt, atomically). A direct client write is
+    // denied by `financialLocked`, so this MUST route through the callable.
+    // The operation id is deterministic for the logical action ("close this
+    // date"), so a retried request after a lost response stays idempotent.
+    if (await optionBLedgerActive(uid)) {
+      return TrustedFinancial.execute('DAY_CLOSE', {
+        operationId: operationId || `close_${date}`,
+        date,
+      });
+    }
     const userRef = doc(db, 'users', uid);
     const dayRef = doc(db, 'users', uid, 'days', date);
 
@@ -578,8 +696,12 @@ export const RegistryService = {
       const daySnap = await transaction.get(dayRef);
       if (!daySnap.exists()) throw new Error('NOTHING_TO_ARCHIVE');
       const day = daySnap.data();
-      if (!SmokingCalculator.hasOpenSession(day.counts)) throw new Error('NOTHING_TO_ARCHIVE');
-
+      // A day doc that exists IS a recorded day, even with all-zero counts
+      // (increment-then-decrement, or the last tracker removed after activity).
+      // Closing it folds its stamped credit — which for a zero-count day still
+      // carries the target-based `saved` (AUD-006). Previously a zero-count day
+      // threw here and could never be closed, so its credit never reached
+      // lifetimeAggregates and it stayed `open` forever.
       if (day.foldedIntoLifetime) {
         if (day.status !== 'closed') transaction.update(dayRef, { status: 'closed', closedAt: serverTimestamp() });
         return;
@@ -606,30 +728,48 @@ export const RegistryService = {
    * open at rollover or on "End day" ever being pressed). Safe to call on
    * every app start / tracking-date change; best-effort per day so one
    * failure does not block the rest.
+   *
+   * Batched (AUD-010): drains stale days across pages instead of one fixed
+   * `limit(30)` window, so a large backlog reconciles in a single call. The
+   * query stays single-field (`status == 'open'`), which Firestore auto-indexes
+   * — no composite index is required — and orders by document id ascending
+   * (oldest tracking dates first). `date < currentTrackingDate` is filtered
+   * client-side. Two safety bounds stop without an infinite loop: a page that
+   * makes no forward progress, and a hard page cap so a runaway backlog can
+   * never block the caller.
    */
   reconcileStaleDays: async (uid, currentTrackingDate) => {
     if (!uid || !currentTrackingDate) return;
-    const q = query(
-      collection(db, 'users', uid, 'days'),
-      where('status', '==', 'open'),
-      limit(30)
-    );
-    let snap;
-    try {
-      snap = await getDocs(q);
-    } catch (e) {
-      console.warn('[REGISTRY] reconcileStaleDays query failed', e);
-      return;
-    }
-    const stale = snap.docs.filter((d) => (d.data().date || d.id) < currentTrackingDate);
-    for (const d of stale) {
+    const PAGE_SIZE = 40;
+    const MAX_PAGES = 10; // ≤400 days per call — bounded work, resumable later
+    let lastDoc = null;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      let q = query(
+        collection(db, 'users', uid, 'days'),
+        where('status', '==', 'open'),
+        limit(PAGE_SIZE)
+      );
+      if (lastDoc) q = query(q, startAfter(lastDoc));
+      let snap;
       try {
-        // Sequential is intentional: bounded (<=30), best-effort, one failure
-        // must not abort the rest.
-        await RegistryService.closeDay(uid, d.id);
+        snap = await getDocs(q);
       } catch (e) {
-        console.warn('[REGISTRY] reconcile failed for', d.id, e);
+        console.warn('[REGISTRY] reconcileStaleDays query failed', e);
+        return;
       }
+      if (snap.empty) return;
+      const stale = snap.docs.filter((d) => (d.data().date || d.id) < currentTrackingDate);
+      for (const d of stale) {
+        // Sequential is intentional: bounded, best-effort, one failure must not
+        // abort the rest.
+        try {
+          await RegistryService.closeDay(uid, d.id);
+        } catch (e) {
+          console.warn('[REGISTRY] reconcile failed for', d.id, e);
+        }
+      }
+      lastDoc = snap.docs[snap.docs.length - 1];
+      if (snap.size < PAGE_SIZE) return; // last page reached
     }
   },
 
@@ -640,8 +780,17 @@ export const RegistryService = {
    * contributes 0 to its financials rather than borrowing today's price, a
    * documented, non-fabricating fallback.
    */
-  updateHistoricalDay: async (uid, date, counts) => {
+  updateHistoricalDay: async (uid, date, counts, operationId = null) => {
     if (!uid || !date) throw new Error('INVALID_REF');
+    // OPTION_B: the trusted backend recomputes the canonical ledger + lifetime
+    // delta from the day's FROZEN snapshots (no client-side money).
+    if (await optionBLedgerActive(uid)) {
+      const normalized = normalizeCounts(counts);
+      return TrustedFinancial.execute('HISTORICAL_DAY_UPDATE', {
+        operationId: operationId || `hist_${date}_${stableHash(normalized)}`,
+        date, counts: normalized,
+      });
+    }
     const userRef = doc(db, 'users', uid);
     const dayRef = doc(db, 'users', uid, 'days', date);
     const normalized = normalizeCounts(counts);
@@ -724,11 +873,20 @@ export const RegistryService = {
    * `logs` path — see `updateHistoricalDay` for the dated-document
    * equivalent.
    */
-  updateHistoricalLog: async (uid, logId, counts, unitPrice = 0.5) => {
+  updateHistoricalLog: async (uid, logId, counts, unitPrice = 0.5, operationId = null) => {
     if (!uid || !logId) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const normalized = normalizeCounts(counts);
+
+    if (await optionBLedgerActive(uid)) {
+      const snap = await getDoc(logRef);
+      if (!snap.exists()) throw new Error("LOG_NOT_FOUND");
+      return TrustedFinancial.execute('MANUAL_UPDATE', {
+        operationId: operationId || `upd_${logId}`, date: snap.data().logDate, logId, counts: normalized, defaultUnitPrice: unitPrice,
+      });
+    }
+
     const configIds = await listConfigIds(uid);
 
     return runTransaction(db, async (transaction) => {
@@ -750,7 +908,8 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - oldCredit.saved + newCredit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - oldCredit.wasted + newCredit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldCredit.smokingUnits + newCredit.smokingUnits
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldCredit.smokingUnits + newCredit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0)
       });
     });
   },
@@ -759,10 +918,19 @@ export const RegistryService = {
    * Delete a log, subtracting its financials from lifetime aggregates
    * (Android parity with deleteLog).
    */
-  deleteLog: async (uid, logId, unitPrice = 0.5) => {
+  deleteLog: async (uid, logId, unitPrice = 0.5, operationId = null) => {
     if (!uid || !logId) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', logId);
+
+    if (await optionBLedgerActive(uid)) {
+      const snap = await getDoc(logRef);
+      if (!snap.exists()) return;
+      return TrustedFinancial.execute('MANUAL_DELETE', {
+        operationId: operationId || `del_${logId}`, date: snap.data().logDate, logId,
+      });
+    }
+
     const configIds = await listConfigIds(uid);
 
     return runTransaction(db, async (transaction) => {
@@ -781,7 +949,8 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - credit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - credit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - credit.smokingUnits
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - credit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) - (credit.baselineSaved || 0)
       });
     });
   },
@@ -790,11 +959,18 @@ export const RegistryService = {
    * Restore a previously deleted log and re-credit lifetime aggregates
    * (Android parity with restoreLog).
    */
-  restoreLog: async (uid, log, unitPrice = 0.5) => {
+  restoreLog: async (uid, log, unitPrice = 0.5, operationId = null) => {
     if (!uid || !log?.id) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', log.id);
     const normalizedCounts = normalizeCounts(log.counts || {});
+
+    if (await optionBLedgerActive(uid)) {
+      return TrustedFinancial.execute('MANUAL_RESTORE', {
+        operationId: operationId || `res_${log.id}`, date: log.logDate, logId: log.id, counts: normalizedCounts,
+      });
+    }
+
     const configIds = await listConfigIds(uid);
 
     return runTransaction(db, async (transaction) => {
@@ -814,7 +990,8 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + credit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + credit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) + (credit.baselineSaved || 0)
       });
     });
   },
@@ -826,7 +1003,7 @@ export const RegistryService = {
    * already has a `days/{date}` doc, so multiple backfills for one date keep
    * their own editable/undoable rows in History (unchanged UX).
    */
-  createManualEntry: async (uid, date, counts, unitPrice = 0.5, trackingDay = null) => {
+  createManualEntry: async (uid, date, counts, unitPrice = 0.5, trackingDay = null, operationId = null) => {
     if (!uid || !date) throw new Error("INVALID_PAYLOAD");
     // Full calendar validation, not just the shape — firestore.rules only checks
     // the YYYY-MM-DD pattern, so a regex-only guard here would let 2026-02-31
@@ -846,6 +1023,13 @@ export const RegistryService = {
       ? crypto.randomUUID().replace(/-/g, '').slice(0, 8)
       : Math.random().toString(36).slice(2, 10);
     const logId = `${date}_M${now}_${entropy}`;
+
+    if (await optionBLedgerActive(uid)) {
+      return TrustedFinancial.execute('MANUAL_CREATE', {
+        operationId: operationId || logId, date, logId, counts: normalized, defaultUnitPrice: unitPrice,
+      });
+    }
+
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const configIds = await listConfigIds(uid);
 
@@ -870,7 +1054,8 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + credit.saved,
         'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + credit.wasted,
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits
+        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) + (credit.baselineSaved || 0)
       });
     });
   },
@@ -915,6 +1100,10 @@ export const RegistryService = {
     // Logs (paginated — covers full history, not the bounded 1200-log window)
     const logs = await getAllLogs(uid);
 
+    // Canonical daily financial ledgers (paginated — covers FULL history, NOT the
+    // bounded 400-doc UI listener). Read-only; the trusted callable writes them.
+    const ledgers = await getAllLedgers(uid);
+
     return {
       exportVersion: 1,
       generatedAt: new Date().toISOString(),
@@ -924,6 +1113,8 @@ export const RegistryService = {
       configs,
       days,
       logs,
+      financialMode: profile?.financialMode || 'LEGACY',
+      ledgers,
     };
   },
 };
@@ -1015,13 +1206,37 @@ async function getAllDays(uid, pageSize = 400) {
   while (true) {
     let base = query(
       collection(db, 'users', uid, 'days'),
-      orderBy('dayDate', 'desc'),
+      orderBy('date', 'desc'),
       limit(pageSize)
     );
     if (lastDoc) base = query(base, startAfter(lastDoc));
     const snap = await getDocs(base);
     if (snap.empty) break;
     snap.docs.forEach((d) => out.push(withDocId(d)));
+    lastDoc = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
+  }
+  return out;
+}
+
+/**
+ * Page through every canonical daily ledger for export (full history). A
+ * bounded UI listener is NOT a substitute — export must carry the complete
+ * requested scope, so this reads all documents via keyset pagination.
+ */
+async function getAllLedgers(uid, pageSize = 400) {
+  const out = [];
+  let lastDoc = null;
+  while (true) {
+    let base = query(
+      collection(db, 'users', uid, 'dailyFinancials'),
+      orderBy('date', 'desc'),
+      limit(pageSize)
+    );
+    if (lastDoc) base = query(base, startAfter(lastDoc));
+    const snap = await getDocs(base);
+    if (snap.empty) break;
+    snap.docs.forEach((d) => out.push({ ...d.data(), date: d.id }));
     lastDoc = snap.docs[snap.docs.length - 1];
     if (snap.size < pageSize) break;
   }

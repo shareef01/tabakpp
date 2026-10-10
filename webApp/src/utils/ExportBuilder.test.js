@@ -201,3 +201,87 @@ describe('ExportBuilder.buildCsv', () => {
     expect(lines[1]).toContain("'@SUM(1,2)");
   });
 });
+
+describe('ExportBuilder — canonical OPTION_B financials (Task A)', () => {
+  const CIG = { id: 'cig', name: 'Cigarette', type: 'CIGARETTE', limit: 10, pricePerUnit: 1, order: 0, isFinanciallyTracked: true, baseline: 15 };
+  const DATE = '2026-10-01';
+  const ledger = (over = {}) => ({
+    date: DATE,
+    canonicalCredit: { wasted: 6, saved: 4, smokingUnits: 6, baselineSaved: 9 },
+    unresolvedComponents: { spent: false, saved: false, baselineSaved: false, smokingUnits: false },
+    eligible: true, ambiguous: false, conflicting: [], foldedIntoLifetime: false,
+    ...over,
+  });
+  const snapshot = (over = {}) => ({
+    exportVersion: 1,
+    application: { name: 'Tabakpp' },
+    profile: { name: 'U', unitPrice: 1, lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 } },
+    profileMeta: { avatar: null },
+    configs: [CIG],
+    days: [{ date: DATE, counts: { cig: 3 }, trackerSnapshots: { cig: { target: 10, baseline: 15, unitPrice: 1, type: 'CIGARETTE' } }, status: 'open' }],
+    logs: [
+      { id: 'A', logDate: DATE, counts: { cig: 2 }, origin: 'MANUAL_ENTRY' },
+      { id: 'B', logDate: DATE, counts: { cig: 1 }, origin: 'MANUAL_ENTRY' },
+    ],
+    financialMode: 'OPTION_B',
+    ledgers: [ledger()],
+    ...over,
+  });
+
+  it('JSON: the date-level canonical credit appears once, preserving 3 source records', () => {
+    const doc = JSON.parse(buildJson(snapshot()));
+    expect(doc.days).toHaveLength(1);
+    expect(doc.logs).toHaveLength(2); // original manual records preserved
+    expect(doc.financialMode).toBe('OPTION_B');
+    expect(doc.dailyFinancials).toHaveLength(1);
+    expect(doc.dailyFinancials[0]).toMatchObject({
+      date: DATE, source: 'OPTION_B_CANONICAL_SOURCE', spent: 6, saved: 4, baselineSaved: 9, smokingUnits: 6,
+    });
+    expect(doc.financialSummary).toMatchObject({ spent: 6, saved: 4, baselineSaved: 9, smokingUnits: 6, complete: true });
+  });
+
+  it('CSV: activity rows unchanged + a companion daily_financial_summary section (credit once)', () => {
+    const csv = buildCsv(snapshot(), 1);
+    const lines = csv.split('\n');
+    expect(lines.filter((l) => l.includes('manual_entry')).length).toBe(2);
+    expect(lines.filter((l) => /^2026-10-01,day,/.test(l)).length).toBe(1);
+    const i = lines.indexOf('# daily_financial_summary');
+    expect(i).toBeGreaterThan(-1);
+    const row = lines[i + 2];
+    expect(row.startsWith(`${DATE},OPTION_B_CANONICAL_SOURCE,6.0,4.0,9.0,6.0`)).toBe(true);
+    expect(lines.filter((l) => l === row).length).toBe(1); // not repeated per manual log
+  });
+
+  it('LEGACY: no canonical section is added (backward compatible)', () => {
+    const doc = JSON.parse(buildJson(snapshot({ financialMode: 'LEGACY', ledgers: [] })));
+    expect(doc.dailyFinancials).toBeUndefined();
+    expect(buildCsv(snapshot({ financialMode: 'LEGACY', ledgers: [] }), 1)).not.toContain('daily_financial_summary');
+  });
+
+  it('missing ledger with source activity ⇒ unavailable (blank), NOT a fabricated zero', () => {
+    const doc = JSON.parse(buildJson(snapshot({ ledgers: [] })));
+    const d = doc.dailyFinancials.find((x) => x.date === DATE);
+    expect(d.source).toBe('MISSING_CANONICAL_LEDGER');
+    expect(d.spent).toBeNull();
+    expect(d.saved).toBeNull();
+    expect(doc.financialSummary.complete).toBe(false);
+  });
+
+  it('verified zero stays 0; unresolved savings stay flagged (never zero-as-known)', () => {
+    const zeroDoc = JSON.parse(buildJson(snapshot({
+      ledgers: [ledger({ canonicalCredit: { wasted: 0, saved: 0, smokingUnits: 0, baselineSaved: 0 } })],
+    })));
+    expect(zeroDoc.dailyFinancials[0].saved).toBe(0);
+
+    const unDoc = JSON.parse(buildJson(snapshot({
+      ledgers: [ledger({
+        canonicalCredit: { wasted: 6, saved: 0, smokingUnits: 6, baselineSaved: 0 },
+        unresolvedComponents: { spent: false, saved: true, baselineSaved: true, smokingUnits: false },
+        ambiguous: true,
+      })],
+    })));
+    expect(unDoc.dailyFinancials[0].saved).toBe(0);
+    expect(unDoc.dailyFinancials[0].unresolvedComponents.saved).toBe(true);
+    expect(unDoc.financialSummary.complete).toBe(false);
+  });
+});

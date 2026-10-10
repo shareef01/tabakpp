@@ -8,6 +8,49 @@
  *              with stamped historical economics where available.
  */
 
+import { resolveDateFinancial, aggregateFinancials } from '../services/financialReadModel';
+
+/**
+ * Date-level canonical financial projection for an export (Task A).
+ *
+ * For OPTION_B / MIGRATING, each date's authoritative money comes from the
+ * canonical ledger — NEVER recomputed per manual log, and never a sum of
+ * `days.aggregateCredit + logs.aggregateCredit + dailyFinancials`. `saved`/`spent`
+ * are `null` (unavailable) rather than a fabricated `0`; a verified zero stays
+ * `0`; unresolved components are carried through.
+ */
+export function buildDailyFinancials(snapshot) {
+  const mode = snapshot.financialMode || 'LEGACY';
+  if (mode === 'LEGACY') return { mode, dates: [], summary: null };
+  const byDate = Object.fromEntries((snapshot.ledgers || []).map((l) => [l.date, l]));
+  const dayDates = new Set((snapshot.days || []).map((d) => d.date));
+  const logDates = new Set((snapshot.logs || []).map((l) => l.logDate));
+  const resolve = (date) => resolveDateFinancial({
+    financialMode: mode,
+    ledger: byDate[date] || null,
+    hasSourceActivity: dayDates.has(date) || logDates.has(date),
+  });
+  const dates = [...new Set([...Object.keys(byDate), ...dayDates, ...logDates])].sort();
+  const rows = dates.map((date) => {
+    const r = resolve(date);
+    return {
+      date,
+      source: r.source,
+      spent: r.available ? r.canonical.spent : null,
+      saved: r.available ? r.canonical.saved : null,
+      baselineSaved: r.available ? r.canonical.baselineSaved : null,
+      smokingUnits: r.available ? r.canonical.smokingUnits : null,
+      unresolvedComponents: r.unresolved || null,
+      ambiguous: !!r.ambiguous,
+      conflicting: (byDate[date] && byDate[date].conflicting) || [],
+      eligible: r.eligible,
+      available: r.available,
+    };
+  });
+  const summary = aggregateFinancials(dates.map(resolve));
+  return { mode, dates: rows, summary };
+}
+
 
 /**
  * Build a deterministic JSON blob from a complete export snapshot.
@@ -108,9 +151,21 @@ export function buildJson(snapshot, generatedAt = null) {
     configs: orderedConfigs,
     days: orderedDays,
     logs: orderedLogs,
+    ...canonicalFinancialSection(snapshot),
   };
 
   return JSON.stringify(exportDoc, null, 2);
+}
+
+/** @returns {object} date-level canonical financial fields (or {} for LEGACY). */
+function canonicalFinancialSection(snapshot) {
+  const fin = buildDailyFinancials(snapshot);
+  if (fin.mode === 'LEGACY') return {};
+  return {
+    financialMode: fin.mode,
+    dailyFinancials: fin.dates,
+    financialSummary: fin.summary ? { ...fin.summary, mode: fin.mode } : null,
+  };
 }
 
 /**
@@ -224,6 +279,34 @@ export function buildCsv(snapshot, defaultUnitPrice = 0.5) {
       csvField(row.status),
     ];
     lines.push(csvRow.join(','));
+  }
+
+  // Backward-compatible companion section: the DATE-LEVEL canonical financial
+  // contribution (Task A). Appended after the activity rows so existing row
+  // parsing is unchanged; a missing ledger exports `null` (blank), never a
+  // fabricated zero, and unresolved components are carried explicitly.
+  const fin = buildDailyFinancials(snapshot);
+  if (fin.mode !== 'LEGACY') {
+    lines.push('');
+    lines.push('# daily_financial_summary');
+    lines.push([
+      'date', 'source', 'spent', 'saved', 'baseline_saved', 'smoking_units',
+      'ambiguous', 'unresolved_components', 'conflicting', 'eligible',
+    ].join(','));
+    for (const d of fin.dates) {
+      lines.push([
+        csvField(d.date),
+        csvField(d.source),
+        csvField(d.spent),
+        csvField(d.saved),
+        csvField(d.baselineSaved),
+        csvField(d.smokingUnits),
+        csvField(d.ambiguous),
+        csvField(d.unresolvedComponents ? JSON.stringify(d.unresolvedComponents) : null),
+        csvField((d.conflicting || []).join('|')),
+        csvField(d.eligible),
+      ].join(','));
+    }
   }
 
   return lines.join('\n');

@@ -68,8 +68,16 @@
     "auth": {
       "port": 9099
     },
+    "functions": {
+      "port": 5001
+    },
     "ui": {
       "enabled": false
     }
+  },
+  "functions": {
+    "source": "functions",
+    "codebase": "default",
+    "runtime": "nodejs20"
   }
 }

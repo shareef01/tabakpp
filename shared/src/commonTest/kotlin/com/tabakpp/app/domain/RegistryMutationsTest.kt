@@ -66,6 +66,31 @@ class RegistryMutationsTest {
     }
 
     @Test
+    fun contribution_includesBaselineSaved() {
+        // AUD-007: baseline savings must advance together with `saved` on the
+        // manual-entry / legacy-log write paths.
+        val withBaseline = TrackerConfig(
+            "cig", "Cigarette", 10, 1, TrackerType.CIGARETTE,
+            pricePerUnit = 1.0, baseline = 20
+        )
+        val cfg = listOf(withBaseline)
+        val credit = RegistryMutations.contribution(mapOf("cig" to 2.0), cfg, price)
+        assertEquals(8.0, credit.saved, 1e-9)          // (10 - 2) * 1
+        assertEquals(2.0, credit.wasted, 1e-9)         // 2 * 1
+        assertEquals(18.0, credit.baselineSaved, 1e-9) // (20 - 2) * 1
+
+        val start = LifetimeAggregates(50.0, 50.0, 50.0, 50.0)
+        val credited = RegistryMutations.credit(start, mapOf("cig" to 2.0), cfg, price)
+        assertEquals(68.0, credited.baselineSaved, 1e-9)
+        val debited = RegistryMutations.debit(credited, mapOf("cig" to 2.0), cfg, price)
+        assertEquals(50.0, debited.baselineSaved, 1e-9)
+        val replaced = RegistryMutations.replace(
+            credited, mapOf("cig" to 2.0), mapOf("cig" to 5.0), cfg, price
+        )
+        assertEquals(65.0, replaced.baselineSaved, 1e-9) // 68 - 18 + 15
+    }
+
+    @Test
     fun debit_subtractsLogFinancials() {
         // fin{cig:6}: saved 4 wasted 6 units 6
         val agg = RegistryMutations.debit(

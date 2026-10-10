@@ -88,3 +88,34 @@ describe('MetricBanner tracking streak', () => {
     expect(screen.getByText('No target')).toBeTruthy();
   });
 });
+
+describe('MetricBanner — canonical OPTION_B financial rendering (Task B)', () => {
+  it('renders the authoritative canonical spend (€6.00)', () => {
+    render(<MetricBanner
+      m={makeMetrics({ spentToday: 6, todayAvailable: true, financialSource: 'OPTION_B_CANONICAL_SOURCE' })}
+      onEndDay={vi.fn()}
+    />);
+    expect(screen.getByText('6,00 €')).toBeTruthy();
+  });
+
+  it('renders a VERIFIED €0.00 (a known zero is not "unavailable")', () => {
+    render(<MetricBanner m={makeMetrics({ spentToday: 0, todayAvailable: true })} onEndDay={vi.fn()} />);
+    expect(screen.getByText('0,00 €')).toBeTruthy();
+    expect(screen.queryByText('Unavailable')).toBeNull();
+  });
+
+  it('renders an UNAVAILABLE state for a missing canonical ledger — never a fabricated €0.00', () => {
+    render(<MetricBanner
+      m={makeMetrics({ spentToday: null, todayAvailable: false, financialSource: 'MISSING_CANONICAL_LEDGER' })}
+      onEndDay={vi.fn()}
+    />);
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(screen.getByText('Unavailable')).toBeTruthy();
+  });
+
+  it('never renders "null" or "NaN" for an unavailable canonical ledger', () => {
+    render(<MetricBanner m={makeMetrics({ spentToday: null, todayAvailable: false })} onEndDay={vi.fn()} />);
+    expect(screen.queryByText(/null/)).toBeNull();
+    expect(screen.queryByText(/NaN/)).toBeNull();
+  });
+});

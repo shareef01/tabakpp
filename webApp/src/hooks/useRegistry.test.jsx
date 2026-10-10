@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { RegistryService } from '../services/registryService';
+import { SmokingCalculator } from '../utils/smokingCalculator';
 import { useRegistry } from './useRegistry';
 
 // Capture the subscription callbacks so tests can drive Firestore snapshots
@@ -14,7 +15,8 @@ const cap = vi.hoisted(() => ({
   daysCb: { current: null },
   dayCb: { current: null },
   avatarCb: { current: null },
-  unsub: { profile: vi.fn(), configs: vi.fn(), logs: vi.fn(), days: vi.fn(), day: vi.fn(), avatar: vi.fn() },
+  ledgersCb: { current: null },
+  unsub: { profile: vi.fn(), configs: vi.fn(), logs: vi.fn(), days: vi.fn(), day: vi.fn(), avatar: vi.fn(), ledgers: vi.fn() },
 }));
 
 vi.mock('firebase/firestore', () => ({
@@ -27,6 +29,7 @@ vi.mock('firebase/firestore', () => ({
 }));
 
 vi.mock('../services/registryService', () => ({
+  MAX_TRACKERS: 8,
   RegistryService: {
     subscribeToConfigs: (_uid, cb, errCb) => {
       cap.configsCb.current = cb;
@@ -50,6 +53,10 @@ vi.mock('../services/registryService', () => ({
     subscribeToProfileExtra: (_uid, cb) => {
       cap.avatarCb.current = cb;
       return cap.unsub.avatar;
+    },
+    subscribeToLedgers: (_uid, cb) => {
+      cap.ledgersCb.current = cb;
+      return cap.unsub.ledgers;
     },
     reconcileStaleDays: vi.fn(),
     adjustCounter: vi.fn(),
@@ -79,7 +86,7 @@ const defaultProfile = (over = {}) => ({
 const dayData = (counts = {}, over = {}) => ({ date: TODAY, counts, trackerSnapshots: {}, status: 'open', ...over });
 
 // Mount the hook and push an initial profile/configs/logs/day snapshot through.
-const mountHydrated = ({ user = USER, profile = defaultProfile(), configs = [CIG], logs = [], day = dayData() } = {}) => {
+const mountHydrated = ({ user = USER, profile = defaultProfile(), configs = [CIG], logs = [], day = dayData(), ledgers = [] } = {}) => {
   const view = renderHook((props) => useRegistry(props.user, TODAY, 0.5), { initialProps: { user } });
   if (user) {
     act(() => cap.profileCb.current(profileSnap(profile)));
@@ -88,6 +95,7 @@ const mountHydrated = ({ user = USER, profile = defaultProfile(), configs = [CIG
     act(() => cap.daysCb.current([]));
     act(() => cap.dayCb.current(day));
     act(() => cap.avatarCb.current({ avatar: null }));
+    act(() => cap.ledgersCb.current(ledgers));
   }
   return view;
 };
@@ -99,6 +107,7 @@ beforeEach(() => {
   cap.daysCb.current = null;
   cap.dayCb.current = null;
   cap.avatarCb.current = null;
+  cap.ledgersCb.current = null;
   vi.clearAllMocks();
   // Re-establish a resolving default for every action spy (clearAllMocks keeps
   // implementations, but individual tests may override closeDay).
@@ -138,7 +147,7 @@ describe('useRegistry counter actions', () => {
   it('increments through RegistryService with the tracking date and unit price', async () => {
     const { result } = mountHydrated();
     await act(async () => { await result.current.increment('cig'); });
-    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', 1, TODAY, 0.5);
+    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', 1, TODAY, 0.5, expect.any(String));
   });
 
   it('updates the count optimistically before Firestore resolves', async () => {
@@ -156,7 +165,7 @@ describe('useRegistry counter actions', () => {
       release();
       await pending;
     });
-    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', 1, TODAY, 0.5);
+    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', 1, TODAY, 0.5, expect.any(String));
   });
 
   it('decrements only when the live count is above zero', async () => {
@@ -167,7 +176,7 @@ describe('useRegistry counter actions', () => {
 
     act(() => cap.dayCb.current(dayData({ cig: 2 })));
     await act(async () => { await result.current.decrement('cig'); });
-    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', -1, TODAY, 0.5);
+    expect(RegistryService.adjustCounter).toHaveBeenCalledWith('u1', 'cig', -1, TODAY, 0.5, expect.any(String));
   });
 
   it('rolls back an optimistic increment when the write fails', async () => {
@@ -523,5 +532,198 @@ describe('H-01 Concurrency & Day Rollover Invariants', () => {
     });
     expect(failed).toBe(true);
     expect(result.current.metrics.activeCounts.cig).toBe(5);
+  });
+});
+
+describe('useRegistry tracking-date boundary (AUD-011)', () => {
+  it('resolves the write date at mutation time and notifies on a rollover', async () => {
+    const onRollover = vi.fn();
+    const spy = vi.spyOn(SmokingCalculator, 'getTrackingDate').mockReturnValue('2026-07-21');
+    try {
+      const { result } = renderHook(() => useRegistry(USER, '2026-07-20', 0.5, 6, onRollover));
+      act(() => cap.profileCb.current(profileSnap(defaultProfile())));
+      act(() => cap.configsCb.current([CIG]));
+      act(() => cap.logsCb.current([]));
+      act(() => cap.daysCb.current([]));
+      act(() => cap.dayCb.current(dayData({ cig: 2 })));
+      act(() => cap.avatarCb.current({ avatar: null }));
+
+      await act(async () => { await result.current.increment('cig'); });
+
+      // The injected `today` (2026-07-20) is stale by one tick; the write must
+      // land on the freshly resolved tracking date.
+      expect(RegistryService.adjustCounter).toHaveBeenLastCalledWith('u1', 'cig', 1, '2026-07-21', 0.5, expect.any(String));
+      expect(onRollover).toHaveBeenCalledWith('2026-07-21');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('keeps the injected today when no rollover handler is supplied', async () => {
+    const spy = vi.spyOn(SmokingCalculator, 'getTrackingDate').mockReturnValue('2099-01-01');
+    try {
+      const { result } = mountHydrated();
+      await act(async () => { await result.current.increment('cig'); });
+      expect(RegistryService.adjustCounter).toHaveBeenLastCalledWith('u1', 'cig', 1, TODAY, 0.5, expect.any(String));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('useRegistry effective-today state model (AUD-001)', () => {
+  it('keeps a delivered zero authoritative over a stale days-window copy', () => {
+    // The live overlay delivered {cig: 0} (a real, loaded zero). A momentarily
+    // stale `days` window showing {cig: 5} for the same date must NOT resurrect
+    // the old value.
+    const { result } = mountHydrated({ day: dayData({ cig: 0 }) });
+    expect(result.current.metrics.activeCounts).toEqual({ cig: 0 });
+
+    act(() => cap.daysCb.current([{ date: TODAY, counts: { cig: 5 }, status: 'open' }]));
+
+    expect(result.current.metrics.activeCounts).toEqual({ cig: 0 });
+    expect(result.current.metrics.count).toBe(0);
+  });
+});
+
+describe('useRegistry tracker limit (AUD-005)', () => {
+  const eight = Array.from({ length: 8 }, (_, i) => ({ ...CIG, id: `c${i}`, order: i }));
+
+  it('refuses to add a 9th tracker and surfaces a message', async () => {
+    const { result } = mountHydrated({ configs: eight });
+    await act(async () => {
+      await result.current.addProtocol({ name: 'Ninth', limit: 5, type: 'SIMPLE' });
+    });
+    expect(RegistryService.addProtocol).not.toHaveBeenCalled();
+    expect(result.current.registryError).toMatch(/up to 8 counters/);
+  });
+
+  it('allows adding a tracker while below the cap', async () => {
+    const { result } = mountHydrated({ configs: [CIG] });
+    await act(async () => {
+      await result.current.addProtocol({ name: 'Second', limit: 5, type: 'SIMPLE' });
+    });
+    expect(RegistryService.addProtocol).toHaveBeenCalledTimes(1);
+  });
+});
+
+const LEDGER = (over = {}) => ({
+  date: TODAY,
+  canonicalCredit: { wasted: 6, saved: 4, smokingUnits: 6, baselineSaved: 9 },
+  unresolvedComponents: { spent: false, saved: false, baselineSaved: false, smokingUnits: false },
+  eligible: true, ambiguous: false, foldedIntoLifetime: false,
+  ...over,
+});
+
+describe('useRegistry — OPTION_B canonical financial integration', () => {
+  it('canonical 3+2+1: metrics come from the ledger (spent €6, saved €4, baseline €9, units 6)', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      day: dayData({ cig: 3 }),
+      logs: [
+        { id: 'A', logDate: TODAY, counts: { cig: 2 }, origin: 'MANUAL_ENTRY' },
+        { id: 'B', logDate: TODAY, counts: { cig: 1 }, origin: 'MANUAL_ENTRY' },
+      ],
+      ledgers: [LEDGER()],
+    });
+    expect(result.current.financialMode).toBe('OPTION_B');
+    expect(result.current.metrics.financialSource).toBe('OPTION_B_CANONICAL_SOURCE');
+    expect(result.current.metrics.spentToday).toBe(6);
+    expect(result.current.metrics.saved).toBe(4);
+    expect(result.current.metrics.baselineSavedToday).toBe(9);
+    expect(result.current.metrics.smokingUnitsToday).toBe(6);
+    expect(result.current.canonical.totals.saved).toBe(4);
+    expect(result.current.canonical.totals.complete).toBe(true);
+  });
+
+  it('LEGACY account: no canonical override (established behaviour preserved)', () => {
+    const { result } = mountHydrated({ day: dayData({ cig: 3 }), ledgers: [LEDGER()] });
+    expect(result.current.financialMode).toBe('LEGACY');
+    expect(result.current.canonical).toBeNull();
+    expect(result.current.metrics.financialSource).toBeUndefined();
+  });
+
+  it('OPTION_B + source activity but NO ledger ⇒ unavailable (never legacy fallback, never zero)', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      logs: [{ id: 'A', logDate: TODAY, counts: { cig: 1 }, origin: 'MANUAL_ENTRY' }],
+      ledgers: [],
+    });
+    expect(result.current.metrics.financialSource).toBe('MISSING_CANONICAL_LEDGER');
+    expect(result.current.metrics.todayAvailable).toBe(false);
+    expect(result.current.metrics.saved).toBeNull();
+    expect(result.current.metrics.spentToday).toBeNull();
+  });
+
+  it('OPTION_B, ledger still LOADING ⇒ no canonical/legacy financial publish', () => {
+    const view = renderHook((props) => useRegistry(props.user, TODAY, 0.5), { initialProps: { user: USER } });
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ financialMode: 'OPTION_B' }))));
+    act(() => cap.configsCb.current([CIG]));
+    act(() => cap.logsCb.current([]));
+    act(() => cap.daysCb.current([]));
+    act(() => cap.dayCb.current(dayData({ cig: 3 })));
+    // cap.ledgersCb is NOT invoked → ledgersLoaded stays false
+    expect(view.result.current.canonical).toBeNull();
+    expect(view.result.current.metrics.financialSource).toBeUndefined();
+  });
+
+  it('unresolved savings: spending stays known, savings are flagged (not a confident zero)', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      logs: [{ id: 'A', logDate: TODAY, counts: { cig: 6 }, origin: 'MANUAL_ENTRY' }],
+      ledgers: [LEDGER({
+        canonicalCredit: { wasted: 6, saved: 0, smokingUnits: 6, baselineSaved: 0 },
+        unresolvedComponents: { spent: false, saved: true, baselineSaved: true, smokingUnits: false },
+        ambiguous: true,
+      })],
+    });
+    expect(result.current.metrics.spentToday).toBe(6);
+    expect(result.current.metrics.saved).toBe(0);
+    expect(result.current.metrics.todayUnresolved.saved).toBe(true);
+    expect(result.current.canonical.totals.complete).toBe(false);
+  });
+
+  it('empty OPTION_B date (no activity, no ledger) ⇒ genuine zero, not unavailable', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      logs: [],
+      ledgers: [],
+    });
+    expect(result.current.metrics.financialSource).toBe('NO_FINANCIAL_ACTIVITY');
+    expect(result.current.metrics.saved).toBe(0);
+  });
+});
+
+describe('useRegistry — lifetime accounting + MIGRATING ownership (Task C/E)', () => {
+  const todayLog = [{ id: 'A', logDate: TODAY, counts: { cig: 6 }, origin: 'MANUAL_ENTRY' }];
+
+  it('Case 1 (unfolded): the current canonical credit is added to lifetime exactly once', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B', lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 } }),
+      logs: todayLog,
+      ledgers: [LEDGER({ foldedIntoLifetime: false })],
+    });
+    expect(result.current.metrics.savedLifetime).toBe(4);
+  });
+
+  it('Case 2 (already folded): the same credit must NOT be added a second time', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B', lifetimeAggregates: { saved: 4, wasted: 6, smokingUnits: 6, baselineSaved: 9 } }),
+      logs: todayLog,
+      ledgers: [LEDGER({ foldedIntoLifetime: true })],
+    });
+    expect(result.current.metrics.savedLifetime).toBe(4); // not 8
+  });
+
+  it('MIGRATING: a date WITH a ledger is canonical (today); a date WITHOUT is still legacy', () => {
+    const other = '2026-07-19';
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'MIGRATING' }),
+      logs: todayLog,
+      ledgers: [LEDGER()],
+    });
+    expect(result.current.financialMode).toBe('MIGRATING');
+    expect(result.current.metrics.financialSource).toBe('OPTION_B_CANONICAL_SOURCE');
+    expect(result.current.canonical.resolve(other).source).toBe('LEGACY_FINANCIAL_SOURCE');
   });
 });

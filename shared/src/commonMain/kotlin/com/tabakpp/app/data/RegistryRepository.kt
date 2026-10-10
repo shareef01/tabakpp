@@ -1,9 +1,21 @@
 package com.tabakpp.app.data
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 const val LIVE_LOG_QUERY_LIMIT = 1_200L
 const val LIVE_DAYS_QUERY_LIMIT = 400L
+
+/**
+ * Hard cap on simultaneously-configured trackers (AUD-005).
+ *
+ * `firestore.rules` bounds a day document's `trackerSnapshots` map to 8 entries
+ * (validSnapshotMap) to stay within Firestore's per-commit rules-evaluation
+ * budget. A snapshot entry is stamped for every tracker touched on a day, so a
+ * 9th tracker would make the day write fail with permission-denied mid-use.
+ * Enforced in the client so the user is told up-front.
+ */
+const val MAX_TRACKERS = 8
 
 interface RegistryRepository {
     fun subscribeToUserProfile(uid: String): Flow<UserProfile?>
@@ -14,6 +26,12 @@ interface RegistryRepository {
     fun subscribeToDay(uid: String, date: String): Flow<DayDocument?>
     /** Bounded window (comfortably covers the 366-day streak lookback) for chart/streak use. */
     fun subscribeToDays(uid: String): Flow<List<DayDocument>>
+
+    /**
+     * Canonical OPTION B daily ledgers (bounded recent window). A bounded
+     * subscription is NOT complete account history — see [getFinancialMode].
+     */
+    fun subscribeToLedgers(uid: String): Flow<List<DailyFinancialRecord>> = flowOf(emptyList())
     /** `users/{uid}/meta/profile` (item 12 — hot/profile split): avatar only. */
     fun subscribeToProfileExtra(uid: String): Flow<ProfileExtra?>
 
@@ -68,6 +86,63 @@ interface RegistryRepository {
     suspend fun deleteLog(uid: String, logId: String)
     suspend fun restoreLog(uid: String, log: LogEntry)
     suspend fun updateHistoricalLog(uid: String, logId: String, counts: Map<String, Double>)
+
+    /**
+     * OPTION B atomic ledger write (local, parity with web `DailyLedger`). Creates
+     * the manual-log SOURCE document AND folds its consumption into the date's
+     * canonical `dailyFinancials/{date}` ledger AND (when the date is already
+     * folded) the `lifetimeAggregates` projection AND the idempotency receipt —
+     * all in ONE transaction. `operationId` dedupes retries of the same logical
+     * action. Not wired into production flows; activation is gated.
+     */
+    suspend fun createManualLogAtomic(
+        uid: String,
+        logId: String,
+        date: String,
+        counts: Map<String, Double>,
+        snapshots: Map<String, TrackerSnapshot>,
+        defaultUnitPrice: Double,
+        operationId: String
+    )
+
+    /** OPTION B — edit a manual log; the ledger receives the exact source delta. */
+    suspend fun updateManualLogAtomic(
+        uid: String,
+        logId: String,
+        date: String,
+        counts: Map<String, Double>,
+        snapshots: Map<String, TrackerSnapshot>,
+        defaultUnitPrice: Double,
+        operationId: String
+    )
+
+    /** OPTION B — delete a manual log; reverses its consumption in the ledger. */
+    suspend fun deleteManualLogAtomic(uid: String, logId: String, date: String, defaultUnitPrice: Double, operationId: String)
+
+    /** OPTION B — restore a deleted manual log (idempotent when already present). */
+    suspend fun restoreManualLogAtomic(uid: String, log: LogEntry, defaultUnitPrice: Double, operationId: String)
+
+    /** OPTION B — counter tap; writes the day document AND the date's ledger atomically. */
+    suspend fun adjustCounterAtomic(
+        uid: String,
+        date: String,
+        trackerId: String,
+        delta: Double,
+        snapshots: Map<String, TrackerSnapshot>,
+        defaultUnitPrice: Double,
+        operationId: String
+    )
+
+    /** OPTION B — fold a date's canonical credit into lifetimeAggregates (idempotent). */
+    suspend fun foldLedgerIntoLifetime(uid: String, date: String)
+
+    /**
+     * The account's server-side financial write mode ('LEGACY' default).
+     *
+     * Default implementation returns LEGACY so non-Firebase fakes stay valid;
+     * FirebaseRegistryRepository overrides it to read `users/{uid}.financialMode`.
+     */
+    suspend fun getFinancialMode(uid: String): String = "LEGACY"
     suspend fun addConfig(uid: String, config: TrackerConfig)
     suspend fun updateConfig(uid: String, config: TrackerConfig)
     /** `trackingDate` (optional) additionally strips this tracker out of today's still-open day, never a closed one. */

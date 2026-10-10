@@ -8,6 +8,10 @@ import { SmokingCalculator } from '../utils/smokingCalculator';
 // math. Documents live in a flat Map keyed by slash-joined path.
 const fake = vi.hoisted(() => {
   const store = new Map();
+  // Records every orderBy(field, dir) the service issues, so tests can assert
+  // which field a query orders by (AUD-002: export must order `days` by the
+  // real `date` field, not a non-existent one that silently yields 0 docs).
+  const orderByCalls = [];
 
   const snap = (path) => {
     const has = store.has(path);
@@ -60,11 +64,11 @@ const fake = vi.hoisted(() => {
     return out;
   };
 
-  return { store, snap, applyUpdate, collectionDocs };
+  return { store, snap, applyUpdate, collectionDocs, orderByCalls };
 });
 
 vi.mock('firebase/firestore', () => {
-  const { store, snap, applyUpdate, collectionDocs } = fake;
+  const { store, snap, applyUpdate, collectionDocs, orderByCalls } = fake;
 
   const doc = (first, ...rest) => {
     if (rest.length === 0 && first && first.__collection) {
@@ -75,7 +79,7 @@ vi.mock('firebase/firestore', () => {
   };
   const collection = (_db, ...segs) => ({ __collection: true, path: segs.join('/') });
   const query = (ref) => ref;
-  const orderBy = () => ({ __c: 'orderBy' });
+  const orderBy = (field, dir) => { orderByCalls.push([field, dir]); return { __c: 'orderBy', field, dir }; };
   const where = () => ({ __c: 'where' });
   const limit = () => ({ __c: 'limit' });
   const startAfter = () => ({ __c: 'startAfter' });
@@ -191,6 +195,17 @@ describe('RegistryService.adjustCounter (dated daily-document model — item 1 P
     expect(dayDoc(DATE).counts.cig).toBe(0);
   });
 
+  it('keeps a zero-valued key after increment-then-decrement (a loaded zero is never an empty map)', async () => {
+    // This is what makes the AUD-001 overlay fallback safe: a genuine zero is
+    // stored as {cig: 0} (key present), so the client overlay for today is
+    // non-empty and authoritative — it can never be mistaken for "not loaded".
+    await RegistryService.adjustCounter(UID, 'cig', 1, DATE, 0.5);
+    await RegistryService.adjustCounter(UID, 'cig', -1, DATE, 0.5);
+    const counts = dayDoc(DATE).counts;
+    expect(counts).toEqual({ cig: 0 });
+    expect(Object.keys(counts).length).toBeGreaterThan(0);
+  });
+
   it('never writes to users/{uid} — the hot path is fully decoupled from the profile (item 12)', async () => {
     const before = { ...userDoc() };
     await RegistryService.adjustCounter(UID, 'cig', 1, DATE, 0.5);
@@ -239,10 +254,27 @@ describe('RegistryService.closeDay', () => {
   const DATE = '2026-07-20';
   beforeEach(() => { seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 }); });
 
-  it('throws when there is nothing to close', async () => {
+  it('throws only when there is no day doc to close', async () => {
     await expect(RegistryService.closeDay(UID, DATE)).rejects.toThrow('NOTHING_TO_ARCHIVE');
-    seedDay(DATE, { counts: {}, trackerSnapshots: {}, status: 'open' });
-    await expect(RegistryService.closeDay(UID, DATE)).rejects.toThrow('NOTHING_TO_ARCHIVE');
+  });
+
+  it('folds a valid zero-count day instead of leaving it open forever (AUD-006)', async () => {
+    // A day incremented then decremented to 0 (or whose only tracker was
+    // removed) is still a recorded day, and its stamped credit still carries the
+    // target-based `saved`. Closing it must fold that credit, not throw.
+    seedDay(DATE, {
+      counts: { cig: 0 },
+      trackerSnapshots: { cig: { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true } },
+      aggregateCredit: { saved: 10, wasted: 0, smokingUnits: 0, baselineSaved: 0 },
+      status: 'open',
+    });
+
+    await RegistryService.closeDay(UID, DATE);
+
+    const d = dayDoc(DATE);
+    expect(d.status).toBe('closed');
+    expect(d.foldedIntoLifetime).toBe(true);
+    expect(userDoc().lifetimeAggregates.saved).toBeCloseTo(60); // 50 + 10
   });
 
   it('folds the stamped credit into lifetimeAggregates and marks the day closed', async () => {
@@ -299,6 +331,29 @@ describe('RegistryService.reconcileStaleDays (item 1 — correctness without "En
     seedDay('2026-07-21', { counts: { cig: 1 }, trackerSnapshots: {}, aggregateCredit: { saved: 0, wasted: 1, smokingUnits: 1, baselineSaved: 0 }, status: 'open' });
     await RegistryService.reconcileStaleDays(UID, '2026-07-21');
     expect(dayDoc('2026-07-21').status).toBe('open');
+  });
+
+  it('drains a backlog larger than the old fixed limit(30) window (AUD-010)', async () => {
+    seedUser({ lifetimeAggregates: baseAgg() });
+    const dates = [];
+    for (let i = 0; i < 45; i += 1) {
+      const d = new Date(Date.UTC(2026, 4, 1 + i)); // 2026-05-01 ..
+      const date = d.toISOString().slice(0, 10);
+      dates.push(date);
+      seedDay(date, {
+        counts: { cig: 1 },
+        trackerSnapshots: {},
+        aggregateCredit: { saved: 0, wasted: 1, smokingUnits: 1, baselineSaved: 0 },
+        status: 'open',
+      });
+    }
+
+    await RegistryService.reconcileStaleDays(UID, '2026-07-21');
+
+    const stillOpen = dates.filter((date) => dayDoc(date)?.status === 'open');
+    expect(stillOpen).toEqual([]);
+    // 45 stale days × €1 wasted folded in exactly once (idempotent close).
+    expect(userDoc().lifetimeAggregates.wasted).toBeCloseTo(50 + 45);
   });
 });
 
@@ -630,6 +685,7 @@ describe('RegistryService.restoreLog', () => {
       saved: 7,
       wasted: 3,
       smokingUnits: 3,
+      baselineSaved: 0,
     });
   });
 
@@ -653,6 +709,7 @@ describe('RegistryService.restoreLog', () => {
       saved: 7,
       wasted: 3,
       smokingUnits: 3,
+      baselineSaved: 0,
     });
   });
 
@@ -693,6 +750,7 @@ describe('RegistryService.createManualEntry', () => {
       saved: 8,
       wasted: 2,
       smokingUnits: 2,
+      baselineSaved: 0,
     });
   });
 });
@@ -738,5 +796,126 @@ describe('RegistryService.ensureUserDocument', () => {
     expect(u.name).toBe('Existing');
     expect(u.activeCounts).toEqual({ cig: 5 });
     expect(u.lifetimeAggregates.saved).toBe(100);
+  });
+});
+
+describe('RegistryService.readCompleteExportSnapshot (AUD-002 — export must include every day document)', () => {
+  beforeEach(() => { fake.orderByCalls.length = 0; });
+
+  it('reads the days collection ordered by its real `date` field, never a nonexistent one', async () => {
+    // Firestore's orderBy is an implicit existence filter: ordering by a field
+    // no document contains returns ZERO documents. Day docs only ever carry
+    // `date`, so ordering by `dayDate` silently dropped the entire days
+    // collection from the export. Assert the field actually used.
+    seedUser({ name: 'A' });
+    seedDay('2026-07-20', { counts: { cig: 2 }, status: 'closed' });
+    seedLog({ id: 'L1', logDate: '2026-07-20', counts: { cig: 2 } });
+
+    const snapshot = await RegistryService.readCompleteExportSnapshot(UID);
+
+    expect(fake.orderByCalls).toContainEqual(['date', 'desc']);
+    expect(fake.orderByCalls.some(([field]) => field === 'dayDate')).toBe(false);
+    expect(snapshot.days.map((d) => d.date)).toEqual(['2026-07-20']);
+    expect(snapshot.logs.map((l) => l.id)).toEqual(['L1']);
+  });
+});
+
+describe('AUD-007 — baselineSaved moves with saved on the manual/log write paths', () => {
+  // limit 10, €1.00, baseline 20 — a full day within target saves 10.00; the
+  // baseline reference saves (20 - count) * 1.00.
+  const CIGB = { id: 'cig', type: 'CIGARETTE', limit: 10, pricePerUnit: 1.0, baseline: 20 };
+  const baseAggB = () => ({ saved: 50, wasted: 50, smokingUnits: 50, baselineSaved: 50 });
+
+  it('createManualEntry credits baselineSaved in the same transaction as saved', async () => {
+    seedConfig(CIGB);
+    seedUser({ lifetimeAggregates: baseAggB(), unitPrice: 0.5 });
+
+    await RegistryService.createManualEntry(UID, '2026-07-05', { cig: 2 });
+
+    const u = userDoc();
+    expect(u.lifetimeAggregates.saved).toBeCloseTo(58); // (10-2)*1 = +8
+    expect(u.lifetimeAggregates.baselineSaved).toBeCloseTo(68); // (20-2)*1 = +18
+  });
+
+  it('deleteLog debits baselineSaved back out', async () => {
+    seedConfig(CIGB);
+    seedLog({
+      id: 'L1',
+      logDate: '2026-07-05',
+      counts: { cig: 2 },
+      aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 18 },
+    });
+    seedUser({ lifetimeAggregates: baseAggB(), unitPrice: 0.5 });
+
+    await RegistryService.deleteLog(UID, 'L1');
+
+    const u = userDoc();
+    expect(u.lifetimeAggregates.saved).toBeCloseTo(42);
+    expect(u.lifetimeAggregates.baselineSaved).toBeCloseTo(32);
+  });
+
+  it('updateHistoricalLog replaces BOTH the saved and baselineSaved deltas', async () => {
+    seedConfig(CIGB);
+    seedLog({
+      id: 'L1',
+      logDate: '2026-07-05',
+      counts: { cig: 2 },
+      aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 18 },
+    });
+    seedUser({ lifetimeAggregates: baseAggB(), unitPrice: 0.5 });
+
+    await RegistryService.updateHistoricalLog(UID, 'L1', { cig: 5 });
+
+    const u = userDoc();
+    // new: saved (10-5)*1=5 · baseline (20-5)*1=15
+    expect(u.lifetimeAggregates.saved).toBeCloseTo(47); // 50 - 8 + 5
+    expect(u.lifetimeAggregates.baselineSaved).toBeCloseTo(47); // 50 - 18 + 15
+    expect(logDoc('L1').aggregateCredit.baselineSaved).toBeCloseTo(15);
+  });
+
+  it('restoreLog re-credits baselineSaved', async () => {
+    seedConfig(CIGB);
+    seedUser({ lifetimeAggregates: baseAggB(), unitPrice: 0.5 });
+
+    await RegistryService.restoreLog(UID, { id: 'L9', logDate: '2026-07-01', counts: { cig: 2 } });
+
+    expect(userDoc().lifetimeAggregates.baselineSaved).toBeCloseTo(68); // +18
+  });
+
+  it('a baseline-less tracker adds zero baselineSaved (no fabrication)', async () => {
+    seedConfig(CIG); // no baseline
+    seedUser({ lifetimeAggregates: baseAggB(), unitPrice: 0.5 });
+
+    await RegistryService.createManualEntry(UID, '2026-07-05', { cig: 2 });
+
+    expect(userDoc().lifetimeAggregates.baselineSaved).toBeCloseTo(50); // unchanged
+  });
+});
+
+describe('Compatibility — a pre-existing baselineSaved drift is NOT self-healed', () => {
+  // See docs/financial-semantics.md. An OLD client can edit/delete a manual log
+  // without decrementing baselineSaved. This proves a NEW client does NOT
+  // recompute from history — it only applies its own delta — so the drift
+  // persists and a one-time repair (expectedLifetimeAggregates) is required.
+  const CIGB = { id: 'cig', type: 'CIGARETTE', limit: 10, pricePerUnit: 1.0, baseline: 20 };
+
+  it('a new-client manual entry adds only its delta; the stale €18 drift remains', async () => {
+    seedConfig(CIGB);
+    // Stored after an old client deleted a log (baseline €18) without
+    // decrementing: baselineSaved is €18 too high vs the remaining history.
+    seedUser({ lifetimeAggregates: { saved: 50, wasted: 50, smokingUnits: 50, baselineSaved: 36 }, unitPrice: 0.5 });
+    seedLog({ id: 'L1', logDate: '2026-07-05', counts: { cig: 2 }, aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 18 } });
+
+    await RegistryService.createManualEntry(UID, '2026-07-06', { cig: 2 });
+
+    const stored = userDoc().lifetimeAggregates.baselineSaved;
+    expect(stored).toBeCloseTo(54); // 36 (stale) + 18 (new delta only)
+
+    const authoritative = SmokingCalculator.expectedLifetimeAggregates([], [
+      { aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 18 } },
+      { aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 18 } },
+    ]).baselineSaved;
+    expect(authoritative).toBeCloseTo(36);
+    expect(stored - authoritative).toBeCloseTo(18); // drift persists ⇒ NOT self-healed
   });
 });

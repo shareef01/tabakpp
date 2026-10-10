@@ -29,6 +29,7 @@ kotlin {
             implementation(libs.kotlinx.datetime)
             implementation(libs.firebase.gitlive.auth)
             api(libs.firebase.gitlive.firestore)
+            implementation(libs.firebase.gitlive.functions)
             implementation(libs.koin.core)
             implementation(libs.androidx.lifecycle.viewmodel)
         }

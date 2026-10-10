@@ -64,9 +64,9 @@ const sumCounts = (counts = {}) =>
  * additively alongside legacy `logs`; the two never cover the same date.
  */
 export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = []) => {
-  const logged = SmokingCalculator.mergeDayDocsIntoLogged(
-    SmokingCalculator.aggregateLoggedCounts(logs), dayDocs
-  );
+  const legacyLogged = SmokingCalculator.aggregateLoggedCounts(logs);
+  const logged = SmokingCalculator.mergeDayDocsIntoLogged(legacyLogged, dayDocs);
+  const dayDocCounts = SmokingCalculator.dayDocCountsByDate(dayDocs);
   const series = [];
   for (let i = days - 1; i >= 1; i -= 1) {
     const date = shiftDateStr(today, -i);
@@ -82,7 +82,11 @@ export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = [
     name: 'NOW',
     date: today,
     dateLabel: 'Today',
-    val: sumCounts(logged[today]) + sumCounts(activeCounts),
+    // The live overlay already contains today's persisted day-doc counts;
+    // starting from the legacy-only base prevents doubling today's units
+    // (AUD-001). Falls back to the day doc when the overlay is empty so today
+    // never disappears.
+    val: sumCounts(SmokingCalculator.mergeEffectiveToday(legacyLogged[today], activeCounts, dayDocCounts[today])),
     isNow: true,
   });
   return series;
@@ -163,6 +167,7 @@ export const HistoryScreen = React.memo(({
   const [olderLogs, setOlderLogs] = useState([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [olderCursor, setOlderCursor] = useState(null);
+  const [olderCursorId, setOlderCursorId] = useState(null);
   const [olderExhausted, setOlderExhausted] = useState(false);
 
   const velocityPeriod = VELOCITY_PERIODS.find((p) => p.days === velocityDays) || VELOCITY_PERIODS[0];
@@ -220,7 +225,12 @@ export const HistoryScreen = React.memo(({
     setLoadingOlder(true);
     setActionError(null);
     try {
-      const { items, hasMore, nextCursor } = await RegistryService.fetchOlderLogs(userId, {
+      const { items, hasMore, nextCursor, nextCursorDocId } = await RegistryService.fetchOlderLogs(userId, {
+        // Prefer the stable document-snapshot cursor (AUD-012): the legacy date
+        // cursor re-selects same-date rows on the next page, so pagination
+        // depended on the UI's id de-dup to hide duplicate reads. Fall back to
+        // the date cursor only for the very first page.
+        cursorLogId: olderCursorId || undefined,
         cursorLogDate: olderCursor || (logs[logs.length - 1]?.logDate ?? undefined),
       });
       setOlderLogs((prev) => {
@@ -228,6 +238,7 @@ export const HistoryScreen = React.memo(({
         return [...prev, ...items.filter((l) => !seen.has(l.id))];
       });
       setOlderCursor(nextCursor);
+      setOlderCursorId(nextCursorDocId || null);
       if (!hasMore) setOlderExhausted(true);
     } catch (err) {
       console.error(err);
@@ -235,7 +246,7 @@ export const HistoryScreen = React.memo(({
     } finally {
       setLoadingOlder(false);
     }
-  }, [userId, loadingOlder, olderExhausted, olderCursor, logs]);
+  }, [userId, loadingOlder, olderExhausted, olderCursor, olderCursorId, logs]);
 
   // Aggregate by date (dated day docs + legacy archives/manual entries) — Android chart parity.
   const chartData = useMemo(

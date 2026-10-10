@@ -4,10 +4,15 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.tabakpp.app.TestTabakApp
 import com.tabakpp.app.data.FirebaseRegistryRepository
+import com.tabakpp.app.data.FirebaseTrustedFinancial
 import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.data.TrackerType
 import com.tabakpp.app.data.UserProfile
 import com.tabakpp.app.data.DayDocument
+import com.tabakpp.app.data.LogEntry
+import com.tabakpp.app.data.DailyFinancialRecord
+import com.tabakpp.app.data.TrackerSnapshot
+import com.tabakpp.app.domain.SmokingCalculator
 import dev.gitlive.firebase.Firebase
 import dev.gitlive.firebase.auth.auth
 import dev.gitlive.firebase.firestore.FirebaseFirestore
@@ -20,6 +25,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import com.google.firebase.appcheck.FirebaseAppCheck
@@ -290,6 +296,147 @@ class FirebaseRegistryRepositoryTest {
             assertEquals(1.0, profile!!.lifetimeAggregates.wasted, 0.001)
             assertEquals(9.0, profile.lifetimeAggregates.saved, 0.001)
             assertTrue(profile.lifetimeAggregates.smokingUnits >= 2.0)
+        }
+    }
+
+    // ============================================================
+    // TEST H — History screen data (AUD-004): seeded closed days + manual log
+    // stream to the UI layer and produce a non-zero velocity series.
+    // ============================================================
+    @Test
+    fun testH_historyData_streamsClosedDaysAndLogsAndSeries() {
+        runBlocking {
+            val dates = listOf("2099-12-28", "2099-12-29", "2099-12-30")
+            dates.forEach { cleanDay(testUid, it) }
+            dates.forEachIndexed { i, d ->
+                repository.updateLiveCounter(testUid, TEST_TRACKER_ID, (i + 1).toDouble(), d, 0.5)
+                repository.closeDay(testUid, d)
+            }
+            val manualDate = "2099-12-27"
+            repository.createManualEntry(testUid, manualDate, mapOf(TEST_TRACKER_ID to 2.0))
+
+            // What HistoryScreen consumes:
+            val dayList = repository.subscribeToDays(testUid).first()
+            val logs = repository.subscribeToLogs(testUid).first()
+
+            val closed = dayList.filter { it.status == "closed" && it.date in dates }
+            assertEquals(3, closed.size, "three closed day docs should stream to the UI")
+            assertEquals(1.0, closed.first { it.date == dates[0] }.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
+            assertTrue(logs.any { it.logDate == manualDate }, "the manual log should stream to the UI")
+
+            // The velocity series the chart renders must be non-zero for seeded history.
+            val series = SmokingCalculator.buildVelocitySeries(logs, closed, "2099-12-31", 30, emptyMap())
+            assertTrue(series.any { it.total > 0 }, "velocity series must be non-zero for seeded history")
+        }
+    }
+
+    // ============================================================
+    // TEST I — OPTION B atomic ledger (source+ledger+receipt) + request idempotency
+    // ============================================================
+    @Test
+    fun testI_ledgerAtomicCreateAndIdempotency() {
+        runBlocking {
+            val date = "2099-12-20"
+            val logId = "log-atomic-1"
+            val opId = "op-atomic-1"
+            cleanDay(testUid, date)
+            val ledgerRef = firestore.collection("users").document(testUid)
+                .collection("dailyFinancials").document(date)
+            // Best-effort cleanup of any prior run's ledger/log/receipt.
+            try { ledgerRef.delete() } catch (_: Exception) { }
+            try {
+                firestore.collection("users").document(testUid).collection("logs").document(logId).delete()
+            } catch (_: Exception) { }
+            try {
+                firestore.collection("users").document(testUid).collection("financialOperations").document(opId).delete()
+            } catch (_: Exception) { }
+
+            val snap = mapOf(TEST_TRACKER_ID to TrackerSnapshot(
+                type = TrackerType.CIGARETTE, target = 10, baseline = 15, unitPrice = 1.0
+            ))
+
+            repository.createManualLogAtomic(testUid, logId, date, mapOf(TEST_TRACKER_ID to 2.0), snap, 1.0, opId)
+
+            // Source log persisted…
+            val logSnap = firestore.collection("users").document(testUid).collection("logs").document(logId).get()
+            assertTrue(logSnap.exists, "source log must exist")
+            assertEquals(2.0, logSnap.data<LogEntry>().counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
+            // …and the canonical ledger folded it in, atomically.
+            val ledger = ledgerRef.get()
+            assertTrue(ledger.exists, "ledger must exist")
+            assertEquals(2.0, ledger.data<DailyFinancialRecord>().countsByTracker[TEST_TRACKER_ID] ?: 0.0, 0.001)
+
+            // Retry the SAME logical action (same operationId) → no double consumption.
+            repository.createManualLogAtomic(testUid, logId, date, mapOf(TEST_TRACKER_ID to 2.0), snap, 1.0, opId)
+            val ledger2 = ledgerRef.get().data<DailyFinancialRecord>()
+            assertEquals(2.0, ledger2.countsByTracker[TEST_TRACKER_ID] ?: 0.0, 0.001)
+        }
+    }
+
+    // ============================================================
+    // TEST J — full Kotlin ledger lifecycle: create → fold → edit → delete →
+    // restore + counter tap, all atomic and idempotent (Option B parity).
+    // ============================================================
+    @Test
+    fun testJ_ledgerLifecycleAtomic() {
+        runBlocking {
+            val date = "2099-12-19"
+            val logId = "log-life-1"
+            val snap = mapOf(TEST_TRACKER_ID to TrackerSnapshot(
+                type = TrackerType.CIGARETTE, target = 10, baseline = 15, unitPrice = 1.0
+            ))
+            cleanDay(testUid, date)
+            val ledgerRef = firestore.collection("users").document(testUid).collection("dailyFinancials").document(date)
+            try { ledgerRef.delete() } catch (_: Exception) { }
+            try { firestore.collection("users").document(testUid).collection("logs").document(logId).delete() } catch (_: Exception) { }
+
+            suspend fun saved() = firestore.collection("users").document(testUid).get()
+                .data<UserProfile>().lifetimeAggregates.saved
+
+            // create 3 → ledger counts 3, lifetime unchanged while unfolded
+            val preCreate = saved()
+            repository.createManualLogAtomic(testUid, logId, date, mapOf(TEST_TRACKER_ID to 3.0), snap, 1.0, "opJ-create")
+            assertEquals(3.0, ledgerRef.get().data<DailyFinancialRecord>().countsByTracker[TEST_TRACKER_ID] ?: 0.0, 0.01)
+            assertEquals(preCreate, saved(), 0.01)
+
+            // fold → lifetime delta exactly +€7  ((10−3)×€1)
+            val preFold = saved()
+            repository.foldLedgerIntoLifetime(testUid, date)
+            assertEquals(preFold + 7.0, saved(), 0.01)
+
+            // edit 3 → 5 → ledger €5, lifetime delta exactly −€2
+            val preEdit = saved()
+            val ledBefore = ledgerRef.get().data<DailyFinancialRecord>()
+            val proBefore = firestore.collection("users").document(testUid).get().data<UserProfile>()
+            repository.updateManualLogAtomic(testUid, logId, date, mapOf(TEST_TRACKER_ID to 5.0), snap, 1.0, "opJ-edit")
+            val ledAfter = ledgerRef.get().data<DailyFinancialRecord>()
+            val proAfter = firestore.collection("users").document(testUid).get().data<UserProfile>()
+            val diag = "before: led=${ledBefore?.countsByTracker}/${ledBefore?.canonicalCredit} prof=${proBefore?.lifetimeAggregates}; " +
+                "after: led=${ledAfter?.countsByTracker}/${ledAfter?.canonicalCredit} prof=${proAfter?.lifetimeAggregates}"
+            assertEquals(5.0, ledAfter!!.canonicalCredit.saved, 0.01, diag)
+            assertEquals(preEdit - 2.0, proAfter!!.lifetimeAggregates.saved, 0.01, "preEdit=$preEdit $diag")
+
+            // delete → day has 0 consumption, so ledger credit = full allowance €10, lifetime delta +€5
+            val preDel = saved()
+            repository.deleteManualLogAtomic(testUid, logId, date, 1.0, "opJ-del")
+            assertEquals(10.0, ledgerRef.get().data<DailyFinancialRecord>().canonicalCredit.saved, 0.01)
+            assertEquals(preDel + 5.0, saved(), 0.01)
+
+            // restore 5 → day credit back to €5, lifetime delta −€5
+            val preRes = saved()
+            repository.restoreManualLogAtomic(testUid,
+                LogEntry(id = logId, logDate = date, counts = mapOf(TEST_TRACKER_ID to 5.0), origin = "MANUAL_ENTRY"),
+                1.0, "opJ-res")
+            assertEquals(preRes - 5.0, saved(), 0.01)
+
+            // counter tap on a fresh date, retried with the SAME operationId → applied once
+            val date2 = "2099-12-17"
+            cleanDay(testUid, date2)
+            val led2 = firestore.collection("users").document(testUid).collection("dailyFinancials").document(date2)
+            try { led2.delete() } catch (_: Exception) { }
+            repository.adjustCounterAtomic(testUid, date2, TEST_TRACKER_ID, 4.0, snap, 1.0, "opJ-tap")
+            repository.adjustCounterAtomic(testUid, date2, TEST_TRACKER_ID, 4.0, snap, 1.0, "opJ-tap") // retry
+            assertEquals(4.0, led2.get().data<DailyFinancialRecord>().countsByTracker[TEST_TRACKER_ID] ?: 0.0, 0.01)
         }
     }
 
@@ -660,8 +807,161 @@ class FirebaseRegistryRepositoryTest {
 
 
     // ============================================================
+    // TEST K — real canonical ledger READ path (OPTION B canonicalCredit)
+    // ============================================================
+    @Test
+    fun testK_canonicalLedgerRead_deserializesCanonicalCredit() {
+        runBlocking {
+            val date = "2099-12-14"
+            val ledgerRef = firestore.collection("users").document(testUid)
+                .collection("dailyFinancials").document(date)
+            try { ledgerRef.delete() } catch (_: Exception) { }
+            ledgerRef.set(mapOf(
+                "date" to date,
+                "countsByTracker" to mapOf(TEST_TRACKER_ID to 6.0),
+                "canonicalCredit" to mapOf("saved" to 4.0, "wasted" to 6.0, "smokingUnits" to 6.0, "baselineSaved" to 9.0),
+                "ledgerSchemaVersion" to 2,
+                "eligible" to true,
+                "unresolvedComponents" to mapOf("spent" to false, "saved" to false, "baselineSaved" to false, "smokingUnits" to false),
+                "updatedAt" to Timestamp.now(),
+            ))
+            val ledgers = withTimeout(20_000) { repository.subscribeToLedgers(testUid).first() }
+            val rec = ledgers.firstOrNull { it.date == date }
+            kotlin.test.assertNotNull(rec, "canonical ledger should be deserialized from Firestore")
+            assertEquals(4.0, rec!!.canonicalCredit.saved, 0.01)
+            assertEquals(6.0, rec.canonicalCredit.wasted, 0.01)
+            assertEquals(9.0, rec.canonicalCredit.baselineSaved, 0.01)
+            assertEquals(6.0, rec.canonicalCredit.smokingUnits, 0.01)
+        }
+    }
+
+    // ============================================================
+    // TEST M — live ledger refresh after a trusted COUNTER_INCREMENT
+    // ============================================================
+    @Test
+    fun testM_canonicalLedgerLiveRefresh_afterTrustedIncrement() {
+        runBlocking {
+            val date = "2099-12-15"
+            // Trusted emulator-only seeding (clients cannot set financialMode).
+            ownerPatch(
+                "users/$testUid",
+                """{"fields":{"financialMode":{"stringValue":"OPTION_B"},"unitPrice":{"doubleValue":1}}}""",
+            )
+            ownerPatch(
+                "users/$testUid/configs/$TEST_TRACKER_ID",
+                """{"fields":{"name":{"stringValue":"Cigarettes"},"limit":{"integerValue":"10"},"order":{"integerValue":"0"},"type":{"stringValue":"CIGARETTE"},"pricePerUnit":{"doubleValue":1},"isFinanciallyTracked":{"booleanValue":true},"isPrimaryTracked":{"booleanValue":true}}}""",
+            )
+            try {
+                firestore.collection("users").document(testUid).collection("dailyFinancials").document(date).delete()
+            } catch (_: Exception) { }
+            try {
+                // Pre-condition: the real SDK ledger subscription sees no record yet.
+                val before = withTimeout(20_000) {
+                    repository.subscribeToLedgers(testUid).first().firstOrNull { it.date == date }
+                }
+                kotlin.test.assertNull(before, "no canonical ledger should exist for $date before the increment")
+
+                val gateway = FirebaseTrustedFinancial(region = "europe-west1", emulatorHost = "127.0.0.1", emulatorPort = 5001)
+                gateway.execute("COUNTER_INCREMENT", mapOf(
+                    "operationId" to "opM-live-refresh", "date" to date, "trackerId" to TEST_TRACKER_ID,
+                    "delta" to 1.0, "defaultUnitPrice" to 1.0,
+                ))
+
+                // The same subscription path must now emit the server-written ledger.
+                val rec = withTimeout(30_000) {
+                    repository.subscribeToLedgers(testUid)
+                        .map { list -> list.firstOrNull { it.date == date } }
+                        .first { it != null && it.canonicalCredit.saved > 0 }
+                }
+                kotlin.test.assertNotNull(rec, "ledger subscription must emit the canonical record after the trusted increment")
+                assertEquals(1.0, rec!!.countsByTracker[TEST_TRACKER_ID] ?: 0.0, 0.001)
+                assertEquals(9.0, rec.canonicalCredit.saved, 0.01)   // (10−1) × €1
+                assertEquals(1.0, rec.canonicalCredit.wasted, 0.01)
+            } finally {
+                // Isolation: restore LEGACY (see testL).
+                runCatching {
+                    ownerPatch("users/$testUid", """{"fields":{"financialMode":{"stringValue":"LEGACY"}}}""")
+                }.onFailure { Log.w(TAG, "failed to restore financialMode=LEGACY: ${it.message}") }
+            }
+        }
+    }
+
+    // ============================================================
     // Data classes for contention results
     // ============================================================
+
+    // ============================================================
+    // TEST L — real trusted Callable COUNTER_INCREMENT (emulator-only)
+    // ============================================================
+    @Test
+    fun testL_callableCounterIncrement_idempotentAndConflict() {
+        runBlocking {
+          try {
+            val date = "2099-12-13"
+            // Trusted emulator-only seeding (clients cannot set financialMode).
+            ownerPatch(
+                "users/$testUid",
+                """{"fields":{"financialMode":{"stringValue":"OPTION_B"},"unitPrice":{"doubleValue":1}}}""",
+            )
+            ownerPatch(
+                "users/$testUid/configs/$TEST_TRACKER_ID",
+                """{"fields":{"name":{"stringValue":"Cigarettes"},"limit":{"integerValue":"10"},"order":{"integerValue":"0"},"type":{"stringValue":"CIGARETTE"},"pricePerUnit":{"doubleValue":1},"isFinanciallyTracked":{"booleanValue":true},"isPrimaryTracked":{"booleanValue":true}}}""",
+            )
+            try {
+                firestore.collection("users").document(testUid).collection("dailyFinancials").document(date).delete()
+            } catch (_: Exception) { }
+
+            val gateway = FirebaseTrustedFinancial(region = "europe-west1", emulatorHost = "127.0.0.1", emulatorPort = 5001)
+            val opId = "opL-tap-1"
+            val payload = mapOf(
+                "operationId" to opId, "date" to date, "trackerId" to TEST_TRACKER_ID,
+                "delta" to 1.0, "defaultUnitPrice" to 1.0,
+            )
+
+            val r1 = gateway.execute("COUNTER_INCREMENT", payload)
+            kotlin.test.assertTrue(r1.applied, "first COUNTER_INCREMENT must apply")
+
+            val daySnap = firestore.collection("users").document(testUid).collection("days").document(date).get()
+            kotlin.test.assertTrue(daySnap.exists, "the source day document must exist")
+            val ledgerSnap = firestore.collection("users").document(testUid).collection("dailyFinancials").document(date).get()
+            kotlin.test.assertTrue(ledgerSnap.exists, "the canonical ledger must exist")
+            val receiptSnap = firestore.collection("users").document(testUid).collection("financialOperations").document(opId).get()
+            kotlin.test.assertTrue(receiptSnap.exists, "the operation receipt must exist")
+
+            // Duplicate: same id + payload ⇒ applied once.
+            val r2 = gateway.execute("COUNTER_INCREMENT", payload)
+            kotlin.test.assertFalse(r2.applied, "a duplicate operation must not re-apply")
+
+            // Conflict: same id, different payload ⇒ rejected.
+            val conflicted = runCatching {
+                gateway.execute("COUNTER_INCREMENT", payload + ("delta" to 2.0))
+            }.isFailure
+            kotlin.test.assertTrue(conflicted, "reusing an operation id with a different payload must be rejected")
+          } finally {
+            // Isolation: the emulator reuses the synthetic anonymous account
+            // across tests, and testL flips it to OPTION_B through the owner
+            // bypass. Restore the documented default even if the test throws, so
+            // subsequent LEGACY tests are unaffected.
+            runCatching {
+                ownerPatch("users/$testUid", """{"fields":{"financialMode":{"stringValue":"LEGACY"}}}""")
+            }.onFailure { Log.w(TAG, "failed to restore financialMode=LEGACY: ${it.message}") }
+          }
+        }
+    }
+
+    /** Emulator-only trusted seeding: PATCH via the Firestore emulator's owner bypass. */
+    private fun ownerPatch(path: String, json: String) {
+        val url = java.net.URL("http://127.0.0.1:8080/v1/projects/tabakpp-ff036/databases/(default)/documents/$path")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "PATCH"
+        conn.setRequestProperty("Authorization", "Bearer owner")
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+        conn.outputStream.use { it.write(json.toByteArray()) }
+        val code = conn.responseCode
+        conn.disconnect()
+        Log.d(TAG, "ownerPatch($path) -> $code")
+    }
 
     private data class ContentionResult(
         val opId: String,

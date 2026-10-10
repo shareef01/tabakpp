@@ -15,10 +15,10 @@
  *
  * Runs under `npm run test:rules` (boots the Firestore emulator).
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
 
 // registryService imports `db` from '../firebase', which needs VITE_* env at
 // import time. Swap it for the emulator-backed, authenticated instance. The
@@ -197,7 +197,7 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(all[0].logDate).toBe('2026-07-28');
     expect(all[0].counts).toEqual({ cig: 3 });
     expect(all[0].isManual).toBe(true);
-    expect(all[0].aggregateCredit).toEqual({ saved: 7, wasted: 3, smokingUnits: 3 });
+    expect(all[0].aggregateCredit).toEqual({ saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 });
     expect((await profile()).lifetimeAggregates).toEqual({ saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 });
   });
 
@@ -218,7 +218,7 @@ describe('RegistryService against the real SDK and rules', () => {
 
     const [updated] = await logs();
     expect(updated.counts).toEqual({ cig: 8 });
-    expect(updated.aggregateCredit).toEqual({ saved: 2, wasted: 8, smokingUnits: 8 });
+    expect(updated.aggregateCredit).toEqual({ saved: 2, wasted: 8, smokingUnits: 8, baselineSaved: 0 });
   });
 
   it('updateHistoricalLog preserves counts for deleted trackers', async () => {
@@ -423,5 +423,180 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(failed).toHaveLength(0);
     const day = await dayDoc(date);
     expect(day.counts.cig).toBe(15); // 5 + 10
+  });
+
+  it('readCompleteExportSnapshot returns every day document AND every manual log (AUD-002)', async () => {
+    // Regression: the days collection was queried with orderBy('dayDate'), a
+    // field no day doc ever carries. Firestore's orderBy is an implicit
+    // existence filter, so the export silently came back with `days: []` while
+    // still reporting itself complete. Exercise it through the real SDK so the
+    // query field is actually validated against stored documents.
+    await seed();
+
+    // Open + closed day docs.
+    await RegistryService.adjustCounter(UID, 'cig', 3, '2026-07-20', 0.5);
+    await RegistryService.adjustCounter(UID, 'cig', 5, '2026-07-21', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-21');
+    // A manual backfill log (legacy ledger) on another date.
+    await RegistryService.createManualEntry(UID, '2026-07-18', { cig: 2 }, 0.5, '2026-07-30');
+
+    const snapshot = await RegistryService.readCompleteExportSnapshot(UID);
+
+    expect(snapshot.days.map((d) => d.date).sort()).toEqual(['2026-07-20', '2026-07-21']);
+    expect(snapshot.days.find((d) => d.date === '2026-07-21').status).toBe('closed');
+    expect(snapshot.logs).toHaveLength(1);
+    expect(snapshot.logs[0].logDate).toBe('2026-07-18');
+    expect(snapshot.configs.map((c) => c.id)).toEqual(['cig']);
+    expect(snapshot.profile).toBeTruthy();
+  });
+
+  it('fetchOlderLogs advances via a stable document cursor across same-date rows (AUD-012)', async () => {
+    await seed();
+    // Five manual logs sharing one date — the worst case for a date-only cursor,
+    // which would re-select the same date on the next page.
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      for (let i = 0; i < 5; i += 1) {
+        await setDoc(doc(adminDb, 'users', UID, 'logs', `2026-07-18_M${i}`), {
+          id: `2026-07-18_M${i}`, logDate: '2026-07-18', counts: { cig: 1 },
+          isManual: true, origin: 'MANUAL_ENTRY',
+        });
+      }
+    });
+
+    const page1 = await RegistryService.fetchOlderLogs(UID, { pageSize: 2 });
+    expect(page1.items).toHaveLength(2);
+    expect(page1.nextCursorDocId).toBeTruthy();
+
+    const page2 = await RegistryService.fetchOlderLogs(UID, {
+      pageSize: 2,
+      cursorLogId: page1.nextCursorDocId,
+      cursorLogDate: page1.nextCursor,
+    });
+    const ids = new Set([...page1.items, ...page2.items].map((l) => l.id));
+    expect(ids.size).toBe(4); // four distinct rows, no duplicate page overlap
+  });
+
+  it('reconcileStaleDays drains more than the old limit(30) window (AUD-010)', async () => {
+    await seed();
+    const dates = [];
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      for (let i = 0; i < 45; i += 1) {
+        const date = new Date(Date.UTC(2026, 4, 1 + i)).toISOString().slice(0, 10);
+        dates.push(date);
+        await setDoc(doc(adminDb, 'users', UID, 'days', date), {
+          date,
+          counts: { cig: 1 },
+          trackerSnapshots: { cig: { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true, isPrimaryTracked: true } },
+          aggregateCredit: { saved: 9, wasted: 1, smokingUnits: 1, baselineSaved: 0 },
+          status: 'open',
+          foldedIntoLifetime: false,
+          legacyMigrationApplied: false,
+        });
+      }
+    });
+
+    await RegistryService.reconcileStaleDays(UID, '2026-07-21');
+
+    expect((await dayDoc(dates[0])).status).toBe('closed');
+    expect((await dayDoc(dates[44])).status).toBe('closed');
+  });
+
+  it('lifetime reconciliation from a COMPLETE export snapshot matches the stored aggregate (read-only)', async () => {
+    await seed();
+    // Build history: a closed (folded) day + a manual log.
+    await RegistryService.adjustCounter(UID, 'cig', 3, '2026-07-20', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-20'); // folds the day credit into lifetime
+    await RegistryService.createManualEntry(UID, '2026-07-18', { cig: 2 }); // credits a log
+
+    // The COMPLETE, paginated history — not the bounded live windows.
+    const snap = await RegistryService.readCompleteExportSnapshot(UID);
+    const expected = SmokingCalculator.expectedLifetimeAggregates(snap.days, snap.logs);
+    const stored = (await profile()).lifetimeAggregates;
+
+    expect(stored.saved).toBeCloseTo(expected.saved, 6);
+    expect(stored.wasted).toBeCloseTo(expected.wasted, 6);
+    expect(stored.smokingUnits).toBeCloseTo(expected.smokingUnits, 6);
+    expect((stored.baselineSaved || 0)).toBeCloseTo(expected.baselineSaved, 6);
+  });
+
+  it('detects a stored-aggregate drift (read-only diagnostic — no repair)', async () => {
+    await seed();
+    await RegistryService.createManualEntry(UID, '2026-07-18', { cig: 2 });
+
+    // Simulate the old-client corruption: baselineSaved not adjusted.
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await updateDoc(doc(context.firestore(), 'users', UID), {
+        'lifetimeAggregates.baselineSaved': 999,
+      });
+    });
+
+    const snap = await RegistryService.readCompleteExportSnapshot(UID);
+    const expected = SmokingCalculator.expectedLifetimeAggregates(snap.days, snap.logs);
+    const stored = (await profile()).lifetimeAggregates;
+
+    // The diagnostic surfaces the discrepancy; it never repairs it.
+    expect(Math.abs((stored.baselineSaved || 0) - expected.baselineSaved)).toBeGreaterThan(1);
+    // Non-financial fields that were not corrupted still reconcile.
+    expect(stored.wasted).toBeCloseTo(expected.wasted, 6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHASE 2 — REAL WEB WIRING: the actual RegistryService mutation paths must be
+// routed through the canonical daily ledger when BOTH the build flag AND the
+// account's server-side financialMode say Option B, and must fall back to the
+// legacy writer otherwise.
+// ---------------------------------------------------------------------------
+describe('OPTION B trusted-write routing (flag + account financialMode)', () => {
+  const ledgerDoc = async (date) => {
+    const s = await getDoc(doc(holder.db, 'users', UID, 'dailyFinancials', date));
+    return s.exists() ? s.data() : undefined;
+  };
+  const seedMode = async (mode) => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      await setDoc(doc(adminDb, 'users', UID), { ...baseProfile, financialMode: mode });
+      await setDoc(doc(adminDb, 'users', UID, 'configs', 'cig'), cigConfig);
+    });
+  };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('flag ON + OPTION_B: a counter tap goes to the TRUSTED BACKEND, not a direct client write', async () => {
+    vi.stubEnv('VITE_OPTION_B_LEDGER', '1');
+    vi.stubEnv('VITE_FUNCTIONS_EMULATOR_HOST', '127.0.0.1');
+    vi.stubEnv('VITE_FUNCTIONS_EMULATOR_PORT', '5001');
+    await seedMode('OPTION_B');
+    // No functions emulator runs in this rules-only suite → the trusted call
+    // fails CLOSED (no silent legacy fallback).
+    await expect(RegistryService.adjustCounter(UID, 'cig', 3, '2026-07-30', 1.0, 'op-web-ac1')).rejects.toThrow();
+    // ...and it must NOT have written the day doc or the ledger directly.
+    expect(await dayDoc('2026-07-30')).toBeUndefined();
+    expect(await ledgerDoc('2026-07-30')).toBeUndefined();
+  });
+
+  it('flag ON + OPTION_B: createManualEntry does not fall back to a direct client write', async () => {
+    vi.stubEnv('VITE_OPTION_B_LEDGER', '1');
+    vi.stubEnv('VITE_FUNCTIONS_EMULATOR_HOST', '127.0.0.1');
+    await seedMode('OPTION_B');
+    await expect(RegistryService.createManualEntry(UID, '2026-07-28', { cig: 2 }, 1.0, null, 'op-web-m1')).rejects.toThrow();
+    expect(await logs()).toHaveLength(0);
+    expect(await ledgerDoc('2026-07-28')).toBeUndefined();
+  });
+
+  it('flag OFF + OPTION_B account: the legacy write is REJECTED by the rules (fail-closed)', async () => {
+    await seedMode('OPTION_B'); // flag NOT set
+    await expect(RegistryService.adjustCounter(UID, 'cig', 2, '2026-07-30', 0.5)).rejects.toThrow();
+    expect(await ledgerDoc('2026-07-30')).toBeUndefined();
+  });
+
+  it('flag ON + LEGACY account: still the LEGACY path (account mode is required)', async () => {
+    vi.stubEnv('VITE_OPTION_B_LEDGER', '1');
+    await seedMode('LEGACY');
+    await RegistryService.adjustCounter(UID, 'cig', 2, '2026-07-30', 0.5);
+    expect(await ledgerDoc('2026-07-30')).toBeUndefined();
+    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 2 });
   });
 });

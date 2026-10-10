@@ -155,6 +155,62 @@ data class ProfileExtra(
     val avatar: String? = null
 )
 
+/**
+ * OPTION B — `users/{uid}/dailyFinancials/{date}`: the ONE canonical day-level
+ * financial contribution for a date (combined day-doc + manual-log consumption).
+ * Mirrors webApp/src/services/dailyLedger.js and docs/financial-semantics.md §16.
+ * Not a consumption source; never rendered as a History row.
+ */
+/** Component-level completeness of a canonical day credit (server-persisted). */
+@Serializable
+data class UnresolvedComponents(
+    val spent: Boolean = false,
+    val saved: Boolean = false,
+    val baselineSaved: Boolean = false,
+    val smokingUnits: Boolean = false
+) {
+    val anyUnresolved: Boolean get() = spent || saved || baselineSaved || smokingUnits
+}
+
+@Serializable
+data class DailyFinancialRecord(
+    val date: String = "",
+    val countsByTracker: Map<String, Double> = emptyMap(),
+    val snapshots: Map<String, TrackerSnapshot> = emptyMap(),
+    val canonicalCredit: LifetimeAggregates = LifetimeAggregates(),
+    val ledgerSchemaVersion: Int = 2,
+    val ambiguous: Boolean = false,
+    val missingConfig: List<String> = emptyList(),
+    val foldedIntoLifetime: Boolean = false,
+    /** Server-computed eligibility — a date with no tracked evidence earns no allowance. */
+    val eligible: Boolean = true,
+    /** Trackers whose historical stamp conflicted for this date. */
+    val conflicting: List<String> = emptyList(),
+    /** Which canonical components are UNKNOWN (0 is not a verified zero). */
+    val unresolvedComponents: UnresolvedComponents = UnresolvedComponents(),
+    /** Set once when seeded from a legacy folded contribution (migration guard). */
+    val migratedFromLegacy: Boolean = false,
+    @Serializable(with = BaseTimestampOrLongSerializer::class) val createdAt: BaseTimestamp? = null,
+    @Serializable(with = BaseTimestampOrLongSerializer::class) val updatedAt: BaseTimestamp? = null
+) {
+    val id: String get() = date
+}
+
+/**
+ * `users/{uid}/financialOperations/{operationId}` — request-idempotency receipt.
+ * Separate from Firestore's internal transaction retries; immutable once written.
+ */
+@Serializable
+data class FinancialOperationReceipt(
+    val operationId: String = "",
+    val operationType: String = "",
+    val sourceDocumentPath: String = "",
+    val trackingDate: String = "",
+    val payloadFingerprint: String = "",
+    val resultStatus: String = "OK",
+    @Serializable(with = BaseTimestampOrLongSerializer::class) val createdAt: BaseTimestamp? = null
+)
+
 @Serializable
 data class TrackerConfig(
     val id: String,

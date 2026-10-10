@@ -27,10 +27,15 @@ object RegistryMutations {
     ): LifetimeAggregates {
         val fin = SmokingCalculator.calculateFinancials(counts, configs, unitPrice)
         val units = SmokingCalculator.sumSmokingUnits(counts, configs)
+        // Baseline savings (item 3 / AUD-007): must move together with `saved`.
+        // Previously omitted here, so `baselineSaved` never advanced on the
+        // manual-entry / legacy-log write paths even though `saved` did.
+        val baselineSaved = SmokingCalculator.calculateBaselineSavings(counts, configs, unitPrice).moneySaved
         return LifetimeAggregates(
             saved = fin.saved,
             wasted = fin.wasted,
-            smokingUnits = units
+            smokingUnits = units,
+            baselineSaved = baselineSaved
         )
     }
 
@@ -49,14 +54,16 @@ object RegistryMutations {
         LifetimeAggregates(
             saved = current.saved + credit.saved,
             wasted = current.wasted + credit.wasted,
-            smokingUnits = current.smokingUnits + credit.smokingUnits
+            smokingUnits = current.smokingUnits + credit.smokingUnits,
+            baselineSaved = current.baselineSaved + credit.baselineSaved
         )
 
     fun applyDebit(current: LifetimeAggregates, credit: LifetimeAggregates): LifetimeAggregates =
         LifetimeAggregates(
             saved = current.saved - credit.saved,
             wasted = current.wasted - credit.wasted,
-            smokingUnits = current.smokingUnits - credit.smokingUnits
+            smokingUnits = current.smokingUnits - credit.smokingUnits,
+            baselineSaved = current.baselineSaved - credit.baselineSaved
         )
 
     fun applyReplace(
@@ -67,7 +74,8 @@ object RegistryMutations {
         LifetimeAggregates(
             saved = current.saved - oldCredit.saved + newCredit.saved,
             wasted = current.wasted - oldCredit.wasted + newCredit.wasted,
-            smokingUnits = current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits
+            smokingUnits = current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits,
+            baselineSaved = current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved
         )
 
     /** Credit a single log's financials and smoking units (manual entry, restore). */
