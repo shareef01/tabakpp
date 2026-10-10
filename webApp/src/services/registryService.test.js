@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { RegistryService } from './registryService';
+import { readFileSync } from 'node:fs';
+import { RegistryService, USER_SUBCOLLECTIONS } from './registryService';
 import { SmokingCalculator } from '../utils/smokingCalculator';
 
 // In-memory Firestore fake. Only firebase/firestore is mocked; the real
@@ -476,12 +477,14 @@ describe('RegistryService.deleteProtocol (item 2 — deletion must not corrupt h
 });
 
 describe('RegistryService.deleteAllUserData', () => {
-  it('removes configs, logs, days, meta, and the user document', async () => {
+  it('removes every subcollection and the user document', async () => {
     seedUser({ name: 'X' });
     seedConfig(CIG);
     seedLog({ id: '2026-07-20_DAY', logDate: '2026-07-20', counts: { cig: 1 } });
     seedDay('2026-07-21', { counts: { cig: 1 }, status: 'open' });
     fake.store.set(`${USER_PATH}/meta/profile`, { avatar: 'x' });
+    fake.store.set(`${USER_PATH}/dailyFinancials/2026-07-21`, { date: '2026-07-21' });
+    fake.store.set(`${USER_PATH}/financialOperations/op1`, { operationId: 'op1' });
 
     await RegistryService.deleteAllUserData(UID);
 
@@ -490,6 +493,17 @@ describe('RegistryService.deleteAllUserData', () => {
     expect(logPaths()).toHaveLength(0);
     expect(dayDoc('2026-07-21')).toBeUndefined();
     expect(metaDoc()).toBeUndefined();
+    expect(fake.store.has(`${USER_PATH}/dailyFinancials/2026-07-21`)).toBe(false);
+    expect(fake.store.has(`${USER_PATH}/financialOperations/op1`)).toBe(false);
+  });
+
+  it('wipes every subcollection firestore.rules defines under users/{uid}', () => {
+    // Firestore does not cascade deletes: a subcollection added to the rules
+    // but not to the wipe list silently survives account deletion.
+    const rules = readFileSync('../firestore.rules', 'utf8');
+    const defined = [...rules.matchAll(/^ {6}match \/(\w+)\/\{\w+\}/gm)].map((m) => m[1]);
+    expect(defined.length).toBeGreaterThan(0);
+    expect([...USER_SUBCOLLECTIONS].sort()).toEqual([...defined].sort());
   });
 });
 

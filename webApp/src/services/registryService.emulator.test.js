@@ -600,3 +600,37 @@ describe('OPTION B trusted-write routing (flag + account financialMode)', () => 
     expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 2 });
   });
 });
+
+describe('account wipe against the real rules', () => {
+  it('a LEGACY owner can wipe every subcollection and the profile, leaving nothing behind', async () => {
+    await seed();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      await setDoc(doc(adminDb, 'users', UID, 'logs', 'L1'), { logDate: '2026-07-20', counts: { cig: 1 } });
+      await setDoc(doc(adminDb, 'users', UID, 'days', '2026-07-21'), { date: '2026-07-21', counts: { cig: 1 } });
+      await setDoc(doc(adminDb, 'users', UID, 'meta', 'profile'), { avatar: 'x' });
+      await setDoc(doc(adminDb, 'users', UID, 'dailyFinancials', '2026-07-21'), {
+        date: '2026-07-21', countsByTracker: { cig: 1 },
+        canonicalCredit: { saved: 9, wasted: 1, smokingUnits: 1, baselineSaved: 0 },
+      });
+      await setDoc(doc(adminDb, 'users', UID, 'financialOperations', 'op1'), {
+        operationId: 'op1', operationType: 'adjustCounter', payloadFingerprint: 'fp', resultStatus: 'OK',
+      });
+    });
+
+    // Runs as the authenticated owner, so every delete is rules-checked.
+    await RegistryService.deleteAllUserData(UID);
+
+    let leftovers;
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      leftovers = [];
+      if ((await getDoc(doc(adminDb, 'users', UID))).exists()) leftovers.push('users/' + UID);
+      for (const sub of ['configs', 'logs', 'days', 'meta', 'dailyFinancials', 'financialOperations']) {
+        const snap = await getDocs(collection(adminDb, 'users', UID, sub));
+        snap.docs.forEach((d) => leftovers.push(`${sub}/${d.id}`));
+      }
+    });
+    expect(leftovers).toEqual([]);
+  });
+});
