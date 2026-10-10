@@ -405,6 +405,11 @@ for production accounts; the reference service is not wired into the app flows.
 
 ## 19. Old-client write gate (rules-enforced, emulator-proven)
 
+> **Superseded by §24.** The `ledgerTouched` gate described here (and hardened
+> in §23) no longer exists in `firestore.rules`. MIGRATING/OPTION_B accounts now
+> have no direct client write path at all (`financialLocked`), and the trusted
+> Cloud Function is the only writer. Kept as the decision history.
+
 Account-level `users/{uid}.financialMode` ∈ {`LEGACY` (default) | `OPTION_B`},
 allow-listed and **one-way** (`OPTION_B` → `LEGACY` is rejected).
 
@@ -543,6 +548,8 @@ ops with the pending-op id as `operationId`. Proven by ViewModel tests
 
 ## 23. Adversarial gate result (Phase 1)
 
+> **Superseded by §24** — see the note on §19; `ledgerTouched` was removed.
+
 `ledgerTouched` now requires the ledger's **financial content** to change
 (`countsByTracker` / `canonicalCredit` / `foldedIntoLifetime` / `snapshots` /
 `migratedFromLegacy`), not merely `updatedAt`. Emulator results:
@@ -587,7 +594,9 @@ the only writer of OPTION_B financial state:
 OPTION_B})` denies ALL client writes to `logs`/`days`/`dailyFinancials`/
 `financialOperations` and to `lifetimeAggregates`; a client can never write
 `financialMode` (the function owns LEGACY→MIGRATING→OPTION_B). LEGACY clients
-keep the old protocol.
+keep the old protocol. The profile itself is covered too: a client-created
+profile may only start `LEGACY`, and a locked profile cannot be client-deleted —
+otherwise deleting and recreating it would drop the lock.
 
 **Verified end-to-end** (`functions/emulator.integration.mjs`, against the
 Functions+Auth+Firestore emulators): authenticated create → source+ledger+receipt

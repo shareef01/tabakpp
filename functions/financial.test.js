@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { computeDayCredit, calculateDailyFinancials, applyDelta, fingerprintOf, migrationPlan } from './financial.js';
 
@@ -233,3 +234,16 @@ test('SAFETY: an unresolved historical allowance contributes ZERO save/spend to 
   assert.equal(fin.unresolved.saved, true);
   assert.equal(fin.unresolved.smokingUnits, true);
 });
+
+// Cross-platform parity: the same shared fixtures the Web
+// (webApp/src/utils/domainFixtures.contract.test.js) and Kotlin
+// (DomainContractFixturesTest) suites assert, run against the server port.
+const sharedFixtures = JSON.parse(
+  readFileSync(new URL('../shared-tests/domain-fixtures.json', import.meta.url), 'utf8'),
+).fixtures;
+
+for (const { case: name, input, expected } of sharedFixtures.filter((f) => f.op === 'dayCredit')) {
+  test(`shared fixture parity — dayCredit: ${name}`, () => {
+    assert.deepEqual(computeDayCredit(input.counts, input.trackerSnapshots, input.defaultUnitPrice), expected);
+  });
+}

@@ -1,21 +1,24 @@
 # TABAKPP — Handoff (resume point)
 
 ## HEAD / state
-- HEAD `e5390a4bcdcb406d0071d077fee9a1c0001184b5` — unchanged. Everything is uncommitted.
-- No commits / pushes / merges / deployments / migrations. Production Option B disabled.
+- The work below was committed as `23a988e` and is on PR #84
+  (`ci/android-instrumentation-readiness-74`), together with later audit fixes
+  (trusted-function input/transaction hardening, web callable region + CSP,
+  functions CI job, profile delete-and-recreate rules fix).
+- No deployments / migrations. Production Option B disabled (Spark plan — see
+  `RELEASE_GATES.md`).
 - Emulator + synthetic accounts only.
 
 ## WRAP-UP (final state)
 Release-hardening is **wrapped up**. The full automated regression matrix is green and fresh
 (Web 445/62/108 + build · Functions 26 + emulator integration · Kotlin shared/compose ·
 lint/assemble · Android device **27/27** on both AVD and physical Pixel 7). The two
-OPTION_B gaps (`updateHistoricalDay`, `deleteProtocol`) are **shipped fail-closed** and
-documented in `RELEASE_GATES.md → Known limitations`. `artifacts_*/` is gitignored.
+OPTION_B gaps (`updateHistoricalDay`, `deleteProtocol`) first shipped fail-closed and
+are now served by the callable (`HISTORICAL_DAY_UPDATE` / `TRACKER_DELETE` — see
+"W1B-2 / W1B-3 DONE" below). `artifacts_*/` is gitignored.
 
-**To commit (needs explicit user authorization):** the diff is 40 tracked files
-(+4461/−226) + 27 untracked source files; review `git diff`/`git status`, then
-`git add -A && git commit` (and push/PR only when authorized). Production deploy, migration
-and Option-B activation remain **APPROVAL_REQUIRED**.
+Committed (see "HEAD / state"). Production deploy, migration and Option-B activation
+remain **APPROVAL_REQUIRED**.
 
 ## Where we are
 **W1A RESOLVED — `:androidApp:connectedDebugAndroidTest` → 26 executed / 0 failed / 0 skipped
