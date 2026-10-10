@@ -29,8 +29,8 @@ rules_version = '2';
 //     trackerSnapshots stamp (item 2) so editing/deleting/repricing a
 //     tracker later can never change what an old day meant. On a closed day,
 //     rules freeze `trackerSnapshots`, `status`, `date`,
-//     `foldedIntoLifetime`, and `legacyMigrationApplied` (see validDayUpdate,
-//     line 433). `counts` and `aggregateCredit` remain writable by the
+//     `foldedIntoLifetime`, and `legacyMigrationApplied` (see
+//     validDayUpdate). `counts` and `aggregateCredit` remain writable by the
 //     authenticated owner — the application-layer `updateHistoricalDay`
 //     path additionally reconciles `lifetimeAggregates`.
 //   users/{uid}/logs/{id}          legacy ledger: manual backfill entries
@@ -39,6 +39,14 @@ rules_version = '2';
 //   users/{uid}/meta/{id}          low-frequency profile extras (avatar) —
 //     split out so a large, rarely-changing blob never rides along on a
 //     high-frequency write (item 12). Today the only doc id used is `profile`.
+//   users/{uid}/dailyFinancials/{YYYY-MM-DD}  OPTION B canonical per-date
+//     financial ledger.
+//   users/{uid}/financialOperations/{id}  OPTION B request-idempotency
+//     receipts (immutable once written).
+//     Both are deployed with these rules but stay client-writable only while
+//     the account is LEGACY; in MIGRATING/OPTION_B the trusted Cloud Function
+//     is their only writer (see financialLocked). Production has no
+//     MIGRATING/OPTION_B accounts until the functions are deployed (Blaze).
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -395,13 +403,8 @@ service cloud.firestore {
         && (!changed.hasAny(['estimatedYield'])
           || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
         && (!changed.hasAny(['widgetSize']) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
-        // OPTION B financial mode is a legal, ONE-WAY transition: an account in
-        // OPTION_B can never be reverted to LEGACY. (Writes are additionally
-        // gated per-date by ledgerTouched(); see the logs/days rules — a client
-        // cannot use a mode change to bypass the ledger requirement.)
-        && (!changed.hasAny(['financialMode'])
-          || (d.financialMode in ['LEGACY', 'OPTION_B']
-              && (!('financialMode' in resource.data) || resource.data.financialMode != 'OPTION_B')))
+        // (financialMode is not a settings field: the users/{uid} update rule
+        // rejects any client change to it — only the trusted function sets it.)
         // `!('avatar' in d)` additionally covers `avatar: deleteField()` (used
         // by migrateAvatarToProfileMeta/updateAvatar's legacy-field cleanup) —
         // see validMutationUpdate's comment on why referencing a field that
@@ -424,7 +427,7 @@ service cloud.firestore {
         .hasOnly([
           'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
           'pouchPrice', 'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt',
-          'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield', 'financialMode'
+          'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'
         ]);
     }
 
@@ -537,7 +540,7 @@ service cloud.firestore {
         && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
     }
 
-    // ---- OPTION B canonical daily financial ledger (local, not deployed) -----
+    // ---- OPTION B canonical daily financial ledger -------------------------
     // users/{uid}/dailyFinancials/{date} — the ONE authoritative day-level credit
     // for a date. Reuses the day-doc validators (validDayCountMap / validSnapshotMap
     // / validLifetimeAggregates) so the per-commit expression budget stays within
@@ -681,7 +684,7 @@ service cloud.firestore {
         allow delete: if isOwner(userId);
       }
 
-      // OPTION B canonical daily financial ledger (local; not deployed). The
+      // OPTION B canonical daily financial ledger. For a LEGACY account the
       // ledger is app-maintained and, like the day doc, is owner-writable —
       // same Spark residual as `days` (an owner can misstate their own
       // non-identity data; cross-user isolation and shape bounds still hold).

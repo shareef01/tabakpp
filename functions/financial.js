@@ -1,15 +1,20 @@
 /**
  * Trusted server-side financial domain for the Option-B ledger.
  *
- * This is a faithful port of the canonical client calculation
- * (`webApp/src/utils/smokingCalculator.js`): `computeDayCredit` +
- * `calculateDailyFinancials`. It is the AUTHORITATIVE implementation for
- * persisted Option-B credit — clients never decide the stored value.
+ * This is the AUTHORITATIVE implementation for persisted Option-B credit —
+ * clients never decide the stored value.
  *
- * A cross-platform contract test (`webApp/src/services/financialParity.test.js`)
- * asserts this agrees with the Web calculator over shared fixtures, so Web and
- * the backend cannot drift into two interpretations. (Kotlin parity is covered
- * by shared fixtures in `shared-tests/`.)
+ * `computeDayCredit` is a direct port of the client formula
+ * (`webApp/src/utils/smokingCalculator.js` and the Kotlin `SmokingCalculator`);
+ * `financial.test.js` runs it against the same `shared-tests/domain-fixtures.json`
+ * `dayCredit` cases the Web and Kotlin contract suites assert, so the three
+ * cannot drift apart on the per-day formula.
+ *
+ * `calculateDailyFinancials` is deliberately NOT a port: it extends the
+ * clients' (still unwired) version with the historical-safety rules below —
+ * unresolved components, live config only for the current date, stored ledger
+ * snapshots — so it is covered by its own tests in `financial.test.js`, not by
+ * cross-platform fixtures.
  */
 
 export const SMOKING_TYPES = ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING'];
