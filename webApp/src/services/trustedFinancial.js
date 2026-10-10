@@ -10,13 +10,18 @@
 import { getFunctions, httpsCallable, connectFunctionsEmulator } from 'firebase/functions';
 import { db } from '../firebase';
 
+// Must match `setGlobalOptions({ region })` in functions/index.js — the SDK
+// otherwise defaults to us-central1, where the callable does not exist. The
+// hosting CSP's connect-src allows this region's cloudfunctions.net origin.
+export const FUNCTIONS_REGION = 'europe-west1';
+
 let functionsInstance = null;
 
 const functions = () => {
   if (functionsInstance) return functionsInstance;
   const app = db?.app;
   if (!app) throw new Error('FIREBASE_NOT_CONFIGURED');
-  functionsInstance = getFunctions(app);
+  functionsInstance = getFunctions(app, FUNCTIONS_REGION);
   const host = import.meta?.env?.VITE_FUNCTIONS_EMULATOR_HOST;
   if (host) {
     connectFunctionsEmulator(
