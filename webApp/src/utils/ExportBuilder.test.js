@@ -65,6 +65,22 @@ describe('ExportBuilder.buildJson', () => {
     expect(doc.profile).toBeNull();
     expect(doc.profileMeta).toBeNull();
   });
+
+  it('preserves a midnight (0) day start instead of defaulting it to 6', () => {
+    const base = { profileMeta: null, configs: [], days: [], logs: [] };
+    const midnight = JSON.parse(buildJson({ ...base, profile: { dayStartHour: 0 } }, '2026-09-16T08:15:00Z'));
+    const unset = JSON.parse(buildJson({ ...base, profile: {} }, '2026-09-16T08:15:00Z'));
+    expect(midnight.profile.dayStartHour).toBe(0);
+    expect(unset.profile.dayStartHour).toBe(6);
+  });
+
+  it('preserves a zero unit price instead of defaulting it to 0.5', () => {
+    const base = { profileMeta: null, configs: [], days: [], logs: [] };
+    const free = JSON.parse(buildJson({ ...base, profile: { unitPrice: 0 } }, '2026-09-16T08:15:00Z'));
+    const unset = JSON.parse(buildJson({ ...base, profile: {} }, '2026-09-16T08:15:00Z'));
+    expect(free.profile.unitPrice).toBe(0);
+    expect(unset.profile.unitPrice).toBe(0.5);
+  });
 });
 
 describe('ExportBuilder.buildCsv', () => {

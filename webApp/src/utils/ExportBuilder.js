@@ -127,11 +127,13 @@ export function buildJson(snapshot, generatedAt = null) {
     application: { name: 'Tabakpp' },
     profile: snapshot.profile ? {
       name: snapshot.profile.name || '',
-      unitPrice: snapshot.profile.unitPrice || 0.5,
+      // `??`, not `||`: 0 is a valid (free) price, not "unset".
+      unitPrice: snapshot.profile.unitPrice ?? 0.5,
       unitsPerPack: snapshot.profile.unitsPerPack || 20,
       pouchPrice: snapshot.profile.pouchPrice || 0.0,
       estimatedYield: snapshot.profile.estimatedYield || 0,
-      dayStartHour: snapshot.profile.dayStartHour || 6,
+      // `??`, not `||`: 0 (midnight) is a valid day start, not "unset".
+      dayStartHour: snapshot.profile.dayStartHour ?? 6,
       accent: snapshot.profile.accent || '#FF5F5F',
       widgetSize: snapshot.profile.widgetSize || 'MEDIUM',
       purchaseType: snapshot.profile.purchaseType || 'PACK',
