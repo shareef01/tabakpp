@@ -157,25 +157,25 @@ dependencies {
     androidTestImplementation(libs.firebase.gitlive.firestore)
     androidTestImplementation(libs.firebase.gitlive.auth)
     androidTestImplementation(libs.androidx.test.core)
-    androidTestImplementation("androidx.test:runner:1.6.1")
-    androidTestImplementation("androidx.test:rules:1.6.1")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1") {
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:rules:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0") {
         exclude(group = "org.hamcrest", module = "hamcrest-core")
     }
     androidTestImplementation(kotlin("test"))
     androidTestImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation("com.google.firebase:firebase-firestore")
     androidTestImplementation("com.google.firebase:firebase-auth")
-    androidTestImplementation("androidx.test.ext:truth:1.6.0")
-    androidTestImplementation("org.hamcrest:hamcrest:2.2") {
+    androidTestImplementation("androidx.test.ext:truth:1.7.0")
+    androidTestImplementation("org.hamcrest:hamcrest:3.0") {
         because("Needed for assertThat matchers in Firestore assertions")
     }
 }
 
-// Exclude hamcrest-core (1.3) from androidTest configs because hamcrest:2.2
+// Exclude hamcrest-core (1.3) from androidTest configs because hamcrest:3.0
 // provides the same classes in an incompatible package layout.
 // hamcrest-core comes transitively from junit:4.13.2 (via kotlin("test") and
-// androidx.test.ext:junit). We want hamcrest:2.2 exclusively.
+// androidx.test.ext:junit). We want hamcrest:3.0 exclusively.
 configurations.configureEach {
     if (name.contains("androidTest")) {
         exclude(group = "org.hamcrest", module = "hamcrest-core")

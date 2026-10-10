@@ -1116,7 +1116,7 @@ fun ExportDataSection(
 
                 is ExportState.Ready -> {
                     val (content, format) = exportState
-                    val now = kotlinx.datetime.Clock.System.now().toString()
+                    val now = kotlin.time.Clock.System.now().toString()
                     val dateStr = now.substring(0, 10) // YYYY-MM-DD
                     val filename = if (format == ExportFormat.JSON) {
                         "tabakpp-data-$dateStr.json"

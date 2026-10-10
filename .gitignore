@@ -52,3 +52,6 @@ __pycache__/
 artifacts_*/
 # CI-only Firebase emulator config (created on-the-fly by workflow)
 firebase.ci.json
+
+# Locally downloaded GitHub Actions run artifacts.
+/artifacts_[0-9]*/

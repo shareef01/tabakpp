@@ -7,7 +7,7 @@ import com.tabakpp.app.domain.SmokingCalculator
 import dev.gitlive.firebase.firestore.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlinx.serialization.Serializable
 
 /** Minimal projection used to read `users/{uid}.financialMode` without touching UserProfile. */
@@ -228,7 +228,7 @@ class FirebaseRegistryRepository(
         val days = getAllDaysOnce(uid)
         val logs = getAllLogsOnce(uid)
         return CompleteExportSnapshot(
-            generatedAt = kotlinx.datetime.Clock.System.now().toString(),
+            generatedAt = kotlin.time.Clock.System.now().toString(),
             profile = profile,
             profileMeta = profileExtra?.let { ProfileMetaExport(it.avatar) },
             configs = configs,
