@@ -260,6 +260,66 @@ const main = async () => {
     `concurrent workers must not double-apply the delta (got ${raced.lifetimeAggregates.saved}, expected 15 − 10 = 5)`,
   );
 
+  // 9b) No MIGRATING dead end. A past closed day WITHOUT tracker snapshots can
+  //     only be priced from today's config, so it classifies B (unresolved).
+  //     Previously the account was frozen first and then HELD in MIGRATING —
+  //     no client path (rules lock) and no trusted path (OPTION_B only).
+  const unresolvedDay = (date) => ({
+    date, counts: { cig: 5 }, status: 'closed', foldedIntoLifetime: true,
+    aggregateCredit: { saved: 15, wasted: 5, smokingUnits: 5, baselineSaved: 0 },
+  });
+  const legacyProfile = { name: '', unitPrice: 1, lifetimeAggregates: { saved: 15, wasted: 5, smokingUnits: 5, baselineSaved: 0 } };
+  const cigCfg = { name: 'Cigarettes', limit: 10, order: 0, type: 'CIGARETTE', pricePerUnit: 1, isFinanciallyTracked: true, isPrimaryTracked: true, baseline: 15 };
+
+  //   (i) LEGACY + B date → never frozen; nothing written; dates reported.
+  const bUser = await signIn();
+  await writeDoc(`users/${bUser.localId}`, { ...legacyProfile, financialMode: 'LEGACY' });
+  await writeDoc(`users/${bUser.localId}/configs/cig`, cigCfg);
+  await writeDoc(`users/${bUser.localId}/days/${YDAY}`, unresolvedDay(YDAY));
+  m = await call(adminToken, { targetUid: bUser.localId, dryRun: true }, 'migrateAccount');
+  assert.ok(m.ok && m.body.result.canCutOver === false, `dry run must flag the B date: ${JSON.stringify(m.body)}`);
+  m = await call(adminToken, { targetUid: bUser.localId, dryRun: false }, 'migrateAccount');
+  assert.ok(m.ok, `B-date migration call failed: ${JSON.stringify(m.body)}`);
+  assert.equal(m.body.result.started, false);
+  assert.deepEqual(m.body.result.unresolved.map((u) => u.date), [YDAY]);
+  const bProfile = await readDoc(`users/${bUser.localId}`);
+  assert.equal(bProfile.financialMode, 'LEGACY', 'an account with unresolved dates must never be frozen');
+  assert.equal(bProfile.lifetimeAggregates.saved, 15, 'nothing may be applied');
+  assert.equal(await readDoc(`users/${bUser.localId}/dailyFinancials/${YDAY}`), null);
+
+  //   (ii) Left MIGRATING by an older run, B date, NO applied marker → rolled
+  //        back to LEGACY (safe: no delta was ever applied).
+  const stuckUser = await signIn();
+  await writeDoc(`users/${stuckUser.localId}`, { ...legacyProfile, financialMode: 'MIGRATING' });
+  await writeDoc(`users/${stuckUser.localId}/configs/cig`, cigCfg);
+  await writeDoc(`users/${stuckUser.localId}/days/${YDAY}`, unresolvedDay(YDAY));
+  m = await call(adminToken, { targetUid: stuckUser.localId, dryRun: false }, 'migrateAccount');
+  assert.ok(m.ok && m.body.result.rolledBack === true, `stuck account must roll back: ${JSON.stringify(m.body)}`);
+  const unstuck = await readDoc(`users/${stuckUser.localId}`);
+  assert.equal(unstuck.financialMode, 'LEGACY');
+  assert.equal(unstuck.lifetimeAggregates.saved, 15);
+
+  //   (iii) MIGRATING with an already-applied date AND a B date → refuse loudly
+  //         (rolling back would leave a migrated delta in LEGACY totals).
+  const partUser = await signIn();
+  await writeDoc(`users/${partUser.localId}`, { ...legacyProfile, financialMode: 'MIGRATING' });
+  await writeDoc(`users/${partUser.localId}/configs/cig`, cigCfg);
+  await writeDoc(`users/${partUser.localId}/days/${YDAY}`, unresolvedDay(YDAY));
+  await writeDoc(`users/${partUser.localId}/days/${TODAY}`, dayFixture(TODAY));
+  await writeDoc(`users/${partUser.localId}/dailyFinancials/${TODAY}`, {
+    date: TODAY, countsByTracker: { cig: 5 }, canonicalCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 0 },
+    ledgerSchemaVersion: 2, foldedIntoLifetime: true, migratedFromLegacy: true,
+  });
+  m = await call(adminToken, { targetUid: partUser.localId, dryRun: false }, 'migrateAccount');
+  assert.ok(!m.ok && m.body.error?.message === 'PARTIAL_MIGRATION_UNRESOLVED', `expected PARTIAL_MIGRATION_UNRESOLVED: ${JSON.stringify(m.body)}`);
+  assert.equal((await readDoc(`users/${partUser.localId}`)).financialMode, 'MIGRATING');
+
+  //   (iv) Rerunning on an OPTION_B account is a no-op — it is never
+  //        downgraded to MIGRATING, even briefly.
+  m = await call(adminToken, { targetUid: muid, dryRun: false }, 'migrateAccount');
+  assert.ok(m.ok && m.body.result.alreadyMigrated === true, `OPTION_B rerun must no-op: ${JSON.stringify(m.body)}`);
+  assert.equal((await readDoc(`users/${muid}`)).financialMode, 'OPTION_B');
+
   // 10) HISTORICAL_DAY_UPDATE — recompute canonical credit + lifetime delta from
   //     the day's FROZEN snapshots (no fabrication from today's settings).
   r = await call(adminToken, { operationId: 'hist1', type: 'HISTORICAL_DAY_UPDATE', date: TODAY, counts: { cig: 2 } });
@@ -287,7 +347,7 @@ const main = async () => {
   const delLed = await readDoc(`users/${duid}/dailyFinancials/${TODAY}`);
   assert.equal(delLed.countsByTracker.cig, undefined, 'tracker must be dropped from the ledger counts');
 
-  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, historical-day-update, tracker-delete all passed');
+  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete all passed');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message); process.exit(1); });

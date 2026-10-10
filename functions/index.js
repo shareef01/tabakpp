@@ -318,30 +318,8 @@ function snapshotsForCounts(counts, configs) {
   return out;
 }
 
-/**
- * Trusted account cutover coordinator (Phase 8). Only an authorized operator
- * (custom claim `admin === true`) may invoke it; it defaults to a DRY RUN.
- * Real migration: freeze (MIGRATING) → classify A/B/C/D → replace each A date's
- * already-credited LEGACY contribution with the canonical credit (NET delta,
- * never additive) via the ledger's `migratedFromLegacy` marker → preserve B/C →
- * flip to OPTION_B. Per-date progress is durable, so a rerun resumes. Each DATE
- * is applied atomically (its ledger write and lifetime delta share one
- * transaction), so an interruption can never leave a migrated ledger whose delta
- * was never applied; a multi-date migration as a whole is still NOT globally
- * atomic (see docs/financial-semantics.md §24).
- */
-export const migrateAccount = onCall(async (request) => {
-  if (request.auth?.token?.admin !== true) {
-    throw new HttpsError('permission-denied', 'Migration requires an authorized operator.');
-  }
-  const uid = requireId(request.data?.targetUid, 'targetUid required');
-  const dryRun = request.data?.dryRun !== false; // DRY RUN unless explicitly false
-  const userRef = db.collection('users').doc(uid);
-  const profileSnap = await userRef.get();
-  if (!profileSnap.exists) throw new HttpsError('not-found', 'NO_PROFILE');
-  const mode = profileSnap.get('financialMode') || 'LEGACY';
-  const defaultUnitPrice = num(profileSnap.get('unitPrice')) || 0.5;
-
+/** Load every dated record for an account and classify it (A/B/C/D). */
+async function planMigration(userRef, defaultUnitPrice) {
   const daysSnap = await userRef.collection('days').get();
   const logsSnap = await userRef.collection('logs').get();
   const configsSnap = await userRef.collection('configs').get();
@@ -358,12 +336,94 @@ export const migrateAccount = onCall(async (request) => {
 
   const plan = migrationPlan(dates, configs, defaultUnitPrice);
   const summary = plan.map((p) => ({ date: p.date, category: p.category, legacySaved: p.legacySaved, canonicalSaved: p.canonicalSaved, deltaSaved: p.deltaSaved }));
-  if (dryRun) return { dryRun: true, currentMode: mode, summary };
+  const unresolved = summary.filter((s) => s.category === 'B' || s.category === 'C');
+  return { plan, summary, unresolved };
+}
 
-  // 1. Freeze — rules then reject all client financial writes.
-  await userRef.set({ financialMode: 'MIGRATING', updatedAt: new Date() }, { merge: true });
+/** Set financialMode to `to` only if it is currently one of `from`; returns the mode it ends in. */
+async function transitionMode(userRef, from, to) {
+  return db.runTransaction(async (t) => {
+    const snap = await t.get(userRef);
+    const current = snap.get('financialMode') || 'LEGACY';
+    if (!from.includes(current)) return current;
+    t.set(userRef, { financialMode: to, updatedAt: new Date() }, { merge: true });
+    return to;
+  });
+}
 
-  // 2-3. Apply the NET replacement for each A date; keep B/C untouched.
+/**
+ * Trusted account cutover coordinator (Phase 8). Only an authorized operator
+ * (custom claim `admin === true`) may invoke it; it defaults to a DRY RUN.
+ *
+ * All-or-nothing at the account level: an account is only ever frozen
+ * (MIGRATING) when every date is cleanly migratable, and it leaves this call
+ * as LEGACY or OPTION_B — never parked in MIGRATING, where neither the client
+ * (rules lock) nor executeFinancialOperation (OPTION_B only) can write.
+ *  1. Already OPTION_B → no-op.
+ *  2. Any unresolved B/C date → not started; the account stays LEGACY and the
+ *     dates are returned for an operator decision.
+ *  3. Freeze (LEGACY → MIGRATING), then re-classify from the FROZEN data: a
+ *     client write that landed before the freeze can still have produced a B/C
+ *     date. If so, nothing has been applied yet, so roll back to LEGACY.
+ *  4. Replace each A date's already-credited LEGACY contribution with the
+ *     canonical credit (NET delta, never additive), one transaction per date,
+ *     marked `migratedFromLegacy` so a rerun resumes; then flip to OPTION_B.
+ * A multi-date migration as a whole is still NOT globally atomic (see
+ * docs/financial-semantics.md §24): an interrupted run is left MIGRATING and
+ * resumes on the next call.
+ */
+export const migrateAccount = onCall(async (request) => {
+  if (request.auth?.token?.admin !== true) {
+    throw new HttpsError('permission-denied', 'Migration requires an authorized operator.');
+  }
+  const uid = requireId(request.data?.targetUid, 'targetUid required');
+  const dryRun = request.data?.dryRun !== false; // DRY RUN unless explicitly false
+  const userRef = db.collection('users').doc(uid);
+  const profileSnap = await userRef.get();
+  if (!profileSnap.exists) throw new HttpsError('not-found', 'NO_PROFILE');
+  const mode = profileSnap.get('financialMode') || 'LEGACY';
+  const defaultUnitPrice = num(profileSnap.get('unitPrice')) || 0.5;
+
+  if (mode === 'OPTION_B') {
+    return { dryRun, currentMode: 'OPTION_B', alreadyMigrated: true };
+  }
+
+  const pre = await planMigration(userRef, defaultUnitPrice);
+  if (dryRun) {
+    return { dryRun: true, currentMode: mode, summary: pre.summary, unresolved: pre.unresolved,
+      canCutOver: pre.unresolved.length === 0 };
+  }
+
+  // 2. Never freeze an account that cannot cut over. (An account already
+  //    MIGRATING is an interrupted run: fall through and let step 3 decide.)
+  if (mode === 'LEGACY' && pre.unresolved.length > 0) {
+    return { dryRun: false, currentMode: 'LEGACY', started: false, unresolved: pre.unresolved,
+      summary: pre.summary, note: 'Not started: unresolved B/C dates need an operator decision.' };
+  }
+
+  // 3. Freeze — rules then reject all client financial writes. Conditional, so
+  //    a concurrent worker that already cut over is never downgraded.
+  const frozen = await transitionMode(userRef, ['LEGACY', 'MIGRATING'], 'MIGRATING');
+  if (frozen === 'OPTION_B') return { dryRun: false, currentMode: 'OPTION_B', alreadyMigrated: true };
+
+  const { plan, summary, unresolved } = await planMigration(userRef, defaultUnitPrice);
+  if (unresolved.length > 0) {
+    // Safe to roll back only while no date's delta has been applied. This run
+    // has applied none; a marker can only come from an earlier run.
+    const applied = await userRef.collection('dailyFinancials')
+      .where('migratedFromLegacy', '==', true).limit(1).get();
+    if (!applied.empty) {
+      throw new HttpsError('failed-precondition', 'PARTIAL_MIGRATION_UNRESOLVED', {
+        unresolved,
+        note: 'An earlier run already migrated some dates and unresolved B/C dates exist; rolling back would corrupt lifetime totals. Resolve the dates, then rerun.',
+      });
+    }
+    const now = await transitionMode(userRef, ['MIGRATING'], 'LEGACY');
+    return { dryRun: false, currentMode: now, started: false, rolledBack: true, unresolved, summary,
+      note: 'Rolled back to LEGACY: unresolved B/C dates appeared after the freeze.' };
+  }
+
+  // 4. Apply the NET replacement for each A date.
   //
   // One transaction PER DATE: the ledger write and its lifetime delta commit
   // together. Previously the loop wrote every ledger and then applied one
@@ -371,9 +431,9 @@ export const migrateAccount = onCall(async (request) => {
   // between left a date marked `migratedFromLegacy` whose delta had never been
   // applied — and a rerun skips it by marker, silently losing the delta (the
   // account kept its LEGACY totals while the canonical ledger said otherwise).
-  let migrated = 0; let preserved = 0;
+  let migrated = 0;
   for (const p of plan) {
-    if (p.category !== 'A') { if (p.category === 'B' || p.category === 'C') preserved += 1; continue; }
+    if (p.category !== 'A') continue;
     const ledgerRef = userRef.collection('dailyFinancials').doc(p.date);
     const applied = await db.runTransaction(async (t) => {
       const existing = await t.get(ledgerRef);
@@ -400,12 +460,6 @@ export const migrateAccount = onCall(async (request) => {
     if (applied) migrated += 1;
   }
 
-  // 4. Cut over only when nothing unresolved remains.
-  const unresolved = summary.filter((s) => s.category === 'B' || s.category === 'C');
-  if (unresolved.length > 0) {
-    return { dryRun: false, currentMode: 'MIGRATING', migrated, preserved, unresolved, summary,
-      note: 'Held in MIGRATING: unresolved B/C dates prevent a clean cutover.' };
-  }
-  await userRef.set({ financialMode: 'OPTION_B', updatedAt: new Date() }, { merge: true });
-  return { dryRun: false, currentMode: 'OPTION_B', migrated, preserved, summary };
+  const final = await transitionMode(userRef, ['MIGRATING'], 'OPTION_B');
+  return { dryRun: false, currentMode: final, migrated, summary };
 });

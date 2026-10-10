@@ -575,11 +575,23 @@ The client-only rules boundary is superseded by a **Firebase Callable** that is
 the only writer of OPTION_B financial state:
 
 - `functions/index.js` — `executeFinancialOperation` (COUNTER_INCREMENT/DECREMENT,
-  MANUAL_CREATE/UPDATE/DELETE/RESTORE, DAY_CLOSE, ZERO_COUNT_DAY_CLOSE; explicitly
-  `unimplemented` for HISTORICAL_DAY_UPDATE/STALE_DAY_RECONCILE) and
-  `migrateAccount` (operator-only, `admin` claim; DRY-RUN by default).
-- `functions/financial.js` — the server-authoritative `computeDayCredit` /
-  `calculateDailyFinancials` (port of the Web calculator) + `migrationPlan`.
+  MANUAL_CREATE/UPDATE/DELETE/RESTORE, DAY_CLOSE, ZERO_COUNT_DAY_CLOSE,
+  HISTORICAL_DAY_UPDATE, TRACKER_DELETE; explicitly `unimplemented` for
+  STALE_DAY_RECONCILE) and `migrateAccount` (operator-only, `admin` claim;
+  DRY-RUN by default).
+- `functions/financial.js` — the server-authoritative `computeDayCredit` (same
+  formula as Web/Kotlin, checked against the shared fixtures),
+  `calculateDailyFinancials` (extends the client version with historical-safety
+  rules) + `migrationPlan`.
+- **Migration never parks an account in MIGRATING.** An account with any
+  unresolved B/C date is not frozen at all (it stays LEGACY; the dates are
+  returned for an operator decision). Otherwise it is frozen, re-classified from
+  the frozen data, and either rolled back to LEGACY (B/C appeared, nothing
+  applied yet) or migrated and cut over to OPTION_B. An interrupted run stays
+  MIGRATING and resumes on the next call; if an earlier run already applied
+  dates and B/C dates now exist, the call fails with
+  `PARTIAL_MIGRATION_UNRESOLVED` rather than rolling back. Re-running on an
+  OPTION_B account is a no-op.
 - The uid is taken ONLY from `request.auth`; the payload uid is never trusted.
   The account's `financialMode` is read server-side; non-OPTION_B is rejected.
 - Every write is one Admin transaction: source + `dailyFinancials/{date}` +
