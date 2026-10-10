@@ -18,6 +18,9 @@ import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, migrationPlan,
 } from './financial.js';
+import {
+  MAX_COUNT, requireId, requireTrackingDate, resolveDayStartHour, sanitizeCounts, sanitizeHistoricalCounts,
+} from './validation.js';
 
 initializeApp();
 const db = getFirestore();
@@ -36,18 +39,15 @@ const EXPLICITLY_BLOCKED = new Set(['STALE_DAY_RECONCILE']);
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-/** The account's current tracking date, derived SERVER-side (day-start aware). */
+/**
+ * The account's current tracking date, derived SERVER-side (day-start aware).
+ * NOTE: evaluated in UTC — the server does not know the user's timezone, so
+ * near the day boundary this can differ from the client's tracking date.
+ */
 function trackingDateNow(dayStartHour) {
   const d = new Date();
-  if (d.getUTCHours() < (Number(dayStartHour) || 6)) d.setUTCDate(d.getUTCDate() - 1);
+  if (d.getUTCHours() < resolveDayStartHour(dayStartHour)) d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
-}
-
-function requireString(v, code) {
-  if (typeof v !== 'string' || v.length === 0 || v.length > 200) {
-    throw new HttpsError('invalid-argument', code);
-  }
-  return v;
 }
 
 /** Read the authoritative per-date state inside a transaction. */
@@ -102,22 +102,13 @@ export const executeFinancialOperation = onCall(async (request) => {
 
   const data = request.data || {};
   const type = data.type;
-  const operationId = requireString(data.operationId, 'operationId required');
+  const operationId = requireId(data.operationId, 'operationId required');
   if (EXPLICITLY_BLOCKED.has(type)) {
     throw new HttpsError('unimplemented', `${type} is not yet served by the trusted boundary.`);
   }
   if (!SUPPORTED.has(type)) throw new HttpsError('invalid-argument', 'Unsupported operation type.');
 
   const userRef = db.collection('users').doc(uid);
-
-  // financialMode is authoritative from the server; NEVER from the payload.
-  const profileSnap = await userRef.get();
-  if (!profileSnap.exists) throw new HttpsError('failed-precondition', 'NO_PROFILE');
-  const mode = profileSnap.get('financialMode') || 'LEGACY';
-  if (mode !== 'OPTION_B') {
-    throw new HttpsError('failed-precondition', `Account is not OPTION_B (financialMode=${mode}).`);
-  }
-
   const receiptRef = userRef.collection('financialOperations').doc(operationId);
   const fp = fingerprintOf({ type, date: data.date, trackerId: data.trackerId, logId: data.logId, counts: data.counts, delta: data.delta });
 
@@ -130,10 +121,24 @@ export const executeFinancialOperation = onCall(async (request) => {
       return { applied: false, result: receiptSnap.get('result') || null };
     }
 
-    const date = requireString(data.date, 'date required');
+    // The profile is read INSIDE the transaction: lifetimeAggregates are
+    // written back as absolute values below, so a read outside it let two
+    // concurrent folded-date operations overwrite each other's delta.
+    // financialMode is authoritative from the server; NEVER from the payload.
+    const profileSnap = await t.get(userRef);
+    if (!profileSnap.exists) throw new HttpsError('failed-precondition', 'NO_PROFILE');
+    const mode = profileSnap.get('financialMode') || 'LEGACY';
+    if (mode !== 'OPTION_B') {
+      throw new HttpsError('failed-precondition', `Account is not OPTION_B (financialMode=${mode}).`);
+    }
+
+    const date = requireTrackingDate(data.date);
     const { daySnap, day, logs, ledger, configs, ledgerSnap } = await readDateState(t, userRef, date);
     const ledgerRef = userRef.collection('dailyFinancials').doc(date);
     const folded = ledger?.foldedIntoLifetime === true;
+
+    // Fallback price comes from the profile, never the payload.
+    const defaultUnitPrice = num(profileSnap.get('unitPrice')) || 0.5;
 
     // Attach the current profile aggregates for folded lifetime adjustments.
     const curAgg = profileSnap.get('lifetimeAggregates') || ZERO;
@@ -149,12 +154,13 @@ export const executeFinancialOperation = onCall(async (request) => {
     // --- Source mutation (per op type) -------------------------------------
     let effectiveLogs = logs;
     if (type === 'COUNTER_INCREMENT' || type === 'COUNTER_DECREMENT') {
-      const trackerId = requireString(data.trackerId, 'trackerId required');
+      const trackerId = requireId(data.trackerId, 'trackerId required', 64);
       const delta = type === 'COUNTER_INCREMENT' ? 1 : -1;
       if (day?.status === 'closed') throw new HttpsError('failed-precondition', 'DAY_CLOSED');
       const cfg = configs.find((c) => c.id === trackerId);
       if (!cfg) throw new HttpsError('failed-precondition', 'CONFIG_NOT_FOUND');
       const newCounts = applyDelta(day?.counts || {}, { [trackerId]: delta });
+      if ((newCounts[trackerId] || 0) > MAX_COUNT) throw new HttpsError('failed-precondition', 'COUNT_LIMIT');
       const trackerSnapshots = {
         ...(day?.trackerSnapshots || {}),
         [trackerId]: snapshotFromConfig(cfg),
@@ -170,33 +176,33 @@ export const executeFinancialOperation = onCall(async (request) => {
       }, { merge: true });
       // recompute the day source for the credit
     } else if (type === 'MANUAL_CREATE') {
-      const logId = requireString(data.logId, 'logId required');
+      const logId = requireId(data.logId, 'logId required');
       const counts = sanitizeCounts(data.counts);
       if (logs.some((l) => l.id === logId)) throw new HttpsError('already-exists', 'LOG_EXISTS');
       const logRef = userRef.collection('logs').doc(logId);
-      const own = computeDayCredit(counts, snapshotsForCounts(counts, configs, data.snapshots || {}));
+      const own = computeDayCredit(counts, snapshotsForCounts(counts, configs), defaultUnitPrice);
       t.set(logRef, { id: logId, logDate: date, counts, isManual: true, origin: 'MANUAL_ENTRY',
         aggregateCredit: { saved: 0, wasted: own.wasted, smokingUnits: own.smokingUnits, baselineSaved: 0 } });
       effectiveLogs = [...logs, { id: logId, logDate: date, counts, origin: 'MANUAL_ENTRY' }];
     } else if (type === 'MANUAL_UPDATE') {
-      const logId = requireString(data.logId, 'logId required');
+      const logId = requireId(data.logId, 'logId required');
       const counts = sanitizeCounts(data.counts);
       const target = logs.find((l) => l.id === logId);
       if (!target) throw new HttpsError('not-found', 'LOG_NOT_FOUND');
       const logRef = userRef.collection('logs').doc(logId);
-      const own = computeDayCredit(counts, snapshotsForCounts(counts, configs, data.snapshots || {}));
+      const own = computeDayCredit(counts, snapshotsForCounts(counts, configs), defaultUnitPrice);
       t.set(logRef, { counts, aggregateCredit: { saved: 0, wasted: own.wasted, smokingUnits: own.smokingUnits, baselineSaved: 0 } }, { merge: true });
       effectiveLogs = logs.map((l) => (l.id === logId ? { ...l, counts } : l));
     } else if (type === 'MANUAL_DELETE') {
-      const logId = requireString(data.logId, 'logId required');
+      const logId = requireId(data.logId, 'logId required');
       const target = logs.find((l) => l.id === logId);
       if (target) t.delete(userRef.collection('logs').doc(logId));
       effectiveLogs = logs.filter((l) => l.id !== logId);
     } else if (type === 'MANUAL_RESTORE') {
-      const logId = requireString(data.logId, 'logId required');
+      const logId = requireId(data.logId, 'logId required');
       if (!logs.some((l) => l.id === logId)) {
         const counts = sanitizeCounts(data.counts);
-        const own = computeDayCredit(counts, snapshotsForCounts(counts, configs, data.snapshots || {}));
+        const own = computeDayCredit(counts, snapshotsForCounts(counts, configs), defaultUnitPrice);
         t.set(userRef.collection('logs').doc(logId), { id: logId, logDate: date, counts, isManual: true, origin: 'MANUAL_ENTRY',
           aggregateCredit: { saved: 0, wasted: own.wasted, smokingUnits: own.smokingUnits, baselineSaved: 0 } });
         effectiveLogs = [...logs, { id: logId, logDate: date, counts, origin: 'MANUAL_ENTRY' }];
@@ -215,7 +221,7 @@ export const executeFinancialOperation = onCall(async (request) => {
       // Delete a tracker config; drop it from the CURRENT open day's counts +
       // stamped snapshot. Closed/historical days keep their frozen state (LEGACY
       // parity); manual logs for the tracker are preserved (history).
-      const trackerId = requireString(data.trackerId, 'trackerId required');
+      const trackerId = requireId(data.trackerId, 'trackerId required', 64);
       t.delete(userRef.collection('configs').doc(trackerId));
       if (day && day.status !== 'closed') {
         const counts = { ...(day.counts || {}) };
@@ -233,7 +239,7 @@ export const executeFinancialOperation = onCall(async (request) => {
 
     // --- Canonical credit (server-computed, authoritative) -----------------
     const currentTrackingDate = trackingDateNow(profileSnap.get('dayStartHour'));
-    const fin = calculateDailyFinancials(effectiveDay, effectiveLogs.filter((l) => !(effectiveDay && isArchiveLog(l))), configs, num(data.defaultUnitPrice) || 0.5, { currentTrackingDate, ledgerSnapshots: ledger?.snapshots || {} });
+    const fin = calculateDailyFinancials(effectiveDay, effectiveLogs.filter((l) => !(effectiveDay && isArchiveLog(l))), configs, defaultUnitPrice, { currentTrackingDate, ledgerSnapshots: ledger?.snapshots || {} });
     const ledgerExistsAfter = ledgerSnap.exists;
 
     if (type === 'DAY_CLOSE' || type === 'ZERO_COUNT_DAY_CLOSE') {
@@ -290,30 +296,6 @@ export const executeFinancialOperation = onCall(async (request) => {
   });
 });
 
-function sanitizeCounts(counts) {
-  const out = {};
-  Object.entries(counts || {}).forEach(([id, v]) => {
-    const n = Math.max(0, num(v));
-    if (n > 0 && typeof id === 'string' && id.length <= 200) out[id] = n;
-  });
-  if (Object.keys(out).length > 25) throw new HttpsError('invalid-argument', 'TOO_MANY_TRACKERS');
-  return out;
-}
-
-/** Historical-day edit counts: keep ZERO values (a zero clears that tracker's
- * counter) and validate keys/bounds, mirroring the Web `normalizeCounts`. */
-function sanitizeHistoricalCounts(counts) {
-  const out = {};
-  Object.entries(counts || {}).forEach(([id, v]) => {
-    const n = Math.max(0, num(v));
-    if (typeof id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(id) && Number.isFinite(n) && n <= 10000) {
-      out[id] = n;
-    }
-  });
-  if (Object.keys(out).length > 50) throw new HttpsError('invalid-argument', 'TOO_MANY_TRACKERS');
-  return out;
-}
-
 function snapshotFromConfig(cfg) {
   return {
     type: cfg.type, target: num(cfg.limit), baseline: cfg.baseline ?? null,
@@ -322,10 +304,14 @@ function snapshotFromConfig(cfg) {
   };
 }
 
-function snapshotsForCounts(counts, configs, provided) {
-  const out = { ...(provided || {}) };
+/**
+ * Price/target stamps for a manual log come from the server-read tracker
+ * configs only — a client-supplied snapshot would let the payload choose the
+ * price that a backfilled date's canonical credit is derived from.
+ */
+function snapshotsForCounts(counts, configs) {
+  const out = {};
   Object.keys(counts || {}).forEach((id) => {
-    if (out[id]) return;
     const cfg = configs.find((c) => c.id === id);
     if (cfg) out[id] = snapshotFromConfig(cfg);
   });
@@ -348,7 +334,7 @@ export const migrateAccount = onCall(async (request) => {
   if (request.auth?.token?.admin !== true) {
     throw new HttpsError('permission-denied', 'Migration requires an authorized operator.');
   }
-  const uid = requireString(request.data?.targetUid, 'targetUid required');
+  const uid = requireId(request.data?.targetUid, 'targetUid required');
   const dryRun = request.data?.dryRun !== false; // DRY RUN unless explicitly false
   const userRef = db.collection('users').doc(uid);
   const profileSnap = await userRef.get();

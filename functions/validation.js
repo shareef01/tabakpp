@@ -1,0 +1,89 @@
+/**
+ * Input validation for the trusted financial callables.
+ *
+ * The Admin SDK bypasses Firestore rules, so every bound the rules enforce on a
+ * direct client write (date shape, id charset, count range, map size) has to be
+ * re-enforced here — otherwise the "trusted" boundary is looser than the
+ * untrusted one it replaces.
+ */
+import { HttpsError } from 'firebase-functions/v2/https';
+
+export const DEFAULT_DAY_START_HOUR = 6;
+export const MAX_COUNT = 10000;            // rules: validCountValue
+export const MAX_DAY_TRACKERS = 25;        // rules: validDayCountMap
+export const MAX_HISTORICAL_TRACKERS = 50; // rules: validCountMap
+
+const ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+// The furthest ahead any timezone's calendar date can be from UTC (UTC+14).
+const MAX_ZONE_LEAD_MS = 14 * 60 * 60 * 1000;
+
+/** A real calendar date in YYYY-MM-DD form (rejects 2026-02-31). */
+export const isCalendarDate = (v) => {
+  if (typeof v !== 'string') return false;
+  const m = DATE_PATTERN.exec(v);
+  if (!m) return false;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.toISOString().slice(0, 10) === v;
+};
+
+/**
+ * A tracking date that is not in the future for ANY timezone. The server does
+ * not know the user's zone, so this is the tightest bound it can enforce
+ * without rejecting a legitimate "today" east of UTC.
+ */
+export const requireTrackingDate = (v, now = new Date()) => {
+  if (!isCalendarDate(v)) throw new HttpsError('invalid-argument', 'INVALID_DATE');
+  const latest = new Date(now.getTime() + MAX_ZONE_LEAD_MS).toISOString().slice(0, 10);
+  if (v > latest) throw new HttpsError('invalid-argument', 'FUTURE_DATE');
+  return v;
+};
+
+/**
+ * A Firestore document id safe to use as a single path segment. A `/` would
+ * otherwise address a nested document the rules never validated.
+ */
+export const requireId = (v, code, maxLen = 128) => {
+  if (typeof v !== 'string' || v.length === 0 || v.length > maxLen || !ID_PATTERN.test(v)) {
+    throw new HttpsError('invalid-argument', code);
+  }
+  return v;
+};
+
+const validCount = (n) => Number.isInteger(n) && n >= 0 && n <= MAX_COUNT;
+
+/**
+ * Validate a counts map. Keys must be tracker ids (rules' validCountKey) and
+ * values whole numbers within the rules' bounds; anything else is rejected
+ * rather than silently dropped, so a malformed client fails loudly.
+ */
+const sanitize = (counts, { keepZero, maxEntries }) => {
+  if (counts == null) return {};
+  if (typeof counts !== 'object' || Array.isArray(counts)) {
+    throw new HttpsError('invalid-argument', 'INVALID_COUNTS');
+  }
+  const out = {};
+  for (const [id, v] of Object.entries(counts)) {
+    if (!ID_PATTERN.test(id) || id.length > 64) throw new HttpsError('invalid-argument', 'INVALID_TRACKER_ID');
+    const n = Number(v);
+    if (!validCount(n)) throw new HttpsError('invalid-argument', 'INVALID_COUNT');
+    if (n > 0 || keepZero) out[id] = n;
+  }
+  if (Object.keys(out).length > maxEntries) throw new HttpsError('invalid-argument', 'TOO_MANY_TRACKERS');
+  return out;
+};
+
+/** Manual-log counts: zero entries are dropped. */
+export const sanitizeCounts = (counts) =>
+  sanitize(counts, { keepZero: false, maxEntries: MAX_DAY_TRACKERS });
+
+/** Historical-day edit counts: a zero clears that tracker's counter, so keep it. */
+export const sanitizeHistoricalCounts = (counts) =>
+  sanitize(counts, { keepZero: true, maxEntries: MAX_HISTORICAL_TRACKERS });
+
+/** The profile's day-start hour; 0 (midnight) is a valid setting, not "unset". */
+export const resolveDayStartHour = (v) => {
+  const n = Number(v);
+  return v == null || !Number.isInteger(n) || n < 0 || n > 23 ? DEFAULT_DAY_START_HOUR : n;
+};
