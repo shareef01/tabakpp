@@ -342,7 +342,12 @@ service cloud.firestore {
         && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool)
         && (!('schemaVersion' in d) || (isWholeNumber(d.schemaVersion) && d.schemaVersion >= 0 && d.schemaVersion <= 1000))
         && (!('migratingLegacyDate' in d) || d.migratingLegacyDate == null || isDateString(d.migratingLegacyDate))
-        && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
+        && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000))
+        // A client-created profile always starts LEGACY. MIGRATING/OPTION_B are
+        // set only by the trusted migration function (Admin SDK); accepting them
+        // here would let a client self-assign a mode — together with deleting
+        // its profile, a way out of (or into) the trusted-write lock.
+        && (!('financialMode' in d) || d.financialMode == 'LEGACY');
     }
 
     // Counter/archive path: only validate fields this write may change.
@@ -635,7 +640,13 @@ service cloud.firestore {
           (isMutationOnlyUpdate() && validMutationUpdate()) ||
           (isSettingsOnlyUpdate() && validSettingsUpdate())
         );
-      allow delete: if isOwner(userId);
+      // A MIGRATING/OPTION_B profile cannot be deleted by the client: deleting
+      // and recreating it (as LEGACY) would drop the financial-mode lock while
+      // the account's financial history stays in place, re-opening every
+      // direct-write path the lock closes. Locked accounts are already unable
+      // to client-wipe their logs/days (see below), so this adds no new
+      // restriction to account deletion — that needs a trusted path.
+      allow delete: if isOwner(userId) && !financialLocked(database, userId);
 
       match /configs/{configId} {
         allow read: if isOwner(userId);

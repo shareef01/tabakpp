@@ -762,6 +762,35 @@ describe('OPTION B / MIGRATING trusted-write lock (Phase 3)', () => {
     await assertFails(updateDoc(doc(db, 'users/alice'), { financialMode: 'MIGRATING' }));
   });
 
+  it('a client-created profile can only start LEGACY (no self-assigned mode)', async () => {
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(db, 'users/alice'), { ...emptyProfile, financialMode: 'OPTION_B' }));
+    await assertFails(setDoc(doc(db, 'users/alice'), { ...emptyProfile, financialMode: 'MIGRATING' }));
+    await assertFails(setDoc(doc(db, 'users/alice'), { ...emptyProfile, financialMode: 'BOGUS' }));
+    await assertSucceeds(setDoc(doc(db, 'users/alice'), { ...emptyProfile, financialMode: 'LEGACY' }));
+  });
+
+  it('LEGACY: the owner can still delete their profile (account wipe)', async () => {
+    const db = await seed(null);
+    await assertSucceeds(deleteDoc(doc(db, 'users/alice')));
+  });
+
+  for (const mode of ['OPTION_B', 'MIGRATING']) {
+    it(`${mode}: profile delete is REJECTED, closing the delete-and-recreate escape`, async () => {
+      const db = await seed(mode);
+      await assertFails(deleteDoc(doc(db, 'users/alice')));
+      // And the escape's second step — recreating as LEGACY — only works if the
+      // delete went through, which it did not: the doc still exists, so a
+      // non-merge set is an update that would change financialMode.
+      await assertFails(setDoc(doc(db, 'users/alice'), emptyProfile));
+      let stored;
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        stored = (await getDoc(doc(context.firestore(), 'users/alice'))).data();
+      });
+      expect(stored.financialMode).toBe(mode);
+    });
+  }
+
   it('OPTION_B: a legitimate NON-financial settings update still succeeds', async () => {
     const db = await seed('OPTION_B');
     await assertSucceeds(updateDoc(doc(db, 'users/alice'), { name: 'New Name' }));
