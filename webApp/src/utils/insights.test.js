@@ -455,7 +455,6 @@ describe('aggregateMonthlyData — Case C (different trackers same date)', () =>
 describe('aggregateMonthlyData — logs-only historical financials', () => {
   it('logs-only date has zero financials (no fabricated pricing)', () => {
     const logs = [logEntry('2026-08-15', { cig: 5 })];
-    const configs = [{ id: 'cig', limit: 10, pricePerUnit: 0.60 }];
     const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-16', {}, 0.60);
     expect(result.completedMonths[0].spent).toBe(0);
     expect(result.completedMonths[0].saved).toBe(0);
@@ -470,7 +469,6 @@ describe('aggregateMonthlyData — logs-only historical financials', () => {
       saved: 2.40,
       baselineSaved: 1.20,
     })];
-    const configs = [{ id: 'cig', limit: 10, pricePerUnit: 0.60 }]; // current price is higher
     const result = SmokingCalculator.aggregateMonthlyData(logs, dayDocs, '2026-09-16', {}, 0.60);
     // With additive merge: 4 + 4 = 8 units consumed
     expect(result.completedMonths[0].units).toBe(8);
@@ -540,7 +538,6 @@ describe('aggregateMonthlyData — no current-config historical repricing', () =
     const logs = [
       logEntry('2026-07-01', { cig: 20 }),
     ];
-    const configs = [{ id: 'cig', limit: 10, pricePerUnit: 0.60 }];
     const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-16', {}, 0.60);
     // Units ARE included (consumption), but financials are zero (no stamped price)
     expect(result.completedMonths[0].units).toBe(20);

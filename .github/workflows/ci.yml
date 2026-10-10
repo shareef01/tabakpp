@@ -37,7 +37,7 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: gradle
-      - uses: gradle/actions/setup-gradle@07d1f8453baaff67fb503883367f8b13e6158a54 # v6
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           # Gradle User Home caching is already owned by actions/setup-java
           # (`cache: gradle`) above. Upstream docs advise against running both
@@ -103,8 +103,13 @@ jobs:
       - name: Lint, test, and build
         working-directory: webApp
         run: npm run lint && npm run audit:prod && npm run coverage && npm run build
+      - name: Production PWA offline navigation and deployment freshness
+        working-directory: webApp
+        run: npm run test:pwa
+        env:
+          PWA_TEST_REPORT: ${{ runner.temp }}/pwa-regression.json
       # Cross-platform domain contract fixtures (item 11) — see
-      # shared-tests/README.md. Also covered by `npm run test:run` above, but
+      # shared-tests/README.md. Also covered by `npm run coverage` above, but
       # named explicitly so a fixture-only regression is easy to spot in logs.
       - name: Cross-platform domain contract fixtures
         working-directory: webApp

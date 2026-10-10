@@ -26,7 +26,7 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - uses: gradle/actions/setup-gradle@07d1f8453baaff67fb503883367f8b13e6158a54 # v6
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
         with:
           # Gradle User Home caching is already owned by actions/setup-java
           # (`cache: gradle`) above. Upstream docs advise against running both
@@ -53,7 +53,7 @@ jobs:
         run: npm install -g firebase-tools@15.24.0
 
       - name: Cache Firebase emulator downloads
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/firebase/emulators
           key: firebase-emulators-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/android-integration.yml') }}
@@ -600,7 +600,7 @@ jobs:
       # Cache SDK packages only. Every run still creates a fresh AVD.
       # sdkmanager below still checks/installs the requested packages on cache hits.
       - name: Cache Android emulator SDK packages
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ steps.sdk-cache.outputs.root }}/emulator
