@@ -634,6 +634,12 @@ class ExportIntegrationTest {
         override suspend fun deleteLog(uid: String, logId: String) {}
         override suspend fun restoreLog(uid: String, log: LogEntry) {}
         override suspend fun updateHistoricalLog(uid: String, logId: String, counts: Map<String, Double>) {}
+        override suspend fun createManualLogAtomic(uid: String, logId: String, date: String, counts: Map<String, Double>, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) {}
+        override suspend fun updateManualLogAtomic(uid: String, logId: String, date: String, counts: Map<String, Double>, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) {}
+        override suspend fun deleteManualLogAtomic(uid: String, logId: String, date: String, defaultUnitPrice: Double, operationId: String) {}
+        override suspend fun restoreManualLogAtomic(uid: String, log: com.tabakpp.app.data.LogEntry, defaultUnitPrice: Double, operationId: String) {}
+        override suspend fun adjustCounterAtomic(uid: String, date: String, trackerId: String, delta: Double, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) {}
+        override suspend fun foldLedgerIntoLifetime(uid: String, date: String) {}
         override suspend fun addConfig(uid: String, config: TrackerConfig) {}
         override suspend fun updateConfig(uid: String, config: TrackerConfig) {}
         override suspend fun deleteConfig(uid: String, configId: String, trackingDate: String?) {}

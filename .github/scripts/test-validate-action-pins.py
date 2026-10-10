@@ -15,6 +15,8 @@ B. Live API tests (check_ref) — run only when GITHUB_TOKEN is set or when
 import os
 import re
 import sys
+import tempfile
+import shutil
 import textwrap
 
 # Import the validator's functions
@@ -29,6 +31,7 @@ IMMUTABLE_SHA_RE = _module.IMMUTABLE_SHA_RE
 USES_RE = _module.USES_RE
 parse_uses_ref = _module.parse_uses_ref
 check_ref = _module.check_ref
+check_release_notes_consistency = _module.check_release_notes_consistency
 get_auth_header = _module.get_auth_header
 
 
@@ -314,6 +317,74 @@ def test_uses_regex_detection():
     return all(results)
 
 
+def test_release_notes_consistency():
+    """Test the release-notes path consistency check (AUD-009 regression).
+
+    A release workflow whose existence gate validates `.github/release-notes/v1.2.3.md`
+    but whose `body_path` points at `.github/release-notes/1.2.3.md` must be flagged,
+    because the release step would fail after the APK is built and signed.
+    """
+    print("\n--- Test Group A: Release-notes path consistency ---")
+    results = []
+
+    def write_workflow(dirpath, text):
+        with open(os.path.join(dirpath, "release-android.yml"), "w") as f:
+            f.write(text)
+        return dirpath
+
+    tmp = tempfile.mkdtemp()
+    try:
+        # 1. Consistent (v-prefixed in both places) — must pass
+        d1 = write_workflow(tmp, textwrap.dedent("""\
+            - name: Verify release notes file exists
+              run: |
+                if [ ! -f ".github/release-notes/v${VERSION}.md" ]; then exit 1; fi
+            - name: Create GitHub Release
+              with:
+                tag_name: v${{ github.event.inputs.version }}
+                body_path: .github/release-notes/v${{ github.event.inputs.version }}.md
+            """))
+        results.append(assert_eq(
+            "consistent v-prefixed paths pass",
+            check_release_notes_consistency(d1), []))
+
+        # 2. Mismatched (gate v-prefixed, body_path unprefixed) — the AUD-009 bug
+        d2 = os.path.join(tmp, "mismatch")
+        os.makedirs(d2, exist_ok=True)
+        write_workflow(d2, textwrap.dedent("""\
+            - name: Verify release notes file exists
+              run: |
+                if [ ! -f ".github/release-notes/v${VERSION}.md" ]; then exit 1; fi
+            - name: Create GitHub Release
+              with:
+                tag_name: v${{ github.event.inputs.version }}
+                body_path: .github/release-notes/${{ github.event.inputs.version }}.md
+            """))
+        mismatches = check_release_notes_consistency(d2)
+        results.append(assert_true("mismatched body_path is flagged", len(mismatches) == 1))
+
+        # 3. No body_path — nothing to check
+        d3 = os.path.join(tmp, "nobody")
+        os.makedirs(d3, exist_ok=True)
+        write_workflow(d3, "- name: Verify release notes file exists\n  run: echo v${VERSION}.md\n")
+        results.append(assert_eq(
+            "workflow without body_path passes",
+            check_release_notes_consistency(d3), []))
+
+        # 4. The real repository workflow must be consistent
+        repo_workflow_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            ".github", "workflows")
+        if os.path.isdir(repo_workflow_dir):
+            results.append(assert_eq(
+                "repository release workflow is consistent",
+                check_release_notes_consistency(repo_workflow_dir), []))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return all(results)
+
+
 def run_live_tests():
     """Run tests that hit the real GitHub API."""
     print("\n--- Test Group B: Live GitHub API tests ---")
@@ -362,6 +433,7 @@ def main():
     a_results.append(test_parse_malformed())
     a_results.append(test_deduplication())
     a_results.append(test_uses_regex_detection())
+    a_results.append(test_release_notes_consistency())
     
     a_pass = all(a_results)
     

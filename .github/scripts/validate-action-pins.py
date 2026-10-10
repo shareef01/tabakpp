@@ -175,6 +175,49 @@ def parse_uses_ref(ref_str):
     return repo, ref, "action", ref_str
 
 
+def check_release_notes_consistency(workflow_dir):
+    """Return a list of violations for release-notes path mismatches.
+
+    The Android release workflow validates that `.github/release-notes/v${VERSION}.md`
+    exists, then publishes a release whose `body_path` must point at the *same*
+    file. A mismatch (e.g. the gate checks `v1.2.3.md` but `body_path` points at
+    `1.2.3.md`) makes the release fail at the final step — after the APK has been
+    built, signed, and checksummed. This check keeps the two in lock-step.
+    """
+    violations = []
+    workflow_name = "release-android.yml"
+    path = os.path.join(workflow_dir, workflow_name)
+    if not os.path.isfile(path):
+        return violations
+
+    with open(path) as f:
+        text = f.read()
+
+    # Any `.../release-notes/<name>.md` referenced anywhere (the gate use).
+    referenced = re.findall(r"release-notes/([A-Za-z0-9_.$\{\}]+\.md)", text)
+    # body_path values can contain spaces (`${{ github.event.inputs.version }}`),
+    # so capture the whole remainder of the line.
+    body_paths = [m.strip() for m in re.findall(r"^\s*body_path:\s*(.+?)\s*$", text, re.MULTILINE)]
+    if not body_paths:
+        return violations
+
+    def normalize(value):
+        value = value.replace("${{ github.event.inputs.version }}", "<V>")
+        value = value.replace("${VERSION}", "<V>")
+        return value
+
+    normalized_refs = {normalize(name) for name in referenced}
+    for body in body_paths:
+        base = normalize(body).rsplit("release-notes/", 1)[-1]
+        if base not in normalized_refs:
+            violations.append(
+                f"{workflow_name}: body_path '{body}' does not match any release-notes "
+                f"file validated in the same workflow ({sorted(referenced)}); the release "
+                f"step would fail after the APK is built and signed"
+            )
+    return violations
+
+
 def main():
     workflow_dir = ".github/workflows"
     if not os.path.isdir(workflow_dir):
@@ -262,10 +305,19 @@ def main():
     print(f"Checked: {checked}  Valid: {checked - len(violations)}  "
           f"Invalid: {len(violations)}  Skipped: {skipped}  API calls: {api_calls}")
 
-    if violations:
-        print("\n❌ Violations:")
-        for v in violations:
+    workflow_violations = check_release_notes_consistency(workflow_dir)
+    if workflow_violations:
+        print("\n❌ Workflow consistency violations:")
+        for v in workflow_violations:
             print(f"  {v}")
+    else:
+        print("✅ Release-notes paths are consistent across the release workflow.")
+
+    if violations or workflow_violations:
+        if violations:
+            print("\n❌ Violations:")
+            for v in violations:
+                print(f"  {v}")
         return 1
 
     print("\n✅ All action pins are valid and immutable.")

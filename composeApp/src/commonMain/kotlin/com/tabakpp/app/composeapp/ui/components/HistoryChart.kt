@@ -23,13 +23,11 @@ import com.tabakpp.app.domain.SmokingCalculator
  */
 @Composable
 fun HistoryChart(
-    logs: List<com.tabakpp.app.data.LogEntry>,
-    activeCount: Int = 0,
+    series: List<SmokingCalculator.DateTotal>,
     accentColor: Color,
     modifier: Modifier = Modifier
 ) {
-    val historical = SmokingCalculator.aggregateDailyChartTotals(logs)
-    val dailyTotals = historical + SmokingCalculator.DateTotal("NOW", activeCount)
+    val dailyTotals = series
     val chartDescription = dailyTotals.joinToString(
         prefix = "Usage trend. ",
         separator = "; "

@@ -53,12 +53,14 @@ fun HistoricalInsightsContent(
     dayDocs: List<DayDocument>,
     configs: List<TrackerConfig>,
     trackingDay: String,
+    activeCounts: Map<String, Double> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     val (completedMonths, currentMonthMtd) = SmokingCalculator.aggregateMonthlyData(
         logs = logs,
         dayDocs = dayDocs,
-        trackingDay = trackingDay
+        trackingDay = trackingDay,
+        activeCounts = activeCounts
     )
 
     val trend = if (completedMonths.isNotEmpty()) {

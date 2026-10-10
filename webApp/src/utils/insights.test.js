@@ -224,10 +224,102 @@ describe('aggregateMonthlyData', () => {
     expect(result.months[0].saved).toBe(4.0);  // (20-12) * 0.5 (stamped), NOT (5-12)*2.0
   });
 
-  it('15. merges activeCounts for today (open session)', () => {
+  it('15. does NOT double-count today when a day doc and the live overlay both carry today (AUD-001)', () => {
+    // Production shape: `days/{today}` holds the persisted counts, and the live
+    // overlay (`activeCounts`) is built from that SAME doc plus pending ops.
+    // The two must not be added together.
     const dayDocs = [dayDoc('2026-09-15', { cig: 3 })];
-    const result = SmokingCalculator.aggregateMonthlyData([], dayDocs, '2026-09-15', { cig: 2 });
-    expect(result.months[0].units).toBe(5); // 3 + 2 from active session
+    const result = SmokingCalculator.aggregateMonthlyData([], dayDocs, '2026-09-15', { cig: 3 });
+    expect(result.currentMonthMtd.units).toBe(3); // not 6
+  });
+
+  it('15b. reflects a pending overlay increment without doubling the persisted base', () => {
+    const dayDocs = [dayDoc('2026-09-15', { cig: 3 })];
+    const result = SmokingCalculator.aggregateMonthlyData([], dayDocs, '2026-09-15', { cig: 4 }); // +1 pending
+    expect(result.currentMonthMtd.units).toBe(4);
+  });
+
+  it('15c. reflects a pending overlay decrement without doubling the persisted base', () => {
+    const dayDocs = [dayDoc('2026-09-15', { cig: 3 })];
+    const result = SmokingCalculator.aggregateMonthlyData([], dayDocs, '2026-09-15', { cig: 2 }); // -1 pending
+    expect(result.currentMonthMtd.units).toBe(2);
+  });
+
+  it('15d. still adds legacy/manual logs dated today on top of the overlay', () => {
+    // A manual backfill for today lives in the legacy `logs` ledger, which the
+    // overlay does not contain — so it is additive with the persisted day doc.
+    const dayDocs = [dayDoc('2026-09-15', { cig: 3 })];
+    const logs = [logEntry('2026-09-15', { cig: 2 })];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, dayDocs, '2026-09-15', { cig: 3 });
+    expect(result.currentMonthMtd.units).toBe(5); // 3 (day doc, via overlay) + 2 (manual)
+  });
+
+  it('15e. keeps today visible when the live overlay is momentarily empty (AUD-001 regression)', () => {
+    // The day listener has not delivered yet (or errored) → overlay is empty,
+    // but today's day doc IS known. Today must not vanish from the month.
+    const dayDocs = [dayDoc('2026-09-15', { cig: 3 })];
+    const result = SmokingCalculator.aggregateMonthlyData([], dayDocs, '2026-09-15', {}, 0.5, 6);
+    expect(result.currentMonthMtd.units).toBe(3); // not 0
+  });
+
+  it('15f. a loaded zero overlay is authoritative over a stale dayDoc (true zero, not fallback)', () => {
+    // Overlay = {cig: 0} (user decremented to zero) while the 400-window dayDocs
+    // copy is momentarily stale at {cig: 5}. The overlay must win → 0.
+    const dayDocs = [dayDoc('2026-09-15', { cig: 5 })];
+    const result = SmokingCalculator.aggregateMonthlyData([], dayDocs, '2026-09-15', { cig: 0 }, 0.5, 6);
+    expect(result.currentMonthMtd.units).toBe(0);
+  });
+
+  it('18. includes stamped manual-log economics in the month (AUD-003)', () => {
+    // createManualEntry stamps a real aggregateCredit and credits
+    // lifetimeAggregates; monthly insights must count the same money.
+    const logs = [{
+      id: '2026-08-10_M1',
+      logDate: '2026-08-10',
+      counts: { cig: 5 },
+      origin: 'MANUAL_ENTRY',
+      aggregateCredit: { saved: 7.5, wasted: 2.5, smokingUnits: 5, baselineSaved: 3.0 },
+    }];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-15', {}, 0.5, 6);
+    const aug = result.completedMonths[0];
+    expect(aug.month).toBe('2026-08');
+    expect(aug.units).toBe(5);
+    expect(aug.spent).toBeCloseTo(2.5);
+    expect(aug.saved).toBeCloseTo(7.5);
+    expect(aug.baselineSaved).toBeCloseTo(3.0);
+    expect(aug.hasBaseline).toBe(true);
+  });
+
+  it('19. sums day-doc credit and manual-log credit for one date (AUD-003)', () => {
+    const dayDocs = [
+      dayDoc('2026-09-15', { cig: 3 }, {}, { wasted: 1.5, saved: 3.5, smokingUnits: 3, baselineSaved: 0 }),
+    ];
+    const logs = [{
+      id: '2026-09-15_M1',
+      logDate: '2026-09-15',
+      counts: { cig: 2 },
+      origin: 'MANUAL_ENTRY',
+      aggregateCredit: { saved: 4.0, wasted: 1.0, smokingUnits: 2, baselineSaved: 0 },
+    }];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, dayDocs, '2026-09-15', { cig: 3 }, 0.5, 6);
+    expect(result.currentMonthMtd.spent).toBeCloseTo(2.5); // 1.5 + 1.0
+    expect(result.currentMonthMtd.saved).toBeCloseTo(7.5); // 3.5 + 4.0
+  });
+
+  it('20. PINS the multi-manual-entry policy: event-level summing (see docs/financial-semantics.md)', () => {
+    // `saved`/`baselineSaved` are stamped per log (event-level) and summed; a
+    // day-level policy would compute once from the combined total. This test
+    // documents the CURRENT behavior so any future policy change is deliberate,
+    // not accidental. Status: BLOCKED BY PRODUCT DECISION.
+    const logs = [
+      { id: 'A', logDate: '2026-08-10', counts: { cig: 2 }, origin: 'MANUAL_ENTRY', aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 } },
+      { id: 'B', logDate: '2026-08-10', counts: { cig: 3 }, origin: 'MANUAL_ENTRY', aggregateCredit: { saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 } },
+    ];
+    const result = SmokingCalculator.aggregateMonthlyData(logs, [], '2026-09-15', {}, 0.5, 6);
+    const aug = result.completedMonths[0];
+    expect(aug.units).toBe(5); // consumption is event-additive (correct under both models)
+    expect(aug.spent).toBeCloseTo(5); // €2 + €3
+    expect(aug.saved).toBeCloseTo(15); // €8 + €7 — EVENT-LEVEL (Option A); day-level would be €5
   });
 
   it('16. limits completed months to monthsToInclude', () => {

@@ -86,6 +86,9 @@ fun MetricBanner(
                     SpentMetricItem(
                         label = "SPENT TODAY",
                         spent = metrics.spentToday,
+                        // Unavailable when the whole date is unavailable OR this
+                        // component specifically is unresolved (never a €0).
+                        available = metrics.todayAvailable && metrics.todayUnresolved?.spent != true,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -285,6 +288,7 @@ private fun GoalStatusItem(
 private fun SpentMetricItem(
     label: String,
     spent: Double,
+    available: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier, horizontalAlignment = Alignment.Start) {
@@ -293,10 +297,23 @@ private fun SpentMetricItem(
             style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 1.sp, fontWeight = FontWeight.Black)
         )
         Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = SmokingCalculator.formatCurrency(spent),
-            style = TabakTypography.headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = 24.sp),
-            color = if (spent > 0) WarningColor else Color.White
-        )
+        if (!available) {
+            // Fail-closed: an unavailable authoritative ledger is NOT a €0.
+            Text(
+                text = "—",
+                style = TabakTypography.headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = 24.sp),
+                color = TextMuted
+            )
+            Text(
+                text = "Unavailable",
+                style = TabakTypography.labelSmall.copy(color = TextMuted)
+            )
+        } else {
+            Text(
+                text = SmokingCalculator.formatCurrency(spent),
+                style = TabakTypography.headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = 24.sp),
+                color = if (spent > 0) WarningColor else Color.White
+            )
+        }
     }
 }

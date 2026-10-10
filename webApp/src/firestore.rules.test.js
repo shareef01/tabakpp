@@ -5,7 +5,7 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, writeBatch, deleteDoc } from 'firebase/firestore';
 
 const PROJECT_ID = 'demo-tabakpp-rules';
 let testEnv;
@@ -408,6 +408,22 @@ describe('users/{uid}/days/{date} — dated daily-document model (items 1, 2, 13
     }));
   });
 
+  it('caps trackerSnapshots at exactly 8 entries — the client tracker limit (AUD-005)', async () => {
+    const db = await seedAlice();
+    // Seed an open day the production way: create with a single snapshot (the
+    // first tap), then grow the snapshot map via the cheaper update path.
+    await assertSucceeds(setDoc(doc(db, 'users/alice/days/2026-07-20'), openDay));
+
+    // 8 trackers touched in a day is the supported maximum (the client enforces
+    // the same cap on tracker creation, so users never reach a 9th and get a
+    // permission-denied mid-use).
+    const eight = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`t${i}`, { target: 1 }]));
+    await assertSucceeds(updateDoc(doc(db, 'users/alice/days/2026-07-20'), { trackerSnapshots: eight }));
+
+    const nine = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`t${i}`, { target: 1 }]));
+    await assertFails(updateDoc(doc(db, 'users/alice/days/2026-07-20'), { trackerSnapshots: nine }));
+  });
+
   it('rejects a full-document set() that rewrites immutable/frozen fields on an open day', async () => {
     const db = await seedAlice();
     // Seed an open day the way the Android repo would (new DayDocument with all fields)
@@ -561,5 +577,207 @@ describe('users/{uid}/meta/{id} — avatar split from the profile doc (item 12)'
     const db = testEnv.authenticatedContext('alice').firestore();
     await assertFails(setDoc(doc(db, 'users/alice/meta/profile'), { avatar: 'A'.repeat(100001) }));
     await assertFails(setDoc(doc(db, 'users/alice/meta/profile'), { avatar: 'x', extra: true }));
+  });
+});
+
+describe('users/{uid}/dailyFinancials/{date} — OPTION B canonical ledger (local rules)', () => {
+  const seedAlice = async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+    });
+    return testEnv.authenticatedContext('alice').firestore();
+  };
+
+  const ledger = (over = {}) => ({
+    date: '2026-10-01',
+    countsByTracker: { cig: 5 },
+    snapshots: { cig: { target: 10, unitPrice: 1 } },
+    canonicalCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 1 },
+    ledgerSchemaVersion: 2,
+    ambiguous: false,
+    missingConfig: [],
+    foldedIntoLifetime: false,
+    ...over,
+  });
+
+  it('allows an owner to create and read their ledger for the matching date', async () => {
+    const db = await seedAlice();
+    await assertSucceeds(setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledger()));
+    await assertSucceeds(getDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01')));
+  });
+
+  it('rejects a ledger whose date field does not match the document id, or extra keys', async () => {
+    const db = await seedAlice();
+    await assertFails(setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledger({ date: '2026-10-02' })));
+    await assertFails(setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledger({ bogus: 1 })));
+  });
+
+  it('folds foldedIntoLifetime one-way and rejects a re-open', async () => {
+    const db = await seedAlice();
+    await setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledger());
+    await assertSucceeds(updateDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), { foldedIntoLifetime: true }));
+    await assertFails(updateDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), { foldedIntoLifetime: false }));
+  });
+
+  it('denies cross-user reads and writes', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice/dailyFinancials/2026-10-01'), ledger());
+    });
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(getDoc(doc(mallory, 'users/alice/dailyFinancials/2026-10-01')));
+    await assertFails(updateDoc(doc(mallory, 'users/alice/dailyFinancials/2026-10-01'), { countsByTracker: { cig: 0 } }));
+  });
+});
+
+describe('OPTION B / MIGRATING trusted-write lock (Phase 3)', () => {
+  const seed = async (mode) => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), { ...emptyProfile, ...(mode ? { financialMode: mode } : {}) });
+    });
+    return testEnv.authenticatedContext('alice').firestore();
+  };
+  const dayLog = { logDate: '2026-10-01', counts: { cig: 2 }, isManual: true, origin: 'MANUAL_ENTRY' };
+  const dayDocData = { date: '2026-10-01', counts: { cig: 1 }, trackerSnapshots: {}, status: 'open' };
+  const ledgerData = {
+    date: '2026-10-01', countsByTracker: { cig: 2 }, snapshots: { cig: { target: 10, unitPrice: 1 } },
+    canonicalCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 }, ledgerSchemaVersion: 2,
+    foldedIntoLifetime: false, updatedAt: new Date(),
+  };
+  const receiptData = {
+    operationId: 'op1', operationType: 'createManualLog', sourceDocumentPath: 'users/alice/logs/L1',
+    trackingDate: '2026-10-01', payloadFingerprint: 'fp1', resultStatus: 'OK', createdAt: new Date(),
+  };
+
+  it('LEGACY account: legacy client writes remain allowed (backward compatible)', async () => {
+    const db = await seed(null);
+    await assertSucceeds(setDoc(doc(db, 'users/alice/logs/L1'), dayLog));
+    await assertSucceeds(setDoc(doc(db, 'users/alice/days/2026-10-01'), dayDocData));
+    await assertSucceeds(setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledgerData));
+  });
+
+  it('DIAG: LEGACY atomic log + ledger(Kotlin shape) + receipt commit succeeds', async () => {
+    const db = await seed(null);
+    // Mirrors the exact Kotlin `DailyFinancialRecord` serialization, which now
+    // includes eligible / conflicting / unresolvedComponents.
+    const kotlinLedger = {
+      date: '2026-10-01', countsByTracker: { cig: 2 }, snapshots: { cig: { target: 10, unitPrice: 1 } },
+      canonicalCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 }, ledgerSchemaVersion: 2,
+      foldedIntoLifetime: false,
+      eligible: true, conflicting: [],
+      unresolvedComponents: { spent: false, saved: false, baselineSaved: false, smokingUnits: false },
+      updatedAt: new Date(),
+    };
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'users/alice/logs/L1'), dayLog);
+    batch.set(doc(db, 'users/alice/dailyFinancials/2026-10-01'), kotlinLedger);
+    batch.set(doc(db, 'users/alice/financialOperations/op1'), receiptData);
+    await assertSucceeds(batch.commit());
+  });
+
+  it('REGRESSION: LEGACY 5-document atomic commit (log + day + ledger + receipt + profile) succeeds', async () => {
+    const db = await seed(null);
+    const kotlinLedger = {
+      date: '2026-10-01', countsByTracker: { cig: 2 }, snapshots: { cig: { target: 10, unitPrice: 1 } },
+      canonicalCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 }, ledgerSchemaVersion: 2,
+      foldedIntoLifetime: false,
+      eligible: true, conflicting: [],
+      unresolvedComponents: { spent: false, saved: false, baselineSaved: false, smokingUnits: false },
+      updatedAt: new Date(),
+    };
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'users/alice/logs/L1'), dayLog);
+    batch.set(doc(db, 'users/alice/days/2026-10-01'), dayDocData);
+    batch.set(doc(db, 'users/alice/dailyFinancials/2026-10-01'), kotlinLedger);
+    batch.set(doc(db, 'users/alice/financialOperations/op1'), receiptData);
+    batch.set(
+      doc(db, 'users/alice'),
+      { lifetimeAggregates: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 }, updatedAt: new Date() },
+      { merge: true },
+    );
+    await assertSucceeds(batch.commit());
+  });
+
+  it('REGRESSION: authenticated LEGACY create of the full UserProfile shape is allowed', async () => {
+    const db = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(db, 'users/bob'), {
+      name: 'Test User', accent: '#FF8800', widgetSize: 'MEDIUM', purchaseType: 'PACK',
+      unitPrice: 0.5, unitsPerPack: 20, pouchPrice: 5, estimatedYield: 30, dayStartHour: 4,
+      ecoMode: false, retailPrice: 0, retailQty: 0, ryoPrice: 0, ryoYield: 0,
+      schemaVersion: 1,
+      lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 },
+      activeCounts: {},
+      createdAt: new Date(), updatedAt: new Date(),
+    }));
+  });
+
+  it('REGRESSION: a ledger with an UNKNOWN extra key is still REJECTED', async () => {
+    const db = await seed(null);
+    await assertFails(setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), {
+      ...ledgerData, unexpectedField: true,
+    }));
+  });
+
+  for (const mode of ['OPTION_B', 'MIGRATING']) {
+    it(`${mode}: client log create is REJECTED`, async () => {
+      const db = await seed(mode);
+      await assertFails(setDoc(doc(db, 'users/alice/logs/L1'), dayLog));
+    });
+    it(`${mode}: client day (counter) write is REJECTED`, async () => {
+      const db = await seed(mode);
+      await assertFails(setDoc(doc(db, 'users/alice/days/2026-10-01'), dayDocData));
+    });
+    it(`${mode}: client historical day UPDATE is REJECTED (updateHistoricalDay fails closed)`, async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice/days/2026-10-01'), {
+          ...dayDocData, status: 'closed', foldedIntoLifetime: true,
+        });
+      });
+      const db = await seed(mode);
+      await assertFails(updateDoc(doc(db, 'users/alice/days/2026-10-01'), { counts: { cig: 9 } }));
+    });
+    it(`${mode}: client ledger + receipt writes are REJECTED`, async () => {
+      const db = await seed(mode);
+      await assertFails(setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledgerData));
+      await assertFails(setDoc(doc(db, 'users/alice/financialOperations/op1'), receiptData));
+    });
+    it(`${mode}: client lifetimeAggregates forgery is REJECTED`, async () => {
+      const db = await seed(mode);
+      await assertFails(updateDoc(doc(db, 'users/alice'), {
+        lifetimeAggregates: { saved: 9999, wasted: 0, smokingUnits: 0, baselineSaved: 0 },
+      }));
+    });
+  }
+
+  it('OPTION_B: even a "compliant" atomic log + ledger client commit is REJECTED', async () => {
+    const db = await seed('OPTION_B');
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'users/alice/logs/L1'), dayLog);
+    batch.set(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledgerData);
+    await assertFails(batch.commit());
+  });
+
+  it('a client can NEVER write its own financialMode (trusted function owns it)', async () => {
+    const db = await seed(null);
+    await assertFails(updateDoc(doc(db, 'users/alice'), { financialMode: 'OPTION_B' }));
+    await assertFails(updateDoc(doc(db, 'users/alice'), { financialMode: 'MIGRATING' }));
+  });
+
+  it('OPTION_B: a legitimate NON-financial settings update still succeeds', async () => {
+    const db = await seed('OPTION_B');
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), { name: 'New Name' }));
+  });
+
+  it('cross-user financial writes are rejected in OPTION_B', async () => {
+    await seed('OPTION_B');
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+    await assertFails(setDoc(doc(mallory, 'users/alice/logs/L1'), dayLog));
+    await assertFails(setDoc(doc(mallory, 'users/alice/dailyFinancials/2026-10-01'), ledgerData));
+  });
+
+  it('OPTION_B cuts off the previously-allowed client ledger-touch bypass entirely', async () => {
+    const db = await seed('OPTION_B');
+    // The old model accepted a client "compliant" commit; now there is no client path.
+    await expect(setDoc(doc(db, 'users/alice/logs/L1'), dayLog)).rejects.toThrow();
+    await expect(updateDoc(doc(db, 'users/alice/days/2026-10-01'), { counts: { cig: 5 } })).rejects.toThrow();
   });
 });

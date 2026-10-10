@@ -24,6 +24,7 @@ import com.tabakpp.app.composeapp.theme.*
 import com.tabakpp.app.composeapp.ui.components.ConfirmModal
 import com.tabakpp.app.composeapp.ui.components.HistoryChart
 import com.tabakpp.app.composeapp.ui.components.ManualEntryForm
+import com.tabakpp.app.data.DayDocument
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.viewmodels.RegistryViewModel
@@ -39,6 +40,22 @@ import kotlinx.datetime.todayIn
  * Platinum Analytics Vault.
  * Features "Deep Zinc" surfaces and 0.5dp milled highlights.
  */
+/** Synthetic history-row id prefix for a closed `days/{date}` record (AUD-004). */
+internal const val DAY_RECORD_ID_PREFIX = "day:"
+
+/**
+ * A closed `days/{date}` document as a history row, so the dated daily-document
+ * model (the primary record going forward) is visible and editable in Android
+ * History. Mirrors the web `dayRecordAsLogLike`. Today's still-open day is
+ * excluded by the caller.
+ */
+internal fun dayRecordAsHistoryEntry(day: DayDocument): LogEntry = LogEntry(
+    id = "$DAY_RECORD_ID_PREFIX${day.date}",
+    logDate = day.date,
+    counts = day.counts,
+    origin = "DAY_RECORD"
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
@@ -53,24 +70,26 @@ fun HistoryScreen(
     val historyIsTruncated by viewModel.historyIsTruncated.collectAsStateWithLifecycle()
     val dayDocs by viewModel.dayDocs.collectAsStateWithLifecycle()
     val configs by viewModel.configs.collectAsStateWithLifecycle()
+    val activeCounts by viewModel.activeCounts.collectAsStateWithLifecycle()
     var historySubView by rememberSaveable { mutableStateOf("history") }
 
     val scope = rememberCoroutineScope()
     val accentColor = LocalAccentColor.current
 
     var logToEditId by rememberSaveable { mutableStateOf<String?>(null) }
-    val logToEdit = logs.firstOrNull { it.id == logToEditId }
+    // History rows = legacy `logs` (manual entries + pre-migration archives)
+    // PLUS closed `days/{date}` records (AUD-004). Today's still-open day is
+    // deliberately excluded — it belongs on the Track screen, not a second
+    // editable surface for the same live count (mirrors web HistoryScreen).
+    val closedDayRows = remember(dayDocs) {
+        dayDocs.filter { it.status == "closed" }.map { dayRecordAsHistoryEntry(it) }
+    }
+    val historyEntries = remember(logs, closedDayRows) { logs + closedDayRows }
+    val logToEdit = historyEntries.firstOrNull { it.id == logToEditId }
     var logPendingDelete by remember { mutableStateOf<LogEntry?>(null) }
     var showAddEntry by rememberSaveable { mutableStateOf(false) }
     var historyPeriod by rememberSaveable { mutableStateOf(30) }
-    val periodLogs = remember(logs, historyPeriod, trackingDay) {
-        val anchor = runCatching { LocalDate.parse(trackingDay) }.getOrElse {
-            Clock.System.todayIn(TimeZone.currentSystemDefault())
-        }
-        val cutoff = anchor.minus(historyPeriod - 1, DateTimeUnit.DAY)
-        logs.filter { runCatching { LocalDate.parse(it.logDate) >= cutoff }.getOrDefault(false) }
-    }
-    val groupedLogs = remember(logs) { SmokingCalculator.groupLogsByDate(logs) }
+    val groupedLogs = remember(historyEntries) { SmokingCalculator.groupLogsByDate(historyEntries) }
     val sortedDates = remember(groupedLogs) { groupedLogs.keys.sortedDescending() }
 
     Box(
@@ -127,6 +146,7 @@ fun HistoryScreen(
                             dayDocs = dayDocs,
                             configs = configs,
                             trackingDay = trackingDay,
+                            activeCounts = activeCounts,
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
                     }
@@ -167,10 +187,18 @@ fun HistoryScreen(
                                     color = accentColor
                                 )
                                 Spacer(modifier = Modifier.height(24.dp))
+                                val velocitySeries = remember(logs, dayDocs, trackingDay, historyPeriod, activeCounts) {
+                                    SmokingCalculator.buildVelocitySeries(
+                                        logs = logs,
+                                        dayDocs = dayDocs,
+                                        trackingDay = trackingDay,
+                                        days = historyPeriod,
+                                        activeCounts = activeCounts
+                                    )
+                                }
                                 HistoryChart(
-                                    logs = periodLogs,
-                                    activeCount = metrics?.count ?: 0,
-                                    accentColor = accentColor, 
+                                    series = velocitySeries,
+                                    accentColor = accentColor,
                                     modifier = Modifier.height(180.dp).padding(horizontal = 8.dp)
                                 )
                             }
@@ -194,9 +222,9 @@ fun HistoryScreen(
                                 modifier = Modifier.weight(1f)
                             )
                             MetricBlock(
-                                value = SmokingCalculator.formatCurrency(metrics?.spentToday ?: 0.0),
+                                value = if (metrics?.todayAvailable == false || metrics?.todayUnresolved?.spent == true) "—" else SmokingCalculator.formatCurrency(metrics?.spentToday ?: 0.0),
                                 label = "today",
-                                subLabel = "SPENT",
+                                subLabel = if (metrics?.todayAvailable == false || metrics?.todayUnresolved?.spent == true) "UNAVAILABLE" else "SPENT",
                                 icon = Icons.Default.Wallet,
                                 modifier = Modifier.weight(1f)
                             )
@@ -253,7 +281,7 @@ fun HistoryScreen(
                     }
                 }
 
-                if (logs.isEmpty()) {
+                if (historyEntries.isEmpty()) {
                     item {
                         Text(
                             "Your tracked days will appear here.",
@@ -274,8 +302,10 @@ fun HistoryScreen(
                             items = groupedLogs[date].orEmpty(),
                             key = { log -> log.id }
                         ) { log ->
+                            val isDayRecord = log.id.startsWith(DAY_RECORD_ID_PREFIX)
                             LogItem(
                                 log = log,
+                                isDayRecord = isDayRecord,
                                 onEdit = { logToEditId = log.id },
                                 onDelete = { logPendingDelete = log }
                             )
@@ -298,7 +328,13 @@ fun HistoryScreen(
                 initialLog = logToEdit,
                 accentColor = accentColor,
                 onSave = { _, counts ->
-                    viewModel.updateLog(logToEdit.id, counts)
+                    // Day-doc rows edit the dated record; legacy log rows edit
+                    // the log ledger (AUD-004).
+                    if (logToEdit.id.startsWith(DAY_RECORD_ID_PREFIX)) {
+                        viewModel.updateDayRecord(logToEdit.logDate, counts)
+                    } else {
+                        viewModel.updateLog(logToEdit.id, counts)
+                    }
                     logToEditId = null
                 },
                 onDismiss = { logToEditId = null }
@@ -396,6 +432,7 @@ fun LogItem(
     log: LogEntry,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    isDayRecord: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -423,6 +460,7 @@ fun LogItem(
                     text = when (log.origin) {
                         "DAY_RESET" -> "Ended day"
                         "MANUAL_ENTRY" -> "Manual entry"
+                        "DAY_RECORD" -> "Tracked day"
                         else -> log.origin.lowercase().replace('_', ' ')
                     },
                     style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp),
@@ -434,8 +472,13 @@ fun LogItem(
                 IconButton(onClick = onEdit, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit history entry", tint = TextMuted, modifier = Modifier.size(18.dp))
                 }
-                IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete history entry", tint = ErrorColor, modifier = Modifier.size(18.dp))
+                // Delete/restore for dated day records is not implemented on the
+                // app layer (mirrors web HistoryScreen); legacy log rows keep
+                // full delete/restore/undo.
+                if (!isDayRecord) {
+                    IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete history entry", tint = ErrorColor, modifier = Modifier.size(18.dp))
+                    }
                 }
             }
         }

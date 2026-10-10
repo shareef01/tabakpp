@@ -1,16 +1,22 @@
 package com.tabakpp.app.viewmodels
 
 import com.tabakpp.app.data.AuthRepository
+import com.tabakpp.app.data.DailyFinancialRecord
 import com.tabakpp.app.data.DayDocument
+import com.tabakpp.app.data.LifetimeAggregates
 import com.tabakpp.app.data.LocalSettings
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.NetworkObserver
 import com.tabakpp.app.data.ProfileExtra
 import com.tabakpp.app.data.RegistryRepository
 import com.tabakpp.app.data.TrackerConfig
+import com.tabakpp.app.data.TrustedFinancial
+import com.tabakpp.app.data.TrustedOperationResult
 import com.tabakpp.app.data.User
 import com.tabakpp.app.data.UserProfile
 import com.tabakpp.app.domain.CompleteExportSnapshot
+import com.tabakpp.app.domain.FinancialSource
+import com.tabakpp.app.domain.SmokingCalculator
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +65,7 @@ private class FakeRegistryRepository : RegistryRepository {
     val dayFlow = MutableStateFlow<DayDocument?>(null)
     val daysFlow = MutableStateFlow<List<DayDocument>>(emptyList())
     val avatarFlow = MutableStateFlow<ProfileExtra?>(null)
+    val ledgersFlow = MutableStateFlow<List<DailyFinancialRecord>>(emptyList())
 
     /** When set, every mutating call throws it (init bootstrap calls do not). */
     var failWith: Exception? = null
@@ -84,6 +91,7 @@ private class FakeRegistryRepository : RegistryRepository {
     override fun subscribeToLogs(uid: String): Flow<List<LogEntry>> = logsFlow
     override fun subscribeToDay(uid: String, date: String): Flow<DayDocument?> = dayFlow
     override fun subscribeToDays(uid: String): Flow<List<DayDocument>> = daysFlow
+    override fun subscribeToLedgers(uid: String): Flow<List<DailyFinancialRecord>> = ledgersFlow
     override fun subscribeToProfileExtra(uid: String): Flow<ProfileExtra?> = avatarFlow
 
     override suspend fun updateLiveCounter(uid: String, trackerId: String, delta: Double, trackingDate: String, defaultUnitPrice: Double) {
@@ -103,6 +111,15 @@ private class FakeRegistryRepository : RegistryRepository {
     override suspend fun deleteLog(uid: String, logId: String) { maybeFail() }
     override suspend fun restoreLog(uid: String, log: LogEntry) { maybeFail() }
     override suspend fun updateHistoricalLog(uid: String, logId: String, counts: Map<String, Double>) { maybeFail() }
+    override suspend fun createManualLogAtomic(uid: String, logId: String, date: String, counts: Map<String, Double>, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) { maybeFail() }
+    override suspend fun updateManualLogAtomic(uid: String, logId: String, date: String, counts: Map<String, Double>, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) { maybeFail() }
+    override suspend fun deleteManualLogAtomic(uid: String, logId: String, date: String, defaultUnitPrice: Double, operationId: String) { maybeFail() }
+    override suspend fun restoreManualLogAtomic(uid: String, log: com.tabakpp.app.data.LogEntry, defaultUnitPrice: Double, operationId: String) { maybeFail() }
+    var financialMode: String = "LEGACY"
+    val adjustCounterAtomicCalls = mutableListOf<LiveCounterCall>()
+    override suspend fun getFinancialMode(uid: String): String = financialMode
+    override suspend fun adjustCounterAtomic(uid: String, date: String, trackerId: String, delta: Double, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) { maybeFail(); adjustCounterAtomicCalls.add(LiveCounterCall(uid, trackerId, delta, date, defaultUnitPrice)) }
+    override suspend fun foldLedgerIntoLifetime(uid: String, date: String) { maybeFail() }
     override suspend fun addConfig(uid: String, config: TrackerConfig) { maybeFail(); addConfigCalls.add(uid to config) }
     override suspend fun updateConfig(uid: String, config: TrackerConfig) { maybeFail() }
     override suspend fun deleteConfig(uid: String, configId: String, trackingDate: String?) {
@@ -135,6 +152,14 @@ private class FakeLocalSettings : LocalSettings {
 private class FakeNetworkObserver(var online: Boolean = true) : NetworkObserver {
     override val isOnline: StateFlow<Boolean> = MutableStateFlow(online)
     fun goOffline() { online = false; (isOnline as MutableStateFlow).value = false }
+}
+
+private class FakeTrustedFinancial : TrustedFinancial {
+    val calls = mutableListOf<Pair<String, Map<String, Any?>>>()
+    override suspend fun execute(type: String, payload: Map<String, Any?>): TrustedOperationResult {
+        calls.add(type to payload)
+        return TrustedOperationResult(applied = true)
+    }
 }
 
 // --- tests ----------------------------------------------------------------
@@ -172,6 +197,46 @@ class RegistryViewModelTest {
         assertEquals("cig", call.trackerId)
         assertEquals(1.0, call.delta)
         assertEquals(vm.trackingDay.value, call.trackingDate) // caller decides the date at write time (item 1)
+    }
+
+    @Test
+    fun increment_routesToLedger_whenOptionBEnabledAndAccountMode() {
+        val (vm, reg, _) = build()
+        val gw = FakeTrustedFinancial()
+        vm.optionBGateway = gw
+        reg.financialMode = "OPTION_B"
+        vm.optionBLedgerEnabled = true
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1, gw.calls.size)
+        assertEquals("COUNTER_INCREMENT", gw.calls.first().first)
+        assertTrue(reg.liveCounterCalls.isEmpty())
+    }
+
+    @Test
+    fun increment_staysLegacy_whenFlagOffEvenForOptionBAccount() {
+        val (vm, reg, _) = build()
+        val gw = FakeTrustedFinancial()
+        vm.optionBGateway = gw
+        reg.financialMode = "OPTION_B"
+        vm.optionBLedgerEnabled = false
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertTrue(gw.calls.isEmpty())
+        assertEquals(1, reg.liveCounterCalls.size)
+    }
+
+    @Test
+    fun increment_staysLegacy_whenFlagOnButLegacyAccount() {
+        val (vm, reg, _) = build()
+        val gw = FakeTrustedFinancial()
+        vm.optionBGateway = gw
+        reg.financialMode = "LEGACY"
+        vm.optionBLedgerEnabled = true
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertTrue(gw.calls.isEmpty())
+        assertEquals(1, reg.liveCounterCalls.size)
     }
 
     @Test
@@ -835,4 +900,134 @@ class RegistryViewModelTest {
         assertEquals(4.0, vm.activeCounts.value["cig"])
         assertNull(vm.error.value)
     }
+
+    @Test
+    fun metrics_and_canonical_useTheLedger_whenOptionB() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(0.0, 0.0, 0.0, 0.0))
+        reg.financialMode = "OPTION_B"
+        reg.ledgersFlow.value = listOf(DailyFinancialRecord(
+            date = vm.trackingDay.value,
+            canonicalCredit = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0),
+            eligible = true,
+        ))
+        val metrics = mutableListOf<SmokingCalculator.GlobalMetrics?>()
+        val canon = mutableListOf<RegistryViewModel.CanonicalFinancials?>()
+        val j1 = bg.launch { vm.metrics.collect { metrics.add(it) } }
+        val j2 = bg.launch { vm.canonical.collect { canon.add(it) } }
+        scheduler.runCurrent()
+        assertEquals(FinancialSource.OPTION_B_CANONICAL, canon.last()!!.today.source)
+        assertEquals(6.0, canon.last()!!.today.canonical!!.spent, 0.001)
+        assertEquals(4.0, canon.last()!!.totals.saved, 0.001)
+        assertEquals(6.0, metrics.last()!!.spentToday, 0.001)
+        assertEquals(4.0, metrics.last()!!.saved, 0.001)
+        assertEquals(9.0, metrics.last()!!.baselineSavedToday, 0.001)
+        j1.cancel(); j2.cancel()
+    }
+
+    @Test
+    fun canonical_isNull_andMetricsStayLegacy_forLegacyAccount() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(unitPrice = 1.0, lifetimeAggregates = LifetimeAggregates(0.0, 0.0, 0.0, 0.0))
+        reg.financialMode = "LEGACY"
+        reg.ledgersFlow.value = listOf(DailyFinancialRecord(
+            date = vm.trackingDay.value,
+            canonicalCredit = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0),
+        ))
+        val canon = mutableListOf<RegistryViewModel.CanonicalFinancials?>()
+        val j = bg.launch { vm.canonical.collect { canon.add(it) } }
+        scheduler.runCurrent()
+        kotlin.test.assertNull(canon.last())
+        j.cancel()
+    }
+
+    @Test
+    fun canonical_marksMissingLedgerUnavailable_whenOptionB() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(0.0, 0.0, 0.0, 0.0))
+        reg.financialMode = "OPTION_B"
+        reg.logsFlow.value = listOf(LogEntry(id = "A", logDate = vm.trackingDay.value, counts = mapOf("cig" to 1.0), origin = "MANUAL_ENTRY"))
+        reg.ledgersFlow.value = emptyList()
+        val canon = mutableListOf<RegistryViewModel.CanonicalFinancials?>()
+        val j = bg.launch { vm.canonical.collect { canon.add(it) } }
+        scheduler.runCurrent()
+        assertEquals(FinancialSource.MISSING_CANONICAL_LEDGER, canon.last()!!.today.source)
+        kotlin.test.assertFalse(canon.last()!!.today.available)
+        kotlin.test.assertFalse(canon.last()!!.totals.complete)
+        j.cancel()
+    }
+
+    @Test
+    fun metrics_doNotDoubleCountAFoldedLedger() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0))
+        reg.financialMode = "OPTION_B"
+        reg.ledgersFlow.value = listOf(DailyFinancialRecord(
+            date = vm.trackingDay.value,
+            canonicalCredit = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0),
+            eligible = true,
+            foldedIntoLifetime = true,
+        ))
+        val metrics = mutableListOf<SmokingCalculator.GlobalMetrics?>()
+        val j = bg.launch { vm.metrics.collect { metrics.add(it) } }
+        scheduler.runCurrent()
+        // already folded ⇒ the credit is not added a second time
+        assertEquals(4.0, metrics.last()!!.savedLifetime, 0.001)
+        j.cancel()
+    }
+
+    @Test
+    fun metrics_flagUnavailable_forMissingLedger() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(unitPrice = 1.0, lifetimeAggregates = LifetimeAggregates(0.0, 0.0, 0.0, 0.0))
+        reg.financialMode = "OPTION_B"
+        reg.logsFlow.value = listOf(LogEntry(id = "A", logDate = vm.trackingDay.value, counts = mapOf("cig" to 6.0), origin = "MANUAL_ENTRY"))
+        reg.ledgersFlow.value = emptyList()
+        val metrics = mutableListOf<SmokingCalculator.GlobalMetrics?>()
+        val j = bg.launch { vm.metrics.collect { metrics.add(it) } }
+        scheduler.runCurrent()
+        // Source activity exists but the ledger is missing ⇒ UNAVAILABLE, never legacy.
+        kotlin.test.assertFalse(metrics.last()!!.todayAvailable)
+        j.cancel()
+    }
+
+    @Test
+    fun migrating_appliesCanonicalPerDate_notToEveryDate() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(4.0, 6.0, 6.0, 9.0))
+        reg.financialMode = "MIGRATING"
+        reg.ledgersFlow.value = listOf(DailyFinancialRecord(
+            date = vm.trackingDay.value,
+            canonicalCredit = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0),
+            eligible = true,
+        ))
+        reg.logsFlow.value = listOf(LogEntry(id = "B", logDate = "2020-01-02", counts = mapOf("cig" to 3.0), origin = "MANUAL_ENTRY"))
+        val canon = mutableListOf<RegistryViewModel.CanonicalFinancials?>()
+        val j = bg.launch { vm.canonical.collect { canon.add(it) } }
+        scheduler.runCurrent()
+        val c = canon.last()!!
+        assertEquals(FinancialSource.OPTION_B_CANONICAL, c.today.source) // migrated date
+        assertEquals(4.0, c.totals.saved, 0.001)                        // only the canonical date
+        kotlin.test.assertFalse(c.totals.complete)                     // the legacy-owned date is incomplete
+        j.cancel()
+    }
+
+    @Test
+    fun metrics_includeAnUnfoldedLedgerOnce() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(0.0, 0.0, 0.0, 0.0))
+        reg.financialMode = "OPTION_B"
+        reg.ledgersFlow.value = listOf(DailyFinancialRecord(
+            date = vm.trackingDay.value,
+            canonicalCredit = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0),
+            eligible = true,
+            foldedIntoLifetime = false,
+        ))
+        val metrics = mutableListOf<SmokingCalculator.GlobalMetrics?>()
+        val j = bg.launch { vm.metrics.collect { metrics.add(it) } }
+        scheduler.runCurrent()
+        assertEquals(4.0, metrics.last()!!.savedLifetime, 0.001)
+        j.cancel()
+    }
+
 }

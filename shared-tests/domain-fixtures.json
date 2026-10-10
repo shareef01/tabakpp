@@ -188,21 +188,51 @@
         "spent": 10.0, "saved": 10.0, "baselineSaved": 5.0, "hasBaseline": true,
         "currentMonthMtd": true, "currentMonth": "2026-09" } },
 
-    { "case": "monthly_insights_merges_active_counts_for_today", "op": "monthlyInsights",
+    { "case": "monthly_insights_today_overlay_mirrors_day_doc_not_double_counted", "op": "monthlyInsights",
       "input": {
         "logs": [],
         "dayDocs": [
           { "date": "2026-09-15", "counts": { "cig": 3 }, "trackerSnapshots": {}, "aggregateCredit": null, "status": "open" }
         ],
         "trackingDay": "2026-09-15",
-        "activeCounts": { "cig": 2 },
+        "activeCounts": { "cig": 3 },
+        "defaultUnitPrice": 0.5,
+        "monthsToInclude": 6
+      },
+      "expected": { "units": 3, "trackedDays": 1, "avgUnitsPerTrackedDay": 3.0,
+        "completedCount": 0, "currentMonthMtd": true, "currentMonthUnits": 3,
+        "completedMonth": null, "currentMonth": "2026-09",
+        "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
+
+    { "case": "monthly_insights_today_overlay_pending_delta_replaces_not_adds", "op": "monthlyInsights",
+      "input": {
+        "logs": [],
+        "dayDocs": [
+          { "date": "2026-09-15", "counts": { "cig": 3 }, "trackerSnapshots": {}, "aggregateCredit": null, "status": "open" }
+        ],
+        "trackingDay": "2026-09-15",
+        "activeCounts": { "cig": 4 },
+        "defaultUnitPrice": 0.5,
+        "monthsToInclude": 6
+      },
+      "expected": { "units": 4, "trackedDays": 1, "avgUnitsPerTrackedDay": 4.0,
+        "currentMonthMtd": true, "currentMonthUnits": 4, "currentMonth": "2026-09" } },
+
+    { "case": "monthly_insights_today_manual_log_additive_with_overlay", "op": "monthlyInsights",
+      "input": {
+        "logs": [
+          { "id": "2026-09-15_M1", "logDate": "2026-09-15", "counts": { "cig": 2 }, "origin": "MANUAL_ENTRY", "aggregateCredit": null }
+        ],
+        "dayDocs": [
+          { "date": "2026-09-15", "counts": { "cig": 3 }, "trackerSnapshots": {}, "aggregateCredit": null, "status": "open" }
+        ],
+        "trackingDay": "2026-09-15",
+        "activeCounts": { "cig": 3 },
         "defaultUnitPrice": 0.5,
         "monthsToInclude": 6
       },
       "expected": { "units": 5, "trackedDays": 1, "avgUnitsPerTrackedDay": 5.0,
-        "completedCount": 0, "currentMonthMtd": true, "currentMonthUnits": 5,
-        "completedMonth": null, "currentMonth": "2026-09",
-        "spent": 0.0, "saved": 0.0, "baselineSaved": 0.0, "hasBaseline": false } },
+        "currentMonthMtd": true, "currentMonthUnits": 5, "currentMonth": "2026-09" } },
 
     { "case": "monthly_insights_overlap_logs_and_daydocs_additive", "op": "monthlyInsights",
       "input": {
