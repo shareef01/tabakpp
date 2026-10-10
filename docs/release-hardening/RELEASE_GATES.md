@@ -14,8 +14,8 @@ PASS · OPEN · BLOCKED · APPROVAL_REQUIRED
 | UI/UX preserved, no unapproved visual change | **PASS (so far)** | no UI files touched this engagement |
 | Security: authorization intact, no weakening | **PASS** | rules 108/108; `financialLocked`, ownership, ledger/receipt validation, 50-entry contract all intact |
 | Dependency vulnerabilities | **OPEN (low risk)** | Web prod 0; Web dev 19H/1C/14M (build tooling only); functions prod 8 moderate (GCP SDK transitives) — no high/critical shipped |
-| Production Firebase untouched | **PASS** | emulators + synthetic accounts only |
-| Production actions (deploy/migrate/activate Option B) | **APPROVAL_REQUIRED** | not authorized |
+| Production Firebase | **PARTIAL (rules only)** | Firestore rules deployed to `tabakpp-ff036` (LEGACY-preserving; OPTION_B/MIGRATING gates live but inert). Functions/hosting NOT deployed; no migration; no Option-B activation |
+| Production actions (deploy/migrate/activate Option B) | **BLOCKED (billing)** | Cloud Functions require the Blaze plan; `tabakpp-ff036` is on Spark → Option-B cannot be enabled until a plan upgrade |
 
 ## Previously-fail-closed Option-B gaps — RESOLVED (2026)
 
@@ -32,11 +32,29 @@ The two Option-B gaps documented earlier are now implemented and verified:
 Evidence: `node emulator.integration.mjs` PASS (historical-day-update + tracker-delete
 scenarios); `closeDayRouting.test.js` 24 tests; vitest 451; rules 108; contract 62; build ✓.
 
+## Production deployment status (2026)
+
+Production **Option-B is intentionally disabled**: `tabakpp-ff036` is on the Firebase
+**Spark (free)** plan, and the trusted financial boundary is a **Cloud Function**
+(`executeFinancialOperation` / `migrateAccount`) — Cloud Functions require **Blaze**. On
+Spark, no account can be migrated to OPTION_B and no account can mutate canonical financial
+state, so production runs as the original **LEGACY** app, which is fully functional.
+
+Deployed to production:
+- ✅ Firestore Security Rules (LEGACY-preserving; the `financialLocked` gate is live but inert
+  because no account is MIGRATING/OPTION_B).
+
+Not deployed (Spark):
+- ❌ Cloud Functions · ❌ Hosting (re-deploy) · ❌ Migration / Option-B activation.
+
+Activation path (requires a Blaze upgrade): deploy functions → deploy hosting (ledger
+enabled) → run `migrateAccount` per account with an operator credential.
+
 ## Release verdict
-**TABAKPP NOT RELEASE-READY — BLOCKERS REMAIN.**
-The automated regression matrix is fully green (Web 445/62/108 + build, Functions 26 +
-emulator integration, Kotlin shared/compose, lint/assemble, Android device 27/27). What
-still stands between this and a release candidate is **not a failing test** but: (a) the two
-fail-closed OPTION_B gaps above, (b) the tooling-blocked UI/UX visual baseline, and (c) a
-few E2E/ViewModel verification gaps. Everything remains **uncommitted**; committing,
-pushing, deploying, migrating, or activating Option B requires explicit user authorization.
+**TABAKPP NOT RELEASE-READY — production Option-B disabled on Spark (billing).**
+The automated regression matrix is fully green (Web 451/62/108 + build, Functions 26 +
+emulator integration, Kotlin shared/compose, lint/assemble, Android device 27/27), and the
+two formerly fail-closed Option-B gaps are implemented. The Option-B implementation is
+**committed and pushed** (`23a988e`, PR #84) but inactive in production pending a Blaze
+upgrade. Remaining non-billing gaps: tooling-blocked UI/UX visual baseline and a few
+E2E/ViewModel verification gaps.
