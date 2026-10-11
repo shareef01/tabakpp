@@ -347,7 +347,35 @@ const main = async () => {
   const delLed = await readDoc(`users/${duid}/dailyFinancials/${TODAY}`);
   assert.equal(delLed.countsByTracker.cig, undefined, 'tracker must be dropped from the ledger counts');
 
-  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete all passed');
+  // 12) deleteAccountData — a locked (OPTION_B) account cannot client-wipe, so
+  //     the trusted function deletes the caller's whole users/{uid} tree.
+  const goneUser = await signIn();
+  const guid = goneUser.localId;
+  await seedOptionB(guid);
+  r = await call(goneUser.idToken, { operationId: 'g1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
+  assert.ok(r.ok, `seed increment failed: ${JSON.stringify(r.body)}`);
+  r = await call(goneUser.idToken, { operationId: 'g2', type: 'MANUAL_CREATE', date: TODAY, logId: 'GL1', counts: { cig: 2 } });
+  assert.ok(r.ok, `seed manual log failed: ${JSON.stringify(r.body)}`);
+  await writeDoc(`users/${guid}/meta/profile`, { avatar: 'x' });
+  const goneDocs = [
+    `users/${guid}`, `users/${guid}/configs/cig`, `users/${guid}/days/${TODAY}`, `users/${guid}/logs/GL1`,
+    `users/${guid}/meta/profile`, `users/${guid}/dailyFinancials/${TODAY}`,
+    `users/${guid}/financialOperations/g1`, `users/${guid}/financialOperations/g2`,
+  ];
+  for (const p of goneDocs) assert.ok(await readDoc(p), `seed missing ${p}`);
+
+  const noAuth = await fetch(`http://127.0.0.1:5001/${PROJECT}/europe-west1/deleteAccountData`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: {} }),
+  });
+  assert.ok(!noAuth.ok, 'deleteAccountData must reject an unauthenticated call');
+
+  r = await call(goneUser.idToken, {}, 'deleteAccountData');
+  assert.ok(r.ok && r.body.result.deleted === true, `deleteAccountData failed: ${JSON.stringify(r.body)}`);
+  for (const p of goneDocs) assert.equal(await readDoc(p), null, `${p} must be deleted`);
+  // Only the caller's tree: another OPTION_B user's data is untouched.
+  assert.ok(await readDoc(`users/${duid}/days/${TODAY}`), 'another user\'s data must survive');
+
+  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete, delete-account-data all passed');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message); process.exit(1); });

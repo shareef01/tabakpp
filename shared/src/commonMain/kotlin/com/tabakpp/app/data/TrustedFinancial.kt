@@ -35,10 +35,29 @@ interface TrustedFinancial {
     suspend fun execute(type: String, payload: Map<String, Any?>): TrustedOperationResult
 }
 
+/**
+ * Region the trusted callables are deployed to — must match
+ * `setGlobalOptions({ region })` in functions/index.js. The SDK default
+ * (us-central1) has no such functions.
+ */
+const val FUNCTIONS_REGION = "europe-west1"
+
+/**
+ * Server-side wipe of the signed-in caller's entire `users/{uid}` tree. Used
+ * for MIGRATING/OPTION_B accounts, whose financial data the rules forbid the
+ * client from deleting. Requires a recent sign-in (callers reauthenticate
+ * first); does NOT delete the Auth user.
+ */
+suspend fun callDeleteAccountData() {
+    Firebase.functions(FUNCTIONS_REGION)
+        .httpsCallable("deleteAccountData")
+        .invoke(emptyMap<String, String>())
+}
+
 /** Firebase implementation backed by the GitLive callable SDK. */
 class FirebaseTrustedFinancial(
-    /** Callable region (the trusted function is deployed to europe-west1). */
-    private val region: String? = null,
+    /** Callable region; defaults to where the trusted function is deployed. */
+    private val region: String? = FUNCTIONS_REGION,
     /** When set, the Functions EMULATOR is used (tests only — never production). */
     private val emulatorHost: String? = null,
     private val emulatorPort: Int = 5001,
