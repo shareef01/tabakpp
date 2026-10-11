@@ -689,15 +689,26 @@ export const RegistryService = {
   /**
    * One-shot cursor page of logs older than the live subscription window.
    * Supports deterministic pagination (M-02 fix) via document snapshot cursor
-   * `cursorLogId` or legacy date cursor.
+   * `cursorLogId` — resumes strictly AFTER that document in (logDate, docId)
+   * order, so it never re-enters a same-date group the live window already
+   * partially showed. `cursorLogDate` is only a fallback for a deleted cursor
+   * document; if neither resolves a position the page is reported exhausted
+   * (forward progress is guaranteed — no restart-from-the-top loop).
    */
   fetchOlderLogs: async (uid, { cursorLogDate, cursorLogId, pageSize = 200 } = {}) => {
-    if (!uid) return { items: [], hasMore: false };
-    let q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), limit(pageSize));
+    if (!uid) return { items: [], hasMore: false, nextCursor: null, nextCursorDocId: null };
+    let q = null;
     if (cursorLogId) {
       const cursorSnap = await getDoc(doc(db, 'users', uid, 'logs', cursorLogId));
       if (cursorSnap.exists()) {
         q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), startAfter(cursorSnap), limit(pageSize));
+      } else if (cursorLogDate) {
+        const cursorDocs = await getDocs(
+          query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), where('logDate', '==', cursorLogDate), limit(1))
+        );
+        if (!cursorDocs.empty) {
+          q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), startAfter(cursorDocs.docs[0]), limit(pageSize));
+        }
       }
     } else if (cursorLogDate) {
       const cursorDocs = await getDocs(
@@ -706,6 +717,12 @@ export const RegistryService = {
       if (!cursorDocs.empty) {
         q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), startAfter(cursorDocs.docs[0]), limit(pageSize));
       }
+    }
+    if (!q) {
+      // No usable cursor (deleted cursor document, no date fallback): report
+      // exhaustion instead of silently returning the FIRST page again, which
+      // would loop forever with no forward progress.
+      return { items: [], hasMore: false, nextCursor: null, nextCursorDocId: null };
     }
     const snap = await getDocs(q);
     const items = snap.docs.map(withDocId);
