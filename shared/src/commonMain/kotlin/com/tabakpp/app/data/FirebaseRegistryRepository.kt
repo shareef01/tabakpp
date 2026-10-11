@@ -59,6 +59,13 @@ class FirebaseRegistryRepository(
         }
     }
 
+    /** Same document as [subscribeToUserProfile] — the SDK shares one watch target. */
+    override fun subscribeToFinancialMode(uid: String): Flow<String> {
+        return firestore.collection("users").document(uid).snapshots().map {
+            if (it.exists) it.data<FinancialModeDoc>().financialMode else "LEGACY"
+        }
+    }
+
     override fun subscribeToConfigs(uid: String): Flow<List<TrackerConfig>> {
         return firestore.collection("users").document(uid).collection("configs")
             .orderBy("order")
@@ -378,9 +385,20 @@ class FirebaseRegistryRepository(
      * day so one failure does not abort the rest.
      */
     override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) {
+        for (date in listStaleOpenDays(uid, currentTrackingDate)) {
+            try {
+                closeDay(uid, date)
+            } catch (_: Exception) {
+                // Best-effort — one failure must not block the rest.
+            }
+        }
+    }
+
+    override suspend fun listStaleOpenDays(uid: String, currentTrackingDate: String): List<String> {
         val daysCollection = firestore.collection("users").document(uid).collection("days")
         val pageSize = 200L
         val maxPages = 10 // ≤2000 days per call — bounded, resumable on the next call
+        val stale = mutableListOf<String>()
         var lastDoc: DocumentSnapshot? = null
         var page = 0
         while (page < maxPages) {
@@ -392,26 +410,21 @@ class FirebaseRegistryRepository(
             val snap = try {
                 query.get()
             } catch (_: Exception) {
-                return
+                return stale
             }
             val docs = snap.documents
-            if (docs.isEmpty()) return
+            if (docs.isEmpty()) return stale
             for (doc in docs) {
                 val day = decodeDayDocument(doc) ?: continue
                 if (day.status != "open") continue
-                if (day.date >= currentTrackingDate) {
-                    // Ascending order: no later document can be stale.
-                    return
-                }
-                try {
-                    closeDay(uid, day.date)
-                } catch (_: Exception) {
-                    // Best-effort — one failure must not block the rest.
-                }
+                // Ascending order: no later document can be stale.
+                if (day.date >= currentTrackingDate) return stale
+                stale.add(day.date)
             }
-            lastDoc = docs.lastOrNull() ?: return
-            if (docs.size < pageSize) return
+            lastDoc = docs.lastOrNull() ?: return stale
+            if (docs.size < pageSize) return stale
         }
+        return stale
     }
 
     override suspend fun updateHistoricalDay(uid: String, date: String, counts: Map<String, Double>) {
@@ -1026,6 +1039,11 @@ class FirebaseRegistryRepository(
                 "lifetimeAggregates.baselineSaved" to (cur.baselineSaved + c.baselineSaved)
             }
         }
+    }
+
+    override suspend fun getLogDate(uid: String, logId: String): String? {
+        val snap = firestore.collection("users").document(uid).collection("logs").document(logId).get()
+        return if (snap.exists) snap.get<String?>("logDate") else null
     }
 
     override suspend fun getFinancialMode(uid: String): String {

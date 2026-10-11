@@ -1,6 +1,7 @@
 package com.tabakpp.app.data
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 
 const val LIVE_LOG_QUERY_LIMIT = 1_200L
@@ -143,6 +144,24 @@ interface RegistryRepository {
      * FirebaseRegistryRepository overrides it to read `users/{uid}.financialMode`.
      */
     suspend fun getFinancialMode(uid: String): String = "LEGACY"
+
+    /**
+     * Live `users/{uid}.financialMode`, so routing needs no read per mutation and
+     * follows a migration as it happens. Default: one read via [getFinancialMode].
+     */
+    fun subscribeToFinancialMode(uid: String): Flow<String> = flow { emit(getFinancialMode(uid)) }
+
+    /**
+     * Dates of days still marked open but older than [currentTrackingDate] —
+     * what [reconcileStaleDays] closes. Exposed so an OPTION_B account can close
+     * each through the trusted function instead (its rules deny a direct close).
+     * Default: none, so non-Firebase fakes stay valid.
+     */
+    suspend fun listStaleOpenDays(uid: String, currentTrackingDate: String): List<String> = emptyList()
+
+    /** A log entry's tracking date, or null if it does not exist (default: unknown). */
+    suspend fun getLogDate(uid: String, logId: String): String? = null
+
     suspend fun addConfig(uid: String, config: TrackerConfig)
     suspend fun updateConfig(uid: String, config: TrackerConfig)
     /** `trackingDate` (optional) additionally strips this tracker out of today's still-open day, never a closed one. */
