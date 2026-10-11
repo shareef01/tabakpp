@@ -596,6 +596,16 @@ the only writer of OPTION_B financial state:
   dates and B/C dates now exist, the call fails with
   `PARTIAL_MIGRATION_UNRESOLVED` rather than rolling back. Re-running on an
   OPTION_B account is a no-op.
+- **The user's "today" comes from the client, bounds-checked.** The server has
+  no timezone for the user, so both clients send `currentTrackingDate` (device
+  wall clock + the account's `dayStartHour`, the same rule every write uses).
+  The server accepts it only if it is the current tracking date somewhere on
+  Earth right now (UTC−12…UTC+14), and uses it to decide whether a date may
+  still be priced from the live tracker config. It is excluded from the
+  operation fingerprint (a retry across midnight is the same operation). A
+  client that omits it gets the old behaviour: "today" evaluated in UTC. A
+  stored profile timezone would allow the same ±1-day window (any valid zone
+  could be chosen), so it would add schema without adding protection.
 - The uid is taken ONLY from `request.auth`; the payload uid is never trusted.
   The account's `financialMode` is read server-side; non-OPTION_B is rejected.
 - Every write is one Admin transaction: source + `dailyFinancials/{date}` +

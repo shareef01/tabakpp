@@ -210,6 +210,11 @@ class RegistryViewModelTest {
         scheduler.runCurrent()
         assertEquals(1, gw.calls.size)
         assertEquals("COUNTER_INCREMENT", gw.calls.first().first)
+        // The server has no timezone for the user: every trusted call carries the
+        // device's current tracking date — for a tap, the date it was written to.
+        val payload = gw.calls.first().second
+        assertEquals(payload["date"], payload["currentTrackingDate"])
+        assertEquals(vm.trackingDay.value, payload["currentTrackingDate"])
         assertTrue(reg.liveCounterCalls.isEmpty())
     }
 

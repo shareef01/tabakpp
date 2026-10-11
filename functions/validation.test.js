@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isCalendarDate, requireTrackingDate, requireId, sanitizeCounts, sanitizeHistoricalCounts, resolveDayStartHour,
-  requireRecentLogin,
+  requireRecentLogin, resolveCurrentTrackingDate,
 } from './validation.js';
 
 const code = (fn) => {
@@ -71,4 +71,26 @@ test('requireRecentLogin accepts a fresh sign-in and rejects a stale or missing 
   assert.equal(code(() => requireRecentLogin({ auth_time: now - 301 }, now)), 'RECENT_LOGIN_REQUIRED');
   assert.equal(code(() => requireRecentLogin({}, now)), 'RECENT_LOGIN_REQUIRED');
   assert.equal(code(() => requireRecentLogin(undefined, now)), 'RECENT_LOGIN_REQUIRED');
+});
+
+test('resolveCurrentTrackingDate accepts the user\'s local "today", bounded to real timezones', () => {
+  const now = new Date('2026-10-11T01:00:00Z'); // day start 06:00
+  // Older client sends nothing: previous behaviour, evaluated in UTC (01:00 < 06:00).
+  assert.equal(resolveCurrentTrackingDate(undefined, 6, now), '2026-10-10');
+  // Berlin (UTC+2) at 03:00 local: still the 10th's tracking day.
+  assert.equal(resolveCurrentTrackingDate('2026-10-10', 6, now), '2026-10-10');
+  // Tokyo (UTC+9) at 10:00 local: already the 11th — UTC alone got this wrong.
+  assert.equal(resolveCurrentTrackingDate('2026-10-11', 6, now), '2026-10-11');
+  // No timezone is two days ahead or a day behind the window.
+  assert.equal(code(() => resolveCurrentTrackingDate('2026-10-12', 6, now)), 'IMPLAUSIBLE_CURRENT_TRACKING_DATE');
+  assert.equal(code(() => resolveCurrentTrackingDate('2026-10-09', 6, now)), 'IMPLAUSIBLE_CURRENT_TRACKING_DATE');
+  assert.equal(code(() => resolveCurrentTrackingDate('2026-10-1', 6, now)), 'INVALID_CURRENT_TRACKING_DATE');
+});
+
+test('resolveCurrentTrackingDate applies a midnight (0) day start', () => {
+  const now = new Date('2026-10-11T23:30:00Z');
+  // UTC+1 at 00:30 local: the 12th has begun.
+  assert.equal(resolveCurrentTrackingDate('2026-10-12', 0, now), '2026-10-12');
+  // UTC fallback at 23:30 with a midnight start is still the 11th.
+  assert.equal(resolveCurrentTrackingDate(null, 0, now), '2026-10-11');
 });

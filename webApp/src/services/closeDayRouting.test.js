@@ -12,7 +12,7 @@
  * `registryService.emulator.test.js`, and the canonical accounting in the
  * Functions suite.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   doc: vi.fn((_db, ...path) => ({ path: path.join('/') })),
@@ -50,6 +50,8 @@ vi.mock('./trustedFinancial', () => ({
 
 const { RegistryService } = await import('./registryService');
 const { TrustedFinancial } = await import('./trustedFinancial');
+
+const ISO_DATE = expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/);
 
 const snapOf = (data) => ({ exists: () => data !== undefined, data: () => data });
 
@@ -89,6 +91,7 @@ describe('closeDay — financial-mode routing (W1B-1)', () => {
     expect(TrustedFinancial.execute).toHaveBeenCalledWith('DAY_CLOSE', {
       operationId: 'close_2026-10-01',
       date: '2026-10-01',
+      currentTrackingDate: ISO_DATE,
     });
     // No direct (rules-denied) financial write is attempted.
     expect(h.runTransaction).not.toHaveBeenCalled();
@@ -116,6 +119,7 @@ describe('closeDay — financial-mode routing (W1B-1)', () => {
     expect(TrustedFinancial.execute).toHaveBeenCalledWith('DAY_CLOSE', {
       operationId: 'op-explicit',
       date: '2026-10-01',
+      currentTrackingDate: ISO_DATE,
     });
   });
 
@@ -280,7 +284,7 @@ describe('historical-update + tracker-delete trusted routing (W1B-2 / W1B-4a)', 
 
     expect(h.runTransaction).not.toHaveBeenCalled();
     expect(TrustedFinancial.execute).toHaveBeenCalledWith('TRACKER_DELETE', {
-      operationId: 'del_cig0_2026-10-01', date: '2026-10-01', trackerId: 'cig0',
+      operationId: 'del_cig0_2026-10-01', date: '2026-10-01', trackerId: 'cig0', currentTrackingDate: ISO_DATE,
     });
   });
 
@@ -305,4 +309,25 @@ describe('historical-update + tracker-delete trusted routing (W1B-2 / W1B-4a)', 
     expect(TrustedFinancial.execute).not.toHaveBeenCalled();
     expect(h.runTransaction).not.toHaveBeenCalled();
   });
+});
+
+describe("trusted calls carry the device's current tracking date", () => {
+  afterEach(() => vi.useRealTimers());
+
+  // The server has no timezone for the user; it uses this (bounds-checked) to
+  // know which date is still the user's "today". A local-time clock keeps the
+  // expectation independent of the machine's timezone.
+  for (const [dayStartHour, expected] of [[6, '2026-10-10'], [0, '2026-10-11']]) {
+    it(`dayStartHour ${dayStartHour} at 03:00 local → ${expected}`, async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(2026, 9, 11, 3, 0));
+      TrustedFinancial.isEnabled.mockReturnValue(true);
+      h.getDoc.mockResolvedValue(snapOf({ financialMode: 'OPTION_B', dayStartHour }));
+      TrustedFinancial.execute.mockResolvedValue({ applied: true });
+
+      await RegistryService.closeDay('u1', '2026-10-01');
+
+      expect(TrustedFinancial.execute.mock.calls[0][1].currentTrackingDate).toBe(expected);
+    });
+  }
 });

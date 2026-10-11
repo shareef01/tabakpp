@@ -19,7 +19,7 @@ import {
   calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, migrationPlan,
 } from './financial.js';
 import {
-  MAX_COUNT, requireId, requireRecentLogin, requireTrackingDate, resolveDayStartHour, sanitizeCounts,
+  MAX_COUNT, requireId, requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate, sanitizeCounts,
   sanitizeHistoricalCounts,
 } from './validation.js';
 
@@ -40,16 +40,6 @@ const EXPLICITLY_BLOCKED = new Set(['STALE_DAY_RECONCILE']);
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-/**
- * The account's current tracking date, derived SERVER-side (day-start aware).
- * NOTE: evaluated in UTC — the server does not know the user's timezone, so
- * near the day boundary this can differ from the client's tracking date.
- */
-function trackingDateNow(dayStartHour) {
-  const d = new Date();
-  if (d.getUTCHours() < resolveDayStartHour(dayStartHour)) d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
 
 /** Read the authoritative per-date state inside a transaction. */
 async function readDateState(t, userRef, date) {
@@ -239,7 +229,10 @@ export const executeFinancialOperation = onCall(async (request) => {
     }
 
     // --- Canonical credit (server-computed, authoritative) -----------------
-    const currentTrackingDate = trackingDateNow(profileSnap.get('dayStartHour'));
+    // The user's local "today" (client-supplied, bounds-checked) — decides
+    // whether this date may still use the live tracker config. Not part of
+    // the fingerprint: a retry across midnight is still the same operation.
+    const currentTrackingDate = resolveCurrentTrackingDate(data.currentTrackingDate, profileSnap.get('dayStartHour'));
     const fin = calculateDailyFinancials(effectiveDay, effectiveLogs.filter((l) => !(effectiveDay && isArchiveLog(l))), configs, defaultUnitPrice, { currentTrackingDate, ledgerSnapshots: ledger?.snapshots || {} });
     const ledgerExistsAfter = ledgerSnap.exists;
 

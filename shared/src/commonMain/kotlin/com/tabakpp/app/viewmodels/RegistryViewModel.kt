@@ -481,8 +481,25 @@ class RegistryViewModel(
     private suspend fun optionBActive(uid: String): Boolean =
         optionBLedgerEnabled && registryRepository.getFinancialMode(uid) == "OPTION_B"
 
-    private fun gateway(): TrustedFinancial =
-        optionBGateway ?: error("OPTION_B requires the trusted financial gateway")
+    /**
+     * The injected gateway, with every call stamped with the device's CURRENT
+     * tracking date (parity with the web `trustedExecute`). The server has no
+     * timezone for the user and accepts this, bounds-checked, as the user's
+     * "today" instead of evaluating it in UTC.
+     */
+    private fun gateway(): TrustedFinancial {
+        val inner = optionBGateway ?: error("OPTION_B requires the trusted financial gateway")
+        return object : TrustedFinancial {
+            override suspend fun execute(type: String, payload: Map<String, Any?>) =
+                inner.execute(type, payload + ("currentTrackingDate" to currentTrackingDateNow()))
+        }
+    }
+
+    /** Same rule as [resolveTrackingDate], without its flow side effect. */
+    private fun currentTrackingDateNow(): String = SmokingCalculator.getTrackingDate(
+        Clock.System.now(),
+        userProfile.value?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR,
+    )
 
     fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
         val uid = authUser.value?.uid ?: return

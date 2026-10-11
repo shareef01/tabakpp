@@ -19,12 +19,28 @@ import { TrustedFinancial } from './trustedFinancial';
  *
  * Fail-closed: if the profile read throws, the error propagates — we never fall
  * back to the legacy writer (which would corrupt an Option-B account's ledger).
+ *
+ * Returns the profile when the route is active (truthy), else null, so the
+ * caller can pass it to `trustedExecute` without a second read.
  */
 const optionBLedgerActive = async (uid) => {
-  if (!TrustedFinancial.isEnabled()) return false;
+  if (!TrustedFinancial.isEnabled()) return null;
   const snap = await getDoc(doc(db, 'users', uid));
-  return snap.exists() && snap.data()?.financialMode === 'OPTION_B';
+  const profile = snap.exists() ? snap.data() : null;
+  return profile?.financialMode === 'OPTION_B' ? profile : null;
 };
+
+/**
+ * Every trusted call carries the device's CURRENT tracking date (wall clock +
+ * the account's day-start hour, the rule every write here already uses). The
+ * server has no timezone for the user, so without it the server evaluated
+ * "today" in UTC and could treat the user's current day as a past one.
+ */
+const trustedExecute = (profile, type, payload) =>
+  TrustedFinancial.execute(type, {
+    ...payload,
+    currentTrackingDate: SmokingCalculator.getTrackingDate(new Date(), profile?.dayStartHour ?? 6),
+  });
 
 /** OPTION B write gate — routing read; see optionBLedgerActive below. */
 
@@ -238,8 +254,9 @@ export const RegistryService = {
   deleteProtocol: async (uid, pid, trackingDate, operationId = null) => {
     // OPTION_B: the trusted backend deletes the config and drops the tracker from
     // the CURRENT open day + ledger (historical/closed days keep frozen state).
-    if (await optionBLedgerActive(uid)) {
-      return TrustedFinancial.execute('TRACKER_DELETE', {
+    const optionB = await optionBLedgerActive(uid);
+    if (optionB) {
+      return trustedExecute(optionB, 'TRACKER_DELETE', {
         operationId: operationId || `del_${pid}_${trackingDate || 'current'}`,
         date: trackingDate, trackerId: pid,
       });
@@ -630,8 +647,9 @@ export const RegistryService = {
     if (!trackingDate || !SmokingCalculator.isValidDate(trackingDate)) {
       throw new Error('INVALID_TRACKING_DATE');
     }
-    if (await optionBLedgerActive(uid)) {
-      return TrustedFinancial.execute(delta >= 0 ? 'COUNTER_INCREMENT' : 'COUNTER_DECREMENT', {
+    const optionB = await optionBLedgerActive(uid);
+    if (optionB) {
+      return trustedExecute(optionB, delta >= 0 ? 'COUNTER_INCREMENT' : 'COUNTER_DECREMENT', {
         operationId: operationId || `ac_${counterId}_${trackingDate}_${Date.now()}`,
         date: trackingDate, trackerId: counterId, delta, defaultUnitPrice,
       });
@@ -683,8 +701,9 @@ export const RegistryService = {
     // denied by `financialLocked`, so this MUST route through the callable.
     // The operation id is deterministic for the logical action ("close this
     // date"), so a retried request after a lost response stays idempotent.
-    if (await optionBLedgerActive(uid)) {
-      return TrustedFinancial.execute('DAY_CLOSE', {
+    const optionB = await optionBLedgerActive(uid);
+    if (optionB) {
+      return trustedExecute(optionB, 'DAY_CLOSE', {
         operationId: operationId || `close_${date}`,
         date,
       });
@@ -784,9 +803,10 @@ export const RegistryService = {
     if (!uid || !date) throw new Error('INVALID_REF');
     // OPTION_B: the trusted backend recomputes the canonical ledger + lifetime
     // delta from the day's FROZEN snapshots (no client-side money).
-    if (await optionBLedgerActive(uid)) {
+    const optionB = await optionBLedgerActive(uid);
+    if (optionB) {
       const normalized = normalizeCounts(counts);
-      return TrustedFinancial.execute('HISTORICAL_DAY_UPDATE', {
+      return trustedExecute(optionB, 'HISTORICAL_DAY_UPDATE', {
         operationId: operationId || `hist_${date}_${stableHash(normalized)}`,
         date, counts: normalized,
       });
@@ -879,10 +899,11 @@ export const RegistryService = {
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const normalized = normalizeCounts(counts);
 
-    if (await optionBLedgerActive(uid)) {
+    const optionB = await optionBLedgerActive(uid);
+    if (optionB) {
       const snap = await getDoc(logRef);
       if (!snap.exists()) throw new Error("LOG_NOT_FOUND");
-      return TrustedFinancial.execute('MANUAL_UPDATE', {
+      return trustedExecute(optionB, 'MANUAL_UPDATE', {
         operationId: operationId || `upd_${logId}`, date: snap.data().logDate, logId, counts: normalized, defaultUnitPrice: unitPrice,
       });
     }
@@ -923,10 +944,11 @@ export const RegistryService = {
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', logId);
 
-    if (await optionBLedgerActive(uid)) {
+    const optionB = await optionBLedgerActive(uid);
+    if (optionB) {
       const snap = await getDoc(logRef);
       if (!snap.exists()) return;
-      return TrustedFinancial.execute('MANUAL_DELETE', {
+      return trustedExecute(optionB, 'MANUAL_DELETE', {
         operationId: operationId || `del_${logId}`, date: snap.data().logDate, logId,
       });
     }
@@ -965,8 +987,9 @@ export const RegistryService = {
     const logRef = doc(db, 'users', uid, 'logs', log.id);
     const normalizedCounts = normalizeCounts(log.counts || {});
 
-    if (await optionBLedgerActive(uid)) {
-      return TrustedFinancial.execute('MANUAL_RESTORE', {
+    const optionB = await optionBLedgerActive(uid);
+    if (optionB) {
+      return trustedExecute(optionB, 'MANUAL_RESTORE', {
         operationId: operationId || `res_${log.id}`, date: log.logDate, logId: log.id, counts: normalizedCounts,
       });
     }
@@ -1024,8 +1047,9 @@ export const RegistryService = {
       : Math.random().toString(36).slice(2, 10);
     const logId = `${date}_M${now}_${entropy}`;
 
-    if (await optionBLedgerActive(uid)) {
-      return TrustedFinancial.execute('MANUAL_CREATE', {
+    const optionB = await optionBLedgerActive(uid);
+    if (optionB) {
+      return trustedExecute(optionB, 'MANUAL_CREATE', {
         operationId: operationId || logId, date, logId, counts: normalized, defaultUnitPrice: unitPrice,
       });
     }

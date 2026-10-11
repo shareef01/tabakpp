@@ -97,6 +97,36 @@ export const requireRecentLogin = (token, nowSec = Math.floor(Date.now() / 1000)
   }
 };
 
+// The westernmost zone in use (UTC-12); MAX_ZONE_LEAD_MS is the easternmost.
+const MAX_ZONE_LAG_MS = 12 * 60 * 60 * 1000;
+
+/** The tracking date for wall-clock `ms` (already shifted into a zone), day-start aware. */
+const trackingDateAt = (ms, dayStartHour) =>
+  new Date(ms - dayStartHour * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+/**
+ * The user's CURRENT tracking date. The server has no timezone for the user,
+ * so the client sends the date its device computes (same day-start rule both
+ * apps use); the server accepts it only if it is the current tracking date
+ * somewhere on Earth right now (UTC-12 … UTC+14). A client that omits it (an
+ * older build) gets the previous behaviour: the date evaluated in UTC.
+ *
+ * Bounding is all the server can do — a stored profile timezone would allow
+ * the same window, since any valid zone could be chosen.
+ */
+export const resolveCurrentTrackingDate = (claimed, dayStartHour, now = new Date()) => {
+  const start = resolveDayStartHour(dayStartHour);
+  const t = now.getTime();
+  if (claimed == null) return trackingDateAt(t, start);
+  if (!isCalendarDate(claimed)) throw new HttpsError('invalid-argument', 'INVALID_CURRENT_TRACKING_DATE');
+  const earliest = trackingDateAt(t - MAX_ZONE_LAG_MS, start);
+  const latest = trackingDateAt(t + MAX_ZONE_LEAD_MS, start);
+  if (claimed < earliest || claimed > latest) {
+    throw new HttpsError('invalid-argument', 'IMPLAUSIBLE_CURRENT_TRACKING_DATE');
+  }
+  return claimed;
+};
+
 /** The profile's day-start hour; 0 (midnight) is a valid setting, not "unset". */
 export const resolveDayStartHour = (v) => {
   const n = Number(v);
