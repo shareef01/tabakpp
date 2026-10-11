@@ -348,6 +348,25 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(snap.data().avatar).toBe('data:short');
   });
 
+  it('readCompleteExportSnapshot includes day documents (getAllDays must order by `date`)', async () => {
+    // Regression: getAllDays used orderBy('dayDate') but day docs carry their
+    // date in `date` — Firestore excludes documents missing the orderBy field,
+    // so the export silently shipped with days: [] (no daily history at all).
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 3, '2026-07-29', 0.5);
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+
+    const snap = await RegistryService.readCompleteExportSnapshot(UID);
+    const dayDates = snap.days.map((d) => d.date || d.id).sort();
+    expect(dayDates).toEqual(['2026-07-29', '2026-07-30']);
+    const day29 = snap.days.find((d) => (d.date || d.id) === '2026-07-29');
+    expect(day29.counts).toEqual({ cig: 3 });
+    // And the export builder must render those days into the CSV too.
+    const { buildCsv } = await import('../utils/ExportBuilder');
+    const csv = buildCsv(snap);
+    expect(csv).toContain('2026-07-29');
+  });
+
   it('full lifecycle: new day → first counter write → second write → rapid concurrent → End Day → restart', async () => {
     await seed();
     const date = '2026-07-30';

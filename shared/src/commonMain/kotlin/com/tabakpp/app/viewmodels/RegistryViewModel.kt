@@ -208,6 +208,21 @@ class RegistryViewModel(
             }
         }
 
+        // Recompute the tracking day IMMEDIATELY whenever the profile changes —
+        // the 30s poll above can leave the default dayStartHour applied for up
+        // to half a minute after sign-in/profile load, so a user with a custom
+        // day-start (e.g. 23:00) tapping right after opening the app would have
+        // their counts written to the wrong days/{date} document.
+        viewModelScope.launch {
+            userProfile.collect { profile ->
+                val dayStartHour = profile?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR
+                _trackingDay.value = SmokingCalculator.getTrackingDate(
+                    now = Clock.System.now(),
+                    dayStartHour = dayStartHour
+                )
+            }
+        }
+
         // On each auth session: ensure profile exists, then clear loading (with timeout).
         // Singleton VM must re-run this per uid — a one-shot take(1) would hang forever
         // if the first session had no user doc. collectLatest cancels in-flight work on sign-out.

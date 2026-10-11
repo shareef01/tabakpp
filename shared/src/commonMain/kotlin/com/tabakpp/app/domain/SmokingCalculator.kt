@@ -793,10 +793,16 @@ object SmokingCalculator {
             val pct = ((current - previous) / previous) * 100
             val direction = if (pct < 0) "down" else if (pct > 0) "up" else "unchanged"
             val absPct = kotlin.math.abs(pct)
+            // Half-up rounding (floor(x + 0.5)), NOT toInt() truncation —
+            // matches the web's absPct.toFixed(0) exactly. Truncation made the
+            // two clients print "67% fewer units" vs "66% fewer units" for the
+            // same stored data (e.g. calculateTrend(1.0, 3.0)); the repo's
+            // formatCurrency comment documents half-up as the parity convention.
+            val roundedPct = kotlin.math.floor(absPct + 0.5).toInt()
             val text = if (pct < 0) {
-                "${absPct.toInt()}% fewer units"
+                "${roundedPct}% fewer units"
             } else if (pct > 0) {
-                "${absPct.toInt()}% more units"
+                "${roundedPct}% more units"
             } else {
                 "unchanged"
             }

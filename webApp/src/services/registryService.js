@@ -1015,7 +1015,12 @@ async function getAllDays(uid, pageSize = 400) {
   while (true) {
     let base = query(
       collection(db, 'users', uid, 'days'),
-      orderBy('dayDate', 'desc'),
+      // Day docs carry their tracking date in `date` (see adjustCounter's
+      // payload) — ordering by the non-existent `dayDate` made Firestore
+      // exclude EVERY day document from this query, silently shipping
+      // exports without any daily history (regression covered by the
+      // emulator suite: "readCompleteExportSnapshot includes day documents").
+      orderBy('date', 'desc'),
       limit(pageSize)
     );
     if (lastDoc) base = query(base, startAfter(lastDoc));

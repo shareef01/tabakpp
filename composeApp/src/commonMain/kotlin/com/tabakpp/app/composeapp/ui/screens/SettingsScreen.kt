@@ -163,7 +163,14 @@ fun SettingsScreen(
                             configs.forEachIndexed { index, config ->
                                 TrackerSettingsItem(
                                     config = config,
-                                    onEdit = { configToEditId = config.id },
+                                    onEdit = {
+                                        // Reset the save latch — a previous
+                                        // save closes its sheet immediately, so
+                                        // without this the next edit sheet's
+                                        // SAVE button stays disabled forever.
+                                        savingTracker = false
+                                        configToEditId = config.id
+                                    },
                                     onDelete = { configToDeleteId = config.id },
                                     onMoveUp = { viewModel.reorderTracker(index, true) },
                                     onMoveDown = { viewModel.reorderTracker(index, false) },
@@ -178,7 +185,10 @@ fun SettingsScreen(
                     }
                     
                     Surface(
-                        onClick = { showAddTrackerSheet = true },
+                        onClick = {
+                            savingTracker = false // reset latch — see onEdit above
+                            showAddTrackerSheet = true
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp)
