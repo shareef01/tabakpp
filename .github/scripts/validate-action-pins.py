@@ -32,8 +32,12 @@ import urllib.request
 # A 40-character lowercase hexadecimal Git object ID
 IMMUTABLE_SHA_RE = re.compile(r'^[0-9a-f]{40}$')
 
-# Lines that contain a `uses:` directive
-USES_RE = re.compile(r'^\s*-\s*uses:\s*([^\s#]+)')
+# Lines that contain a `uses:` directive.
+# Matches both same-line syntax (`- uses: ...`) and indented multi-line
+# syntax where `uses:` follows a `- name: ...` line with no leading dash.
+# Commented-out lines (`# uses: ...`) are NOT matched because `#` is not
+# whitespace and cannot satisfy the `^\s*` prefix before `uses:`.
+USES_RE = re.compile(r'^\s*-?\s*uses:\s*([^\s#]+)')
 
 # Local action: starts with ./
 LOCAL_ACTION_RE = re.compile(r'^\./')

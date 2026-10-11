@@ -21,7 +21,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.TimeUnit
@@ -32,6 +31,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import org.junit.After
 import org.junit.Before
+import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -58,96 +58,204 @@ class FirebaseRegistryRepositoryTest {
         const val FIRESTORE_PORT = TestTabakApp.FIRESTORE_EMULATOR_PORT
         const val AUTH_HOST = TestTabakApp.AUTH_EMULATOR_HOST
         const val AUTH_PORT = TestTabakApp.AUTH_EMULATOR_PORT
+
+        /**
+         * Single bounded budget for the one anonymous sign-in issued per setup.
+         *
+         * Chosen to match the worst case of the previous retry loop
+         * (30 s + 3 s + 15 s + 3 s + 15 s), so cold Auth emulator startup keeps
+         * equivalent headroom without ever overlapping a second sign-in.
+         */
+        const val SIGN_IN_TIMEOUT_SECONDS = 60L
+
+        /** UID established once in [setUpClass] and reused by every method. */
+        @Volatile
+        private var classUid: String? = null
+
+        /** Firestore instance configured once, before any authentication. */
+        private lateinit var classFirestore: FirebaseFirestore
+
+        /**
+         * Point-in-time owner-path readiness probe. Proves Firestore served an
+         * owner-protected request using [uid]. Does NOT claim the token store has
+         * permanently settled. Read-only; creates no document.
+         */
+        private suspend fun awaitAuthFirestoreReady(uid: String) {
+            val attempts = 5
+            var lastError: Throwable? = null
+            for (attempt in 1..attempts) {
+                try {
+                    classFirestore.collection("users").document(uid).get()
+                    Log.d(TAG, "AUTH_FIRESTORE_READY: owner-path read permitted (attempt $attempt/$attempts)")
+                    return
+                } catch (e: Exception) {
+                    lastError = e
+                    Log.w(TAG, "AUTH_FIRESTORE_READY not ready (attempt $attempt/$attempts): ${e.message}")
+                    if (attempt < attempts) delay(500)
+                }
+            }
+            throw IllegalStateException(
+                "AUTH_FIRESTORE_READY_FAILED: Firestore could not serve the owner-path read for " +
+                    "users/$uid after $attempts attempts; currentUser=" +
+                    "${Firebase.auth.currentUser?.uid}; last error: ${lastError?.message}",
+                lastError,
+            )
+        }
+
+        /**
+         * Establishes the class-scoped authenticated session.
+         *
+         * Auth happens ONCE per class, never per test method. This is the only
+         * place signInAnonymously() is called, so at most one sign-in Task can
+         * ever be outstanding for this test class.
+         *
+         * The previous per-@Before design still had a cross-method hole: if
+         * Tasks.await timed out, the native Task remained unresolved and the NEXT
+         * test method's @Before created a second one. FirebaseAuth offers no
+         * reliable cancellation for signInAnonymously(), so that overlap was
+         * unrecoverable. Authenticating once, before any test method runs, removes
+         * the possibility entirely.
+         */
+        @BeforeClass
+        @JvmStatic
+        fun setUpClass() {
+            // Force IPv4 before any Firebase/network initialization. The emulator's
+            // IPv6 routing to 10.0.2.2 is unreliable on CI runners (ENETUNREACH).
+            System.setProperty("java.net.preferIPv4Stack", "true")
+            runBlocking {
+                Log.d(TAG, "=== CLASS SETUP: establishing single auth session ===")
+
+                // Emulators MUST be configured before authenticating.
+                // TestTabakApp is not reliably used by AndroidJUnitRunner (it falls
+                // back to TabakApp), so configure them here.
+                val nativeApp = com.google.firebase.FirebaseApp.getInstance()
+                val nativeAuth = com.google.firebase.auth.FirebaseAuth.getInstance(nativeApp)
+                nativeAuth.useEmulator(AUTH_HOST, AUTH_PORT)
+                // Without this the SDK tries production identitytoolkit.googleapis.com.
+                Firebase.auth.useEmulator(AUTH_HOST, AUTH_PORT)
+
+                classFirestore = Firebase.firestore
+                // setSettings rather than useEmulator: useEmulator throws if the
+                // instance was already initialized.
+                classFirestore.setSettings(
+                    host = "$FIRESTORE_HOST:$FIRESTORE_PORT",
+                    sslEnabled = false,
+                    persistenceEnabled = false,
+                )
+
+                // Pre-fetch App Check to cache the DNS failure for
+                // firebaseappcheck.googleapis.com, which is unreachable from the CI
+                // emulator. Uncached, each sign-in eats a multi-second DNS timeout.
+                try {
+                    Tasks.await(
+                        FirebaseAppCheck.getInstance().getToken(true),
+                        15, TimeUnit.SECONDS
+                    )
+                } catch (e: Exception) {
+                    Log.d(TAG, "App Check token pre-fetch failed (expected in CI): ${e.message}")
+                }
+
+                // ---- The ONE and ONLY signInAnonymously() call in this class ----
+                val signInTask = nativeAuth.signInAnonymously()
+                val authResult = try {
+                    Tasks.await(signInTask, SIGN_IN_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                } catch (e: Exception) {
+                    // Terminal. No second sign-in is ever issued, so no Task can
+                    // overlap this one. Failing the class here is preferable to
+                    // reintroducing concurrent Auth mutations.
+                    Log.e(TAG, "AUTH_SETUP_FAILED: signInAnonymously call count=1, task completed=${signInTask.isComplete}")
+                    throw IllegalStateException(
+                        "AUTH_SETUP_FAILED: anonymous sign-in did not complete within " +
+                            "$SIGN_IN_TIMEOUT_SECONDS s (signInAnonymously call count=1, " +
+                            "task completed=${signInTask.isComplete}): ${e.message}",
+                        e,
+                    )
+                }
+
+                val uid = authResult.user?.uid
+                if (uid.isNullOrEmpty()) {
+                    throw IllegalStateException("AUTH_SETUP_FAILED: sign-in completed but returned a null uid")
+                }
+
+                // Both the native instance (which produces the token) and the
+                // GitLive wrapper (which the repository reads through) must agree.
+                val nativeUid = nativeAuth.currentUser?.uid
+                if (nativeUid != uid) {
+                    throw IllegalStateException("AUTH_UID_MISMATCH: native=$nativeUid != $uid")
+                }
+                val gitLiveUid = Firebase.auth.currentUser?.uid
+                if (gitLiveUid != uid) {
+                    throw IllegalStateException(
+                        "AUTH_UID_MISMATCH: gitlive=$gitLiveUid native=$nativeUid != $uid"
+                    )
+                }
+
+                classUid = uid
+                Log.d(TAG, "CLASS AUTH READY: uid=$uid (single sign-in for the whole class)")
+
+                // Point-in-time readiness: Firestore served an owner-protected
+                // request with this uid immediately before any test runs. This does
+                // NOT claim permanent token stability.
+                awaitAuthFirestoreReady(uid)
+                Log.d(TAG, "=== CLASS SETUP COMPLETE ===")
+            }
+        }
     }
 
     private lateinit var firestore: FirebaseFirestore
     private lateinit var repository: FirebaseRegistryRepository
+    private lateinit var testUid: String
 
+    /**
+     * Per-method fixture construction under the already-established class UID.
+     * Does NOT sign in; that happened once in [setUpClass].
+     */
     @Before
     fun setup() {
-        // Force IPv4 before any Firebase operations.
-        // The Android emulator's IPv6 routing to 10.0.2.2 (host loopback)
-        // is unreliable on CI runners — connections via IPv6 source (::)
-        // fail with ENETUNREACH. TestTabakApp.onCreate() also sets this,
-        // but it's not reliably used by AndroidJUnitRunner, so we set it here too.
-        System.setProperty("java.net.preferIPv4Stack", "true")
         runBlocking {
             Log.d(TAG, "=== Setting up test ===")
 
-            // Configure Firebase emulators — must happen BEFORE any Firebase operations.
-            // The TestTabakApp Application class is NOT reliably used by AndroidJUnitRunner
-            // (it falls back to the debug build's TabakApp), so we configure the emulators
-            // directly here.
-            val nativeApp = com.google.firebase.FirebaseApp.getInstance()
-            val nativeAuth = com.google.firebase.auth.FirebaseAuth.getInstance(nativeApp)
-            nativeAuth.useEmulator(AUTH_HOST, AUTH_PORT)
-
-            // Configure GitLive Auth emulator too — TestTabakApp is not used by
-            // AndroidJUnitRunner (it falls back to TabakApp), so without this the
-            // SDK tries to reach production identitytoolkit.googleapis.com and
-            // times out after 30s, leaving no auth token → PERMISSION_DENIED.
-            Firebase.auth.useEmulator(AUTH_HOST, AUTH_PORT)
-
-            firestore = Firebase.firestore
-            // Firestore emulator — use setSettings instead of useEmulator because
-            // useEmulator() throws if the instance was already initialized.
-            firestore.setSettings(
-                host = "$FIRESTORE_HOST:$FIRESTORE_PORT",
-                sslEnabled = false,
-                persistenceEnabled = false,
-            )
-
+            firestore = classFirestore
             repository = FirebaseRegistryRepository(firestore)
 
-            // Pre-fetch App Check token to cache DNS failure for
-            // firebaseappcheck.googleapis.com (unreachable from CI emulator).
-            // Without this, each signInAnonymously attempt triggers a ~8s
-            // DNS timeout before falling back to a placeholder token.
-            // The App Check SDK caches the token after the first request,
-            // so subsequent sign-in calls reuse the cached value.
-            try {
-                Tasks.await(
-                    FirebaseAppCheck.getInstance().getToken(true),
-                    15, TimeUnit.SECONDS
+            val uid = classUid
+            if (uid.isNullOrEmpty()) {
+                throw IllegalStateException("AUTH_SETUP_FAILED: class auth session was not established")
+            }
+
+            // Detect identity drift between test methods instead of silently
+            // repairing it. A drift means some other actor changed the Auth
+            // session, which would make Firestore use a different identity
+            // than the fixture path.
+            val nativeUid = com.google.firebase.auth.FirebaseAuth.getInstance(
+                com.google.firebase.FirebaseApp.getInstance()
+            ).currentUser?.uid
+            val gitLiveUid = Firebase.auth.currentUser?.uid
+            if (nativeUid != uid || gitLiveUid != uid) {
+                Log.e(TAG, "AUTH_SESSION_DRIFT: native=$nativeUid gitlive=$gitLiveUid expected=$uid")
+                throw IllegalStateException(
+                    "AUTH_SESSION_DRIFT: native=$nativeUid gitlive=$gitLiveUid != classUid=$uid"
                 )
-            } catch (e: Exception) {
-                Log.d(TAG, "App Check token pre-fetch failed (expected in CI): ${e.message}")
             }
 
-            // Retry sign-in to handle Auth emulator cold-start delay.
-            // The first attempt uses a 30s timeout to accommodate:
-            //   - First-time Auth SDK class loading (~10-15s bytecode verification)
-            //   - App Check placeholder token usage (cached after pre-fetch above)
-            //   - Initial token signing on the emulator (~5-10s)
-            // Subsequent attempts use 15s (classes + DNS already cached).
-            var uid: String? = null
-            val maxRetries = 3
-            for (attempt in 1..maxRetries) {
-                val timeoutMs = if (attempt == 1) 30000L else 15000L
-                try {
-                    val authResult = withTimeout(timeoutMs) { Firebase.auth.signInAnonymously() }
-                    uid = authResult.user?.uid
-                    Log.d(TAG, "Signed in as: $uid (attempt $attempt/$maxRetries)")
-                    break
-                } catch (e: Exception) {
-                    uid = Firebase.auth.currentUser?.uid
-                    Log.w(TAG, "signInAnonymously failed (attempt $attempt/$maxRetries, ${timeoutMs}ms timeout): ${e.message}")
-                    if (attempt < maxRetries) {
-                        delay(3000)
-                    }
-                }
-            }
+            testUid = uid
+            Log.d(TAG, "test.uid set to: $uid")
 
-            if (uid.isNullOrEmpty()) uid = TEST_UID
-            System.setProperty("test.uid", uid!!)
-
-            // Clear any stale data from previous test runs (same UID, persisted
-            // across test methods in the same emulator session).
+            // Optional cleanup — a missing stale document is legitimate.
             try {
-                repository.deleteAllUserData(uid!!)
-            } catch (_: Exception) { }
-            try { repository.ensureUserDocument(uid!!, "Test User") } catch (e: Exception) {
-                Log.d(TAG, "ensureUserDocument: ${e.message}")
+                repository.deleteAllUserData(uid)
+            } catch (e: Exception) {
+                Log.d(TAG, "deleteAllUserData (non-fatal): ${e.message}")
+            }
+
+            // REQUIRED fixture construction (owner-only paths, L490 / L500).
+            try {
+                repository.ensureUserDocument(uid, "Test User")
+            } catch (e: Exception) {
+                throw IllegalStateException(
+                    "FIXTURE_SETUP_FAILED: ensureUserDocument(users/$uid) failed: ${e.message}",
+                    e,
+                )
             }
 
             val config = TrackerConfig(
@@ -156,18 +264,31 @@ class FirebaseRegistryRepositoryTest {
                 isFinanciallyTracked = true, isPrimaryTracked = true, baseline = 20,
                 createdAt = Timestamp(0, 0), updatedAt = Timestamp(0, 0)
             )
-            try { repository.addConfig(uid!!, config) } catch (e: Exception) {
-                Log.d(TAG, "addConfig: ${e.message}")
+            try {
+                repository.addConfig(uid, config)
+            } catch (e: Exception) {
+                throw IllegalStateException(
+                    "FIXTURE_SETUP_FAILED: addConfig(users/$uid/configs/$TEST_TRACKER_ID) failed: ${e.message}",
+                    e,
+                )
             }
+
+            val configSnap = firestore.collection("users").document(uid)
+                .collection("configs").document(TEST_TRACKER_ID).get()
+            if (!configSnap.exists) {
+                throw IllegalStateException(
+                    "CONFIG_SETUP_FAILED: users/$uid/configs/$TEST_TRACKER_ID does not exist after addConfig"
+                )
+            }
+            Log.d(TAG, "Config existence verified: users/$uid/configs/$TEST_TRACKER_ID")
         }
     }
 
     @After
     fun tearDown() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
             try {
-                firestore.collection("users").document(uid)
+                firestore.collection("users").document(testUid)
                     .collection("days").document(TEST_DATE).delete()
             } catch (_: Exception) { }
         }
@@ -216,12 +337,11 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testA_newDayLifecycle() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
 
-            val dayDoc = getDay(uid, TEST_DATE)
+            val dayDoc = getDay(testUid, TEST_DATE)
             assertNotNull(dayDoc, "Day document should exist after increment")
             assertEquals(1.0, dayDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
 
@@ -240,12 +360,12 @@ class FirebaseRegistryRepositoryTest {
             assertEquals(0.5, credit.wasted, 0.001)
             assertEquals(9.5, credit.saved, 0.001)
 
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            assertEquals(2.0, getCounts(uid, TEST_DATE), 0.001)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            assertEquals(2.0, getCounts(testUid, TEST_DATE), 0.001)
 
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
-            val closedDoc = getDay(uid, TEST_DATE)
+            val closedDoc = getDay(testUid, TEST_DATE)
             assertEquals("closed", closedDoc?.status)
             assertNotNull(closedDoc?.closedAt)
             assertEquals(2.0, closedDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
@@ -254,7 +374,7 @@ class FirebaseRegistryRepositoryTest {
             assertEquals(1.0, credit2.wasted, 0.001)
             assertEquals(9.0, credit2.saved, 0.001)
 
-            val userSnap = firestore.collection("users").document(uid).get()
+            val userSnap = firestore.collection("users").document(testUid).get()
             val profile = userSnap.data<UserProfile>()
             assertNotNull(profile)
             assertEquals(1.0, profile!!.lifetimeAggregates.wasted, 0.001)
@@ -289,22 +409,24 @@ class FirebaseRegistryRepositoryTest {
     }
 
     private suspend fun testCounterContention(concurrency: Int, expectedFinal: Double) {
-        val uid = System.getProperty("test.uid") ?: TEST_UID
-        cleanDay(uid, TEST_DATE)
+        cleanDay(testUid, TEST_DATE)
 
+        Log.d(TAG, "CONTENTION_PHASE=SEED_START concurrency=$concurrency")
         repeat(5) {
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
         }
+        Log.d(TAG, "CONTENTION_PHASE=SEED_COMPLETE seed=5.0")
 
-        assertEquals(5.0, getCountsRetry(uid, TEST_DATE), 0.001,
+        assertEquals(5.0, getCountsRetry(testUid, TEST_DATE), 0.001,
             "Seed count should be 5")
 
+        Log.d(TAG, "CONTENTION_PHASE=BURST_START concurrency=$concurrency")
         val results = coroutineScope {
             val deferred = (1..concurrency).map { i ->
                 async {
                     val opId = "op_$i"
                     try {
-                        repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                        repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
                         ContentionResult(opId, true, null, null, null)
                     } catch (e: Exception) {
                         val code = extractFirestoreCode(e)
@@ -314,6 +436,7 @@ class FirebaseRegistryRepositoryTest {
             }
             deferred.awaitAll()
         }
+        Log.d(TAG, "CONTENTION_PHASE=BURST_COMPLETE")
 
         val successes = results.count { it.success }
         val failures = results.count { !it.success }
@@ -323,13 +446,15 @@ class FirebaseRegistryRepositoryTest {
             "$failures failed, $abortedFailures ABORTED")
         results.forEach { r -> Log.d(TAG, "  $r") }
 
-        // Give the Firestore emulator's gRPC channel time to recover from the
-        // concurrent transaction burst before reading the final count.
-        // Under contention, the emulator can transiently return PERMISSION_DENIED
-        // (a channel-level gRPC error, not a rules violation).
+        // Concurrent transactions may fail with structured Firestore errors
+        // (FAILED_PRECONDITION, ABORTED, etc.). Only successful operations
+        // contribute to the expected final count; failures are logged with
+        // their structured code for diagnosis.
         delay(3000)
-        val actualCount = getCountsRetry(uid, TEST_DATE)
+        Log.d(TAG, "CONTENTION_PHASE=FINAL_READ_START")
+        val actualCount = getCountsRetry(testUid, TEST_DATE)
         Log.d(TAG, "Final count: $actualCount (expected: ${5.0 + expectedFinal}, successes: $successes)")
+        Log.d(TAG, "CONTENTION_PHASE=FINAL_READ_COMPLETE count=$actualCount")
 
         // Under concurrent load, Firestore transactions can abort after exhausting
         // retries (native SDK default: 5 attempts). The PERMISSION_DENIED / ABORTED
@@ -345,7 +470,7 @@ class FirebaseRegistryRepositoryTest {
             Log.d(TAG, "No ABORTED at concurrency=$concurrency — all retried successfully")
         }
 
-        try { repository.closeDay(uid, TEST_DATE) } catch (_: Exception) { }
+        try { repository.closeDay(testUid, TEST_DATE) } catch (_: Exception) { }
     }
 
     // ============================================================
@@ -355,20 +480,19 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testC_endDayScenarioA_persistedCountPositive() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
 
-            val doc = getDay(uid, TEST_DATE)
+            val doc = getDay(testUid, TEST_DATE)
             assertEquals(3.0, doc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
             assertEquals("open", doc.status)
 
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
-            val closedDoc = getDay(uid, TEST_DATE)
+            val closedDoc = getDay(testUid, TEST_DATE)
             assertEquals("closed", closedDoc?.status)
             assertNotNull(closedDoc?.closedAt)
             assertEquals(3.0, closedDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
@@ -378,12 +502,11 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testC_endDayScenarioB_persistedCountZero() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
             val date = "2099-12-30"
-            cleanDay(uid, date)
+            cleanDay(testUid, date)
 
             val exception = assertFailsWith<Exception> {
-                repository.closeDay(uid, date)
+                repository.closeDay(testUid, date)
             }
             assertTrue(
                 exception.message?.contains("NOTHING_TO_ARCHIVE") == true,
@@ -395,12 +518,11 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testC_endDayScenarioC_concurrentIncrementAndCloseDay() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             val incrementResult = async<CloseResult> {
                 try {
-                    repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                    repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
                     CloseResult(true, null, null)
                 } catch (e: Exception) {
                     CloseResult(false, extractFirestoreCode(e), e.message?.take(200))
@@ -411,7 +533,7 @@ class FirebaseRegistryRepositoryTest {
 
             val closeDayResult = async<CloseResult> {
                 try {
-                    repository.closeDay(uid, TEST_DATE)
+                    repository.closeDay(testUid, TEST_DATE)
                     CloseResult(true, null, null)
                 } catch (e: Exception) {
                     CloseResult(false, extractFirestoreCode(e), e.message?.take(200))
@@ -422,7 +544,7 @@ class FirebaseRegistryRepositoryTest {
             val closeRes = closeDayResult.await()
             Log.d(TAG, "Concurrent: increment=$incRes, closeDay=$closeRes")
 
-            val finalDoc = getDay(uid, TEST_DATE)
+            val finalDoc = getDay(testUid, TEST_DATE)
             if (finalDoc != null) {
                 Log.d(TAG, "Final doc: status=${finalDoc.status}, " +
                     "counts=${finalDoc.counts[TEST_TRACKER_ID] ?: 0.0}")
@@ -435,19 +557,18 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testC_endDayScenarioD_incrementThenEndDay() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             repeat(3) {
-                repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
             }
 
-            val doc = getDay(uid, TEST_DATE)
+            val doc = getDay(testUid, TEST_DATE)
             assertEquals(3.0, doc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
 
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
-            val closedDoc = getDay(uid, TEST_DATE)
+            val closedDoc = getDay(testUid, TEST_DATE)
             assertEquals("closed", closedDoc?.status)
             assertEquals(3.0, closedDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
             assertNotNull(closedDoc.closedAt)
@@ -461,19 +582,18 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testD_endDayIdempotency() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
 
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
-            val doc1 = getDay(uid, TEST_DATE)
+            val doc1 = getDay(testUid, TEST_DATE)
             assertEquals("closed", doc1?.status)
             assertEquals(2.0, doc1!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
 
-            val userSnap1 = firestore.collection("users").document(uid).get()
+            val userSnap1 = firestore.collection("users").document(testUid).get()
             val profile1 = userSnap1.data<UserProfile>()
             val saved1 = profile1!!.lifetimeAggregates.saved
             val wasted1 = profile1!!.lifetimeAggregates.wasted
@@ -482,17 +602,17 @@ class FirebaseRegistryRepositoryTest {
             Log.d(TAG, "After first closeDay: saved=$saved1, wasted=$wasted1, smoking=$smoking1")
 
             try {
-                repository.closeDay(uid, TEST_DATE)
+                repository.closeDay(testUid, TEST_DATE)
                 Log.d(TAG, "Second closeDay succeeded (idempotent)")
             } catch (e: Exception) {
                 Log.d(TAG, "Second closeDay threw: ${e.message}")
             }
 
-            val doc2 = getDay(uid, TEST_DATE)
+            val doc2 = getDay(testUid, TEST_DATE)
             assertEquals("closed", doc2?.status)
             assertEquals(2.0, doc2!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
 
-            val userSnap2 = firestore.collection("users").document(uid).get()
+            val userSnap2 = firestore.collection("users").document(testUid).get()
             val profile2 = userSnap2.data<UserProfile>()
             assertEquals(saved1, profile2!!.lifetimeAggregates.saved, 0.001,
                 "Lifetime saved should NOT change on second closeDay")
@@ -510,25 +630,24 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testE_existingDay_incrementFromFiveToSix() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             // Seed count = 5 via the production repository path
             repeat(5) {
-                repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
             }
-            assertEquals(5.0, getCounts(uid, TEST_DATE), 0.001,
+            assertEquals(5.0, getCounts(testUid, TEST_DATE), 0.001,
                 "Seed count must be 5")
 
             // The core regression: existing-day increment from 5→6
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
 
             // Verify persisted
-            val dayDoc = getDay(uid, TEST_DATE)
+            val dayDoc = getDay(testUid, TEST_DATE)
             assertNotNull(dayDoc)
             assertEquals(6.0, dayDoc!!.counts[TEST_TRACKER_ID] ?: 0.0, 0.001,
                 "count 6")
-            assertEquals(6.0, getCounts(uid, TEST_DATE), 0.001,
+            assertEquals(6.0, getCounts(testUid, TEST_DATE), 0.001,
                 "repository reload count = 6")
         }
     }
@@ -540,20 +659,19 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testF_reload_reconstructsClosedDayAndLifetime() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             // Write 3 increments + close day
             repeat(3) {
-                repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+                repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
             }
-            repository.closeDay(uid, TEST_DATE)
+            repository.closeDay(testUid, TEST_DATE)
 
             // Capture pre-reload state
-            val beforeDoc = getDay(uid, TEST_DATE)!!
+            val beforeDoc = getDay(testUid, TEST_DATE)!!
             assertEquals("closed", beforeDoc.status)
             assertEquals(3.0, beforeDoc.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
-            val userSnap = firestore.collection("users").document(uid).get()
+            val userSnap = firestore.collection("users").document(testUid).get()
             val beforeProfile = userSnap.data<UserProfile>()
             assertEquals(1.5, beforeProfile.lifetimeAggregates.wasted, 0.001)
             assertEquals(8.5, beforeProfile.lifetimeAggregates.saved, 0.001)
@@ -562,17 +680,17 @@ class FirebaseRegistryRepositoryTest {
             val freshRepo = FirebaseRegistryRepository(firestore)
 
             // Verify the day document is reconstructed correctly
-            val dayFlow = freshRepo.subscribeToDay(uid, TEST_DATE).first()
+            val dayFlow = freshRepo.subscribeToDay(testUid, TEST_DATE).first()
             assertNotNull(dayFlow, "Day document must reconstruct after reload")
             assertEquals("closed", dayFlow!!.status)
             assertEquals(3.0, dayFlow.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
             assertNotNull(dayFlow.closedAt)
 
             // Verify lifetime aggregates are reconstructed correctly
-            val profileFlow = freshRepo.subscribeToUserProfile(uid).first()
+            val profileFlow = freshRepo.subscribeToUserProfile(testUid).first()
             assertNotNull(profileFlow)
             assertEquals(1.5, profileFlow!!.lifetimeAggregates.wasted, 0.001)
-            assertEquals(8.5, profileFlow.lifetimeAggregates.saved, 0.001)
+            assertEquals(8.5, profileFlow!!.lifetimeAggregates.saved, 0.001)
             assertEquals(3.0, profileFlow.lifetimeAggregates.smokingUnits, 0.001)
         }
     }
@@ -584,12 +702,11 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testG_crossUserAccess_rejectedWithPermissionDenied() {
         runBlocking {
-            val uid = System.getProperty("test.uid") ?: TEST_UID
-            cleanDay(uid, TEST_DATE)
+            cleanDay(testUid, TEST_DATE)
 
             // Establish a valid open day as the test UID
-            repository.updateLiveCounter(uid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
-            assertEquals(1.0, getCounts(uid, TEST_DATE), 0.001)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            assertEquals(1.0, getCounts(testUid, TEST_DATE), 0.001)
 
             // Attempt to READ another user's day document — must be rejected by rules
             val error = assertFailsWith<Exception> {

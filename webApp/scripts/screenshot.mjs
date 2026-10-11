@@ -85,8 +85,9 @@ async function run() {
   });
   try {
     const page = await browser.newPage();
-    page.on('pageerror', (e) => console.error('  [pageerror]', e.message));
-    page.on('console', (m) => { if (m.type() === 'error') console.error('  [console]', m.text()); });
+    const runtimeErrors = [];
+    page.on('pageerror', (e) => runtimeErrors.push(e.message));
+    page.on('console', (m) => { if (m.type() === 'error') runtimeErrors.push(m.text()); });
 
     const accentQ = `?accent=${encodeURIComponent(RED)}`;
 
@@ -105,6 +106,9 @@ async function run() {
         }
         await page.evaluate(() => window.scrollTo(0, 0));
         await wait(500);
+        if (runtimeErrors.length) {
+          throw new Error(`${label}/${shot.name} runtime errors: ${runtimeErrors.join('\n')}`);
+        }
         const file = `${shot.name}.png`;
         const dest = path.join(destDir, file);
         await page.screenshot({ path: dest, fullPage: false });

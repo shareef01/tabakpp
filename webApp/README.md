@@ -20,7 +20,7 @@ React PWA companion to the Kotlin Multiplatform mobile app. Shares the same Fire
 - iPhone-friendly PWA: safe-area insets, redirect Google auth, 16px inputs, Home Screen icons
 
 ## Stack
-React 18 · Vite · Tailwind · Recharts · Framer Motion · Firebase Auth/Firestore · Vitest
+React 19 · Vite 8 · Tailwind CSS 4 · Recharts · Framer Motion · Firebase Auth/Firestore · Vitest
 
 ## Live
 [https://tabakpp.web.app](https://tabakpp.web.app)

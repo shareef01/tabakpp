@@ -26,6 +26,7 @@ _spec = importlib.util.spec_from_file_location("validate_action_pins", _validato
 _module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_module)
 IMMUTABLE_SHA_RE = _module.IMMUTABLE_SHA_RE
+USES_RE = _module.USES_RE
 parse_uses_ref = _module.parse_uses_ref
 check_ref = _module.check_ref
 get_auth_header = _module.get_auth_header
@@ -244,6 +245,75 @@ def test_deduplication():
     return all(results)
 
 
+def test_uses_regex_detection():
+    """Test that USES_RE detects uses: on both same-line and multi-line YAML.
+
+    Covers the B3 regression: the regex previously required `- uses:` on a
+    single line, missing the standard YAML pattern where `uses:` follows a
+    `- name: ...` step on the next indented line.
+    """
+    print("\n--- Test Group A: uses: line detection ---")
+    results = []
+
+    # 1. Same-line syntax: `- uses: ...`
+    m = USES_RE.match("- uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262")
+    results.append(assert_true("same-line uses: matched", m is not None))
+    if m:
+        results.append(assert_eq("same-line ref captured", m.group(1),
+                                 "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"))
+
+    # 2. Multi-line syntax: indented `uses:` on its own line (THE BUG)
+    m = USES_RE.match("  uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262")
+    results.append(assert_true("indented uses: (multi-line) matched", m is not None))
+    if m:
+        results.append(assert_eq("indented ref captured", m.group(1),
+                                 "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"))
+
+    # 3. Deeply indented same-line `- uses:` (step inside a job)
+    m = USES_RE.match("        - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d")
+    results.append(assert_true("deep-indented - uses: matched", m is not None))
+
+    # 4. Multi-line with a mutable tag `@v4` — regex should capture it
+    #    so the policy layer (IMMUTABLE_SHA_RE) can reject it.
+    m = USES_RE.match("        uses: actions/upload-artifact@v4")
+    results.append(assert_true("mutable @v4 in indented uses: matched by regex", m is not None))
+    if m:
+        results.append(assert_eq("mutable @v4 ref captured", m.group(1),
+                                 "actions/upload-artifact@v4"))
+        # Verify the policy layer would reject this captured ref
+        repo, ref, rtype, _ = parse_uses_ref(m.group(1))
+        results.append(assert_eq("mutable @v4 classified as action", rtype, "action"))
+        results.append(assert_true("mutable @v4 rejected by IMMUTABLE_SHA_RE",
+                                   not IMMUTABLE_SHA_RE.match(ref)))
+
+    # 5. Multi-line with mutable `@main`
+    m = USES_RE.match("  uses: actions/checkout@main")
+    results.append(assert_true("mutable @main in indented uses: matched by regex", m is not None))
+    if m:
+        repo2, ref2, rtype2, _ = parse_uses_ref(m.group(1))
+        results.append(assert_true("mutable @main rejected by IMMUTABLE_SHA_RE",
+                                   not IMMUTABLE_SHA_RE.match(ref2)))
+
+    # 6. Commented-out `uses:` must NOT be matched
+    m = USES_RE.match("        # uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262")
+    results.append(assert_true("commented # uses: NOT matched", m is None))
+
+    # 7. Step name line must NOT be matched as a uses: directive
+    m = USES_RE.match("- name: Upload test results")
+    results.append(assert_true("step - name: line NOT matched as uses", m is None))
+
+    # 8. Multi-line SHA-pinned action: full pipeline (regex → parse → policy)
+    m = USES_RE.match("  uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4")
+    results.append(assert_true("SHA-pinned indented uses: matched", m is not None))
+    if m:
+        repo3, ref3, rtype3, _ = parse_uses_ref(m.group(1))
+        results.append(assert_eq("SHA-pinned ref classified as action", rtype3, "action"))
+        results.append(assert_true("SHA-pinned ref accepted by IMMUTABLE_SHA_RE",
+                                   bool(IMMUTABLE_SHA_RE.match(ref3))))
+
+    return all(results)
+
+
 def run_live_tests():
     """Run tests that hit the real GitHub API."""
     print("\n--- Test Group B: Live GitHub API tests ---")
@@ -291,6 +361,7 @@ def main():
     a_results.append(test_parse_action())
     a_results.append(test_parse_malformed())
     a_results.append(test_deduplication())
+    a_results.append(test_uses_regex_detection())
     
     a_pass = all(a_results)
     
