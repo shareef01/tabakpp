@@ -347,6 +347,22 @@ const main = async () => {
   const delLed = await readDoc(`users/${duid}/dailyFinancials/${TODAY}`);
   assert.equal(delLed.countsByTracker.cig, undefined, 'tracker must be dropped from the ledger counts');
 
+  // 11b) currentTrackingDate — the client's local "today" (the server has no
+  //      timezone for the user). A plausible date is used; one that is not
+  //      "today" anywhere on Earth is rejected; it is not part of the
+  //      operation's identity, so a retry that crosses midnight is still the
+  //      same operation (no OPERATION_CONFLICT).
+  const tzUser = await signIn();
+  await seedOptionB(tzUser.localId);
+  r = await call(tzUser.idToken, { operationId: 'tz1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', currentTrackingDate: TODAY });
+  assert.ok(r.ok, `a plausible currentTrackingDate must be accepted: ${JSON.stringify(r.body)}`);
+  const far = new Date(`${TODAY}T00:00:00Z`); far.setUTCDate(far.getUTCDate() - 5);
+  r = await call(tzUser.idToken, { operationId: 'tz2', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', currentTrackingDate: far.toISOString().slice(0, 10) });
+  assert.ok(!r.ok && r.body.error?.message === 'IMPLAUSIBLE_CURRENT_TRACKING_DATE', `implausible date must be rejected: ${JSON.stringify(r.body)}`);
+  r = await call(tzUser.idToken, { operationId: 'tz1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', currentTrackingDate: YDAY });
+  assert.ok(r.ok && r.body.result.applied === false, `a retry with a different currentTrackingDate must be the same operation: ${JSON.stringify(r.body)}`);
+  assert.equal((await readDoc(`users/${tzUser.localId}/days/${TODAY}`)).counts.cig, 1, 'applied exactly once');
+
   // 12) deleteAccountData — a locked (OPTION_B) account cannot client-wipe, so
   //     the trusted function deletes the caller's whole users/{uid} tree.
   const goneUser = await signIn();
@@ -375,7 +391,7 @@ const main = async () => {
   // Only the caller's tree: another OPTION_B user's data is untouched.
   assert.ok(await readDoc(`users/${duid}/days/${TODAY}`), 'another user\'s data must survive');
 
-  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete, delete-account-data all passed');
+  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete, current-tracking-date, delete-account-data all passed');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message); process.exit(1); });
