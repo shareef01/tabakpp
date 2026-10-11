@@ -835,4 +835,39 @@ class RegistryViewModelTest {
         assertEquals(4.0, vm.activeCounts.value["cig"])
         assertNull(vm.error.value)
     }
+
+    @Test
+    fun profileEmission_recomputesTrackingDayImmediately_withProfileDayStartHour() {
+        // The 30s poll alone leaves the default dayStartHour applied for up to
+        // 30s after the profile arrives; a custom day-start user tapping in
+        // that window had counts written to the wrong days/{date} document.
+        val (vm, reg, _) = build()
+        val before = vm.trackingDay.value
+
+        // Pick a dayStartHour that provably differs from the default (6) at the
+        // current local time: before 06:00 the default already rolls back to
+        // yesterday, so hour 0 (never rolls back) differs; from 06:00 on, hour
+        // 23 (rolls back until 23:00) differs.
+        val localHour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        if (localHour == 23) {
+            // Between 23:00 and 23:59 every dayStartHour resolves to today, so
+            // the staleness window is unobservable — only assert parity.
+            reg.profileFlow.value = UserProfile(dayStartHour = 23)
+            scheduler.runCurrent()
+            assertEquals(before, vm.trackingDay.value)
+            return
+        }
+        val dayStartHour = if (localHour < 6) 0 else 23
+        val expected = com.tabakpp.app.domain.SmokingCalculator.getTrackingDate(
+            kotlinx.datetime.Clock.System.now(),
+            dayStartHour,
+            kotlinx.datetime.TimeZone.currentSystemDefault()
+        )
+        assertTrue(expected != before, "test setup must choose an hour that changes the tracking date (localHour=$localHour, before=$before, expected=$expected)")
+
+        reg.profileFlow.value = UserProfile(dayStartHour = dayStartHour)
+        scheduler.runCurrent() // collector must recompute WITHOUT the 30s delay advancing
+
+        assertEquals(expected, vm.trackingDay.value)
+    }
 }

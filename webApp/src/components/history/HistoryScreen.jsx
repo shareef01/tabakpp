@@ -163,6 +163,9 @@ export const HistoryScreen = React.memo(({
   const [olderLogs, setOlderLogs] = useState([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [olderCursor, setOlderCursor] = useState(null);
+  // Deterministic document-snapshot cursor (M-02): a date-only cursor re-enters
+  // the middle of a group of logs sharing one logDate and can duplicate rows.
+  const [olderCursorDocId, setOlderCursorDocId] = useState(null);
   const [olderExhausted, setOlderExhausted] = useState(false);
 
   const velocityPeriod = VELOCITY_PERIODS.find((p) => p.days === velocityDays) || VELOCITY_PERIODS[0];
@@ -220,14 +223,20 @@ export const HistoryScreen = React.memo(({
     setLoadingOlder(true);
     setActionError(null);
     try {
-      const { items, hasMore, nextCursor } = await RegistryService.fetchOlderLogs(userId, {
-        cursorLogDate: olderCursor || (logs[logs.length - 1]?.logDate ?? undefined),
+      const { items, hasMore, nextCursor, nextCursorDocId } = await RegistryService.fetchOlderLogs(userId, {
+        cursorLogId: olderCursorDocId || undefined,
+        cursorLogDate: olderCursorDocId ? undefined : (olderCursor || (logs[logs.length - 1]?.logDate ?? undefined)),
       });
       setOlderLogs((prev) => {
+        // Dedupe against BOTH the paged window and the live subscription —
+        // the live limit(1200) boundary can split a same-date group and the
+        // next page re-fetches those rows.
         const seen = new Set(prev.map((l) => l.id));
+        (logs || []).forEach((l) => seen.add(l.id));
         return [...prev, ...items.filter((l) => !seen.has(l.id))];
       });
       setOlderCursor(nextCursor);
+      setOlderCursorDocId(nextCursorDocId);
       if (!hasMore) setOlderExhausted(true);
     } catch (err) {
       console.error(err);
@@ -235,7 +244,7 @@ export const HistoryScreen = React.memo(({
     } finally {
       setLoadingOlder(false);
     }
-  }, [userId, loadingOlder, olderExhausted, olderCursor, logs]);
+  }, [userId, loadingOlder, olderExhausted, olderCursor, olderCursorDocId, logs]);
 
   // Aggregate by date (dated day docs + legacy archives/manual entries) — Android chart parity.
   const chartData = useMemo(
