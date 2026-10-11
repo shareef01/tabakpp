@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isCalendarDate, requireTrackingDate, requireId, sanitizeCounts, sanitizeHistoricalCounts, resolveDayStartHour,
+  requireRecentLogin,
 } from './validation.js';
 
 const code = (fn) => {
@@ -62,4 +63,12 @@ test('resolveDayStartHour treats 0 (midnight) as a real setting', () => {
   assert.equal(resolveDayStartHour(null), 6);
   assert.equal(resolveDayStartHour(24), 6);
   assert.equal(resolveDayStartHour('abc'), 6);
+});
+
+test('requireRecentLogin accepts a fresh sign-in and rejects a stale or missing one', () => {
+  const now = 1_800_000_000;
+  assert.equal(code(() => requireRecentLogin({ auth_time: now - 60 }, now)), null);
+  assert.equal(code(() => requireRecentLogin({ auth_time: now - 301 }, now)), 'RECENT_LOGIN_REQUIRED');
+  assert.equal(code(() => requireRecentLogin({}, now)), 'RECENT_LOGIN_REQUIRED');
+  assert.equal(code(() => requireRecentLogin(undefined, now)), 'RECENT_LOGIN_REQUIRED');
 });

@@ -82,6 +82,21 @@ export const sanitizeCounts = (counts) =>
 export const sanitizeHistoricalCounts = (counts) =>
   sanitize(counts, { keepZero: true, maxEntries: MAX_HISTORICAL_TRACKERS });
 
+/** How recently the caller must have signed in for a destructive operation. */
+export const RECENT_LOGIN_MAX_AGE_SEC = 5 * 60;
+
+/**
+ * Require that the ID token comes from a sign-in (or reauthentication) within
+ * the last few minutes — the server-side twin of the client's reauth step, so a
+ * leaked hour-long ID token alone cannot wipe an account.
+ */
+export const requireRecentLogin = (token, nowSec = Math.floor(Date.now() / 1000)) => {
+  const authTime = Number(token?.auth_time);
+  if (!Number.isFinite(authTime) || nowSec - authTime > RECENT_LOGIN_MAX_AGE_SEC) {
+    throw new HttpsError('unauthenticated', 'RECENT_LOGIN_REQUIRED');
+  }
+};
+
 /** The profile's day-start hour; 0 (midnight) is a valid setting, not "unset". */
 export const resolveDayStartHour = (v) => {
   const n = Number(v);

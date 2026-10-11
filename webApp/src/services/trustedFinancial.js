@@ -49,4 +49,16 @@ export const TrustedFinancial = {
     const res = await callable({ type, ...payload });
     return res.data;
   },
+
+  /**
+   * Delete the signed-in caller's entire users/{uid} tree server-side. Used for
+   * MIGRATING/OPTION_B accounts, whose financial data the rules forbid the
+   * client from deleting. Requires a recent sign-in (the caller reauthenticates
+   * first); does NOT delete the Auth user.
+   */
+  async deleteAccountData() {
+    const callable = httpsCallable(functions(), 'deleteAccountData');
+    const res = await callable({});
+    return res.data;
+  },
 };

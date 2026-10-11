@@ -1069,6 +1069,13 @@ export const RegistryService = {
    */
   deleteAllUserData: async (uid) => {
     if (!uid) throw new Error('INVALID_REF');
+    // MIGRATING/OPTION_B: the rules deny the client its financial deletes and
+    // the profile delete, so the trusted function wipes the whole tree. Not
+    // gated on the Option-B build flag — a locked account has no other path.
+    if (await financialWritesLocked(uid)) {
+      await TrustedFinancial.deleteAccountData();
+      return;
+    }
     for (const sub of USER_SUBCOLLECTIONS) {
       await deleteCollectionDocs(uid, sub);
     }

@@ -19,7 +19,8 @@ import {
   calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, migrationPlan,
 } from './financial.js';
 import {
-  MAX_COUNT, requireId, requireTrackingDate, resolveDayStartHour, sanitizeCounts, sanitizeHistoricalCounts,
+  MAX_COUNT, requireId, requireRecentLogin, requireTrackingDate, resolveDayStartHour, sanitizeCounts,
+  sanitizeHistoricalCounts,
 } from './validation.js';
 
 initializeApp();
@@ -462,4 +463,27 @@ export const migrateAccount = onCall(async (request) => {
 
   const final = await transitionMode(userRef, ['MIGRATING'], 'OPTION_B');
   return { dryRun: false, currentMode: final, migrated, summary };
+});
+
+/**
+ * Trusted account-data deletion. A MIGRATING/OPTION_B account cannot wipe
+ * itself from the client: the rules deny its financial deletes (and the
+ * profile delete) by design. This deletes the CALLER's entire `users/{uid}`
+ * tree — profile and every subcollection — with the Admin SDK.
+ *
+ * - The uid comes only from verified auth; there is no target parameter.
+ * - Requires a recent sign-in (requireRecentLogin): both clients reauthenticate
+ *   immediately before deleting, and this keeps a leaked ID token alone from
+ *   wiping an account.
+ * - The Auth user is NOT deleted here; the client still does that afterwards
+ *   (same partial-failure handling as the client-side wipe).
+ * - Serves any financial mode, but clients only route locked accounts here;
+ *   LEGACY keeps the client-side wipe, which works without Cloud Functions.
+ */
+export const deleteAccountData = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'Sign-in required.');
+  requireRecentLogin(request.auth.token);
+  await db.recursiveDelete(db.collection('users').doc(uid));
+  return { deleted: true };
 });

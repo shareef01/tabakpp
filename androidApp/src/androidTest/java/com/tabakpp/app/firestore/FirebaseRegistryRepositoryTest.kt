@@ -1043,6 +1043,44 @@ class FirebaseRegistryRepositoryTest {
         }
     }
 
+    // ============================================================
+    // TEST N — locked-account wipe routes to the trusted function
+    // ============================================================
+    // An OPTION_B account cannot client-wipe (rules deny its financial deletes
+    // and the profile delete), so deleteAllUserData must hand off to the
+    // server-side deleteAccountData and attempt no direct delete itself.
+    @Test
+    fun testN_lockedAccountWipe_routesToTrustedDelete() {
+        runBlocking {
+          try {
+            ownerPatch(
+                "users/$testUid",
+                """{"fields":{"financialMode":{"stringValue":"OPTION_B"},"unitPrice":{"doubleValue":1}}}""",
+            )
+            ownerPatch(
+                "users/$testUid/configs/$TEST_TRACKER_ID",
+                """{"fields":{"name":{"stringValue":"Cigarettes"},"limit":{"integerValue":"10"},"order":{"integerValue":"0"}}}""",
+            )
+            var remoteCalls = 0
+            val repo = FirebaseRegistryRepository(firestore, deleteAccountDataRemotely = { remoteCalls++ })
+
+            repo.deleteAllUserData(testUid)
+
+            kotlin.test.assertEquals(1, remoteCalls, "a locked account must be wiped by the trusted function")
+            val users = firestore.collection("users").document(testUid)
+            kotlin.test.assertTrue(users.get().exists, "no direct profile delete may be attempted")
+            kotlin.test.assertTrue(
+                users.collection("configs").document(TEST_TRACKER_ID).get().exists,
+                "no direct subcollection delete may be attempted",
+            )
+          } finally {
+            runCatching {
+                ownerPatch("users/$testUid", """{"fields":{"financialMode":{"stringValue":"LEGACY"}}}""")
+            }.onFailure { Log.w(TAG, "failed to restore financialMode=LEGACY: ${it.message}") }
+          }
+        }
+    }
+
     /**
      * Emulator-only trusted seeding: PATCH via the Firestore emulator's owner
      * bypass. The emulator namespaces data by project id, so seed the project

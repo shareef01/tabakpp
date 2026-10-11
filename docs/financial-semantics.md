@@ -577,8 +577,12 @@ the only writer of OPTION_B financial state:
 - `functions/index.js` — `executeFinancialOperation` (COUNTER_INCREMENT/DECREMENT,
   MANUAL_CREATE/UPDATE/DELETE/RESTORE, DAY_CLOSE, ZERO_COUNT_DAY_CLOSE,
   HISTORICAL_DAY_UPDATE, TRACKER_DELETE; explicitly `unimplemented` for
-  STALE_DAY_RECONCILE) and `migrateAccount` (operator-only, `admin` claim;
-  DRY-RUN by default).
+  STALE_DAY_RECONCILE), `migrateAccount` (operator-only, `admin` claim;
+  DRY-RUN by default), and `deleteAccountData` (deletes the caller's own
+  `users/{uid}` tree; requires a sign-in within 5 minutes). Both clients' account
+  wipe routes MIGRATING/OPTION_B accounts to `deleteAccountData`, because the
+  rules deny those accounts their own financial and profile deletes; LEGACY
+  keeps the client-side wipe.
 - `functions/financial.js` — the server-authoritative `computeDayCredit` (same
   formula as Web/Kotlin, checked against the shared fixtures),
   `calculateDailyFinancials` (extends the client version with historical-safety

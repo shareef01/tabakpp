@@ -46,7 +46,9 @@ private fun nowTimestamp(): Timestamp {
  * `users/{uid}/meta/profile` — see [migrateAvatarToProfileMeta]/[updateAvatar].
  */
 class FirebaseRegistryRepository(
-    private val firestore: FirebaseFirestore
+    private val firestore: FirebaseFirestore,
+    /** Trusted server-side wipe for locked accounts; injectable for tests. */
+    private val deleteAccountDataRemotely: suspend () -> Unit = ::callDeleteAccountData,
 ) : RegistryRepository {
 
     private val BATCH_LIMIT = 400
@@ -1317,6 +1319,14 @@ class FirebaseRegistryRepository(
      * `financialLocked()` reads it to authorize the subcollection deletes.
      */
     override suspend fun deleteAllUserData(uid: String) {
+        // MIGRATING/OPTION_B: the rules deny the client its financial deletes
+        // and the profile delete, so the trusted function wipes the whole tree
+        // (parity with the web deleteAllUserData).
+        val mode = getFinancialMode(uid)
+        if (mode == "MIGRATING" || mode == "OPTION_B") {
+            deleteAccountDataRemotely()
+            return
+        }
         val userDoc = firestore.collection("users").document(uid)
         for (sub in USER_SUBCOLLECTIONS) {
             deleteCollectionPaged(userDoc.collection(sub))
