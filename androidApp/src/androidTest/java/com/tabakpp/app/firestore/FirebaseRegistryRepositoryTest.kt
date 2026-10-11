@@ -932,7 +932,9 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testM_canonicalLedgerLiveRefresh_afterTrustedIncrement() {
         runBlocking {
-            val date = "2099-12-15"
+            // A PAST date: the trusted function rejects future dates (FUTURE_DATE),
+            // unlike the direct-write tests, which may use 2099 sentinels.
+            val date = "2000-12-15"
             // Trusted emulator-only seeding (clients cannot set financialMode).
             ownerPatch(
                 "users/$testUid",
@@ -988,7 +990,8 @@ class FirebaseRegistryRepositoryTest {
     fun testL_callableCounterIncrement_idempotentAndConflict() {
         runBlocking {
           try {
-            val date = "2099-12-13"
+            // A PAST date: the trusted function rejects future dates (FUTURE_DATE).
+            val date = "2000-12-13"
             // Trusted emulator-only seeding (clients cannot set financialMode).
             ownerPatch(
                 "users/$testUid",
@@ -1040,9 +1043,16 @@ class FirebaseRegistryRepositoryTest {
         }
     }
 
-    /** Emulator-only trusted seeding: PATCH via the Firestore emulator's owner bypass. */
+    /**
+     * Emulator-only trusted seeding: PATCH via the Firestore emulator's owner
+     * bypass. The emulator namespaces data by project id, so seed the project
+     * the app under test actually uses (from its google-services.json:
+     * `demo-tabakpp-test` in CI, the real project locally) — a hardcoded id
+     * silently seeded a namespace the CI app never reads.
+     */
     private fun ownerPatch(path: String, json: String) {
-        val url = java.net.URL("http://127.0.0.1:8080/v1/projects/tabakpp-ff036/databases/(default)/documents/$path")
+        val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
+        val url = java.net.URL("http://127.0.0.1:8080/v1/projects/$projectId/databases/(default)/documents/$path")
         val conn = url.openConnection() as java.net.HttpURLConnection
         conn.requestMethod = "PATCH"
         conn.setRequestProperty("Authorization", "Bearer owner")
@@ -1052,6 +1062,7 @@ class FirebaseRegistryRepositoryTest {
         val code = conn.responseCode
         conn.disconnect()
         Log.d(TAG, "ownerPatch($path) -> $code")
+        check(code in 200..299) { "ownerPatch($path) failed: HTTP $code" }
     }
 
     private data class ContentionResult(
