@@ -100,24 +100,37 @@ private class FakeRegistryRepository : RegistryRepository {
     override suspend fun closeDay(uid: String, date: String) {
         closeDayGate?.await(); maybeFail(); closeDayCalls.add(uid to date)
     }
-    override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) { /* no-op */ }
+    val reconcileCalls = mutableListOf<String>()
+    override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) { reconcileCalls.add(currentTrackingDate) }
+    var staleDays: List<String> = emptyList()
+    override suspend fun listStaleOpenDays(uid: String, currentTrackingDate: String): List<String> = staleDays
+    val logDates = mutableMapOf<String, String>()
+    override suspend fun getLogDate(uid: String, logId: String): String? = logDates[logId]
     override suspend fun updateHistoricalDay(uid: String, date: String, counts: Map<String, Double>) {
         maybeFail(); updateHistoricalDayCalls.add(Triple(uid, date, counts))
     }
-    override suspend fun migrateLegacyActiveCounts(uid: String) { /* no-op */ }
+    var legacyMigrationCalls = 0
+    override suspend fun migrateLegacyActiveCounts(uid: String) { legacyMigrationCalls++ }
     override suspend fun migrateAvatarToProfileMeta(uid: String) { /* no-op */ }
     override suspend fun updateAvatar(uid: String, avatar: String?) { maybeFail(); updateAvatarCalls.add(uid to avatar) }
     override suspend fun createManualEntry(uid: String, date: String, counts: Map<String, Double>) { maybeFail() }
     override suspend fun deleteLog(uid: String, logId: String) { maybeFail() }
     override suspend fun restoreLog(uid: String, log: LogEntry) { maybeFail() }
-    override suspend fun updateHistoricalLog(uid: String, logId: String, counts: Map<String, Double>) { maybeFail() }
+    val updateHistoricalLogCalls = mutableListOf<String>()
+    override suspend fun updateHistoricalLog(uid: String, logId: String, counts: Map<String, Double>) { maybeFail(); updateHistoricalLogCalls.add(logId) }
     override suspend fun createManualLogAtomic(uid: String, logId: String, date: String, counts: Map<String, Double>, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) { maybeFail() }
     override suspend fun updateManualLogAtomic(uid: String, logId: String, date: String, counts: Map<String, Double>, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) { maybeFail() }
     override suspend fun deleteManualLogAtomic(uid: String, logId: String, date: String, defaultUnitPrice: Double, operationId: String) { maybeFail() }
     override suspend fun restoreManualLogAtomic(uid: String, log: com.tabakpp.app.data.LogEntry, defaultUnitPrice: Double, operationId: String) { maybeFail() }
-    var financialMode: String = "LEGACY"
+    // Live like the real profile listener: changing it mid-test is seen at once.
+    private val financialModeFlow = MutableStateFlow("LEGACY")
+    var financialMode: String
+        get() = financialModeFlow.value
+        set(value) { financialModeFlow.value = value }
+    override fun subscribeToFinancialMode(uid: String): Flow<String> = financialModeFlow
     val adjustCounterAtomicCalls = mutableListOf<LiveCounterCall>()
-    override suspend fun getFinancialMode(uid: String): String = financialMode
+    var modeReads = 0
+    override suspend fun getFinancialMode(uid: String): String { modeReads++; return financialMode }
     override suspend fun adjustCounterAtomic(uid: String, date: String, trackerId: String, delta: Double, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) { maybeFail(); adjustCounterAtomicCalls.add(LiveCounterCall(uid, trackerId, delta, date, defaultUnitPrice)) }
     override suspend fun foldLedgerIntoLifetime(uid: String, date: String) { maybeFail() }
     override suspend fun addConfig(uid: String, config: TrackerConfig) { maybeFail(); addConfigCalls.add(uid to config) }
@@ -130,7 +143,8 @@ private class FakeRegistryRepository : RegistryRepository {
         profileSettingsGate?.await(); maybeFail(); profileSettingsCalls.add(uid to profile)
     }
     override suspend fun ensureUserDocument(uid: String, displayName: String?) {}
-    override suspend fun migrateSmokingUnitsIfNeeded(uid: String) {}
+    var smokingUnitsMigrationCalls = 0
+    override suspend fun migrateSmokingUnitsIfNeeded(uid: String) { smokingUnitsMigrationCalls++ }
     override suspend fun deleteAllUserData(uid: String) { maybeFail() }
     override suspend fun clearLocalCache() { maybeFail() }
     override suspend fun readCompleteExportSnapshot(uid: String): CompleteExportSnapshot =
@@ -180,8 +194,10 @@ class RegistryViewModelTest {
         auth: FakeAuthRepository = FakeAuthRepository(user),
         reg: FakeRegistryRepository = FakeRegistryRepository(),
         networkObserver: FakeNetworkObserver = FakeNetworkObserver(),
+        configure: RegistryViewModel.() -> Unit = {},
     ): Triple<RegistryViewModel, FakeRegistryRepository, FakeNetworkObserver> {
-        val vm = RegistryViewModel(auth, reg, FakeLocalSettings(), networkObserver)
+        // configure runs before the init collectors do (StandardTestDispatcher).
+        val vm = RegistryViewModel(auth, reg, FakeLocalSettings(), networkObserver).apply(configure)
         scheduler.runCurrent() // let Eagerly authUser + init collectors settle (loop stays parked)
         return Triple(vm, reg, networkObserver)
     }
@@ -205,6 +221,7 @@ class RegistryViewModelTest {
         val gw = FakeTrustedFinancial()
         vm.optionBGateway = gw
         reg.financialMode = "OPTION_B"
+        scheduler.runCurrent() // the live mode listener delivers the change
         vm.optionBLedgerEnabled = true
         vm.increment("cig")
         scheduler.runCurrent()
@@ -242,6 +259,98 @@ class RegistryViewModelTest {
         scheduler.runCurrent()
         assertTrue(gw.calls.isEmpty())
         assertEquals(1, reg.liveCounterCalls.size)
+    }
+
+    private fun optionBReg(mode: String = "OPTION_B") = FakeRegistryRepository().apply { financialMode = mode }
+
+    @Test
+    fun optionB_routesEveryFinancialMutation_throughTheTrustedGateway() {
+        val gw = FakeTrustedFinancial()
+        val (vm, reg, _) = build(reg = optionBReg()) { optionBGateway = gw; optionBLedgerEnabled = true }
+        reg.logDates["L1"] = "2026-10-01"
+
+        vm.endDay()
+        scheduler.runCurrent()
+        vm.deleteTracker("cig")
+        scheduler.runCurrent()
+        vm.updateLog("L1", mapOf("cig" to 2.0))
+        scheduler.runCurrent()
+        vm.updateDayRecord("2026-10-02", mapOf("cig" to 3.0))
+        scheduler.runCurrent()
+
+        val byType = gw.calls.associate { it.first to it.second }
+        val today = vm.trackingDay.value
+        assertEquals("close_$today", byType["DAY_CLOSE"]?.get("operationId"))
+        assertEquals(today, byType["TRACKER_DELETE"]?.get("date"))
+        assertEquals("cig", byType["TRACKER_DELETE"]?.get("trackerId"))
+        assertEquals("2026-10-01", byType["MANUAL_UPDATE"]?.get("date"), "the log's own date, looked up when not loaded")
+        assertEquals("2026-10-02", byType["HISTORICAL_DAY_UPDATE"]?.get("date"))
+        // No direct (rules-denied) financial write was attempted.
+        assertTrue(reg.closeDayCalls.isEmpty())
+        assertTrue(reg.deleteConfigCalls.isEmpty())
+        assertTrue(reg.updateHistoricalLogCalls.isEmpty())
+        assertTrue(reg.updateHistoricalDayCalls.isEmpty())
+        assertNull(vm.error.value)
+    }
+
+    @Test
+    fun optionB_updateLog_withUnknownLog_failsWithoutWriting() {
+        val gw = FakeTrustedFinancial()
+        val (vm, reg, _) = build(reg = optionBReg()) { optionBGateway = gw; optionBLedgerEnabled = true }
+        vm.updateLog("missing", mapOf("cig" to 2.0))
+        scheduler.runCurrent()
+        assertTrue(gw.calls.none { it.first == "MANUAL_UPDATE" })
+        assertTrue(reg.updateHistoricalLogCalls.isEmpty())
+        assertNotNull(vm.error.value)
+    }
+
+    @Test
+    fun optionB_reconcile_closesEachStaleDayThroughTheTrustedGateway() {
+        val gw = FakeTrustedFinancial()
+        val reg = optionBReg().apply { staleDays = listOf("2026-10-01", "2026-10-02") }
+        build(reg = reg) { optionBGateway = gw; optionBLedgerEnabled = true }
+        val closes = gw.calls.filter { it.first == "DAY_CLOSE" }.map { it.second["operationId"] }
+        assertEquals(listOf("close_2026-10-01", "close_2026-10-02"), closes)
+        assertTrue(reg.reconcileCalls.isEmpty(), "no direct (rules-denied) close")
+    }
+
+    @Test
+    fun legacy_reconcile_staysOnTheRepository() {
+        val gw = FakeTrustedFinancial()
+        val (_, reg, _) = build { optionBGateway = gw; optionBLedgerEnabled = true }
+        assertTrue(reg.reconcileCalls.isNotEmpty())
+        assertTrue(gw.calls.isEmpty())
+    }
+
+    @Test
+    fun routing_followsALiveModeChange_withoutAReadPerMutation() {
+        val gw = FakeTrustedFinancial()
+        val (vm, reg, _) = build { optionBGateway = gw; optionBLedgerEnabled = true }
+        reg.modeReads = 0
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1, reg.liveCounterCalls.size, "LEGACY: direct write")
+
+        reg.financialMode = "OPTION_B" // an operator migrates the account
+        scheduler.runCurrent()
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals("COUNTER_INCREMENT", gw.calls.single().first, "OPTION_B: trusted call")
+        assertEquals(1, reg.liveCounterCalls.size)
+        assertEquals(0, reg.modeReads, "the live mode answers routing; no read per mutation")
+    }
+
+    @Test
+    fun lockedAccount_skipsTheFinancialLegacyMigrations() {
+        for (mode in listOf("MIGRATING", "OPTION_B")) {
+            val (_, reg, _) = build(reg = optionBReg(mode))
+            assertEquals(0, reg.smokingUnitsMigrationCalls, mode)
+            assertEquals(0, reg.legacyMigrationCalls, mode)
+        }
+        val (_, legacy, _) = build()
+        assertEquals(1, legacy.smokingUnitsMigrationCalls)
+        assertEquals(1, legacy.legacyMigrationCalls)
     }
 
     @Test

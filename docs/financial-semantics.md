@@ -544,6 +544,16 @@ ops with the pending-op id as `operationId`. Proven by ViewModel tests
 (`increment_routesToLedger_*`). **Remaining legacy flows:** `endDay`/reconcile,
 `updateLog` (needs the log's date), `updateHistoricalDay` — not yet routed.
 
+> **Update — Android is now fully wired.** Every financial mutation routes for
+> OPTION_B: `endDay` and stale-day reconciliation (`DAY_CLOSE`, id
+> `close_<date>`), `deleteTracker` (`TRACKER_DELETE`), `updateLog`
+> (`MANUAL_UPDATE`, date from the loaded logs or `getLogDate`), and
+> `updateDayRecord` (`HISTORICAL_DAY_UPDATE`). The financial legacy migrations
+> are skipped for MIGRATING/OPTION_B accounts. Production Koin injects
+> `FirebaseTrustedFinancial()` and enables the route, so routing is per account
+> by server mode — a build flag defaulting off would only make a migrated
+> account's every write fail on the rules.
+
 ---
 
 ## 23. Adversarial gate result (Phase 1)

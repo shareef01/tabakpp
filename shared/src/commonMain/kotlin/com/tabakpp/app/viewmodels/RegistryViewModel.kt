@@ -35,6 +35,25 @@ class RegistryViewModel(
 
     private val userUid: Flow<String?> = authUser.map { it?.uid }
 
+    /**
+     * Live (uid, financialMode) for routing — no profile read per mutation, and
+     * a migration takes effect as it happens. Paired with the uid so a cached
+     * mode can never apply to a different signed-in account; null until the
+     * first snapshot or after a listener error, which makes routing fall back to
+     * a one-off read (fail-closed, never a silent LEGACY default).
+     */
+    private val liveFinancialMode: StateFlow<Pair<String, String>?> = userUid.flatMapLatest { uid ->
+        if (uid == null) flowOf(null)
+        else registryRepository.subscribeToFinancialMode(uid)
+            .map<String, Pair<String, String>?> { uid to it }
+            .onStart { emit(null) }
+            .catch { emit(null) }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private suspend fun currentFinancialMode(uid: String): String =
+        liveFinancialMode.value?.takeIf { it.first == uid }?.second
+            ?: registryRepository.getFinancialMode(uid)
+
     // Every Firestore-backed flow below is defensively `.catch`-guarded: a
     // rejected/failed listener (permission-denied, a dropped connection, an
     // expired token — anything) must degrade to an error message, never
@@ -243,11 +262,17 @@ class RegistryViewModel(
                 _loading.value = true
                 try {
                     registryRepository.ensureUserDocument(user.uid, user.displayName)
-                    registryRepository.migrateSmokingUnitsIfNeeded(user.uid)
-                    // One-time, idempotent, self-healing migrations (activeCounts ->
-                    // days, avatar -> meta/profile). Safe every session: each is a
-                    // no-op once already applied.
-                    registryRepository.migrateLegacyActiveCounts(user.uid)
+                    // The two financial legacy migrations write lifetimeAggregates /
+                    // day docs, which a MIGRATING/OPTION_B account's rules deny — and
+                    // the trusted migration already owns that state. Skip them there
+                    // (web parity) instead of failing "Could not prepare your profile".
+                    if (!financialLocked(user.uid)) {
+                        registryRepository.migrateSmokingUnitsIfNeeded(user.uid)
+                        // One-time, idempotent, self-healing migration (activeCounts ->
+                        // days). Safe every session: a no-op once already applied.
+                        registryRepository.migrateLegacyActiveCounts(user.uid)
+                    }
+                    // avatar -> meta/profile is not financial and is always allowed.
                     registryRepository.migrateAvatarToProfileMeta(user.uid)
                 } catch (e: Exception) {
                     setError(e, "Could not prepare your profile. Try again.")
@@ -331,7 +356,18 @@ class RegistryViewModel(
             combine(userUid, _trackingDay) { uid, day -> uid to day }.collect { (uid, day) ->
                 if (uid != null) {
                     try {
-                        registryRepository.reconcileStaleDays(uid, day)
+                        if (optionBActive(uid)) {
+                            // OPTION_B: each stale day closes through the trusted
+                            // DAY_CLOSE (same deterministic id as endDay/web, so a
+                            // concurrent close from another device is idempotent).
+                            for (date in registryRepository.listStaleOpenDays(uid, day)) {
+                                runCatching {
+                                    gateway().execute("DAY_CLOSE", mapOf("operationId" to "close_$date", "date" to date))
+                                }
+                            }
+                        } else {
+                            registryRepository.reconcileStaleDays(uid, day)
+                        }
                     } catch (_: Exception) {
                         // Best-effort — self-heals on the next tick/app start.
                     }
@@ -468,10 +504,11 @@ class RegistryViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /**
-     * OPTION B test-mode switch (Phase 3 wiring). When true AND the account's
-     * server-side `financialMode == 'OPTION_B'`, eligible mutations route
-     * through the atomic ledger ops. Default false → production builds keep the
-     * legacy writers untouched.
+     * OPTION B routing switch. When true AND the account's server-side
+     * `financialMode == 'OPTION_B'`, every financial mutation routes through
+     * [optionBGateway]. Production (Koin) enables it together with the real
+     * gateway — routing is effectively per account, by server mode. The default
+     * false only keeps unit tests that build a bare view model on the legacy path.
      */
     var optionBLedgerEnabled: Boolean = false
 
@@ -479,7 +516,15 @@ class RegistryViewModel(
     var optionBGateway: TrustedFinancial? = null
 
     private suspend fun optionBActive(uid: String): Boolean =
-        optionBLedgerEnabled && registryRepository.getFinancialMode(uid) == "OPTION_B"
+        optionBLedgerEnabled && currentFinancialMode(uid) == "OPTION_B"
+
+    /**
+     * MIGRATING/OPTION_B: the trusted function owns all financial state and the
+     * rules deny direct client financial writes (parity with the web
+     * `financialWritesLocked`). Independent of [optionBLedgerEnabled].
+     */
+    private suspend fun financialLocked(uid: String): Boolean =
+        currentFinancialMode(uid).let { it == "MIGRATING" || it == "OPTION_B" }
 
     /**
      * The injected gateway, with every call stamped with the device's CURRENT
@@ -626,7 +671,13 @@ class RegistryViewModel(
                 // Without this, a pending increment causes closeDay to
                 // read stale server counts (still 0) and throw NOTHING_TO_ARCHIVE.
                 counterWriteMutex.withLock {
-                    registryRepository.closeDay(uid, td)
+                    if (optionBActive(uid)) {
+                        // Deterministic id for "close this date": a retried request
+                        // after a lost response stays idempotent (web parity).
+                        gateway().execute("DAY_CLOSE", mapOf("operationId" to "close_$td", "date" to td))
+                    } else {
+                        registryRepository.closeDay(uid, td)
+                    }
                 }
                 _endDayResult.emit(true)
             } catch (e: Exception) {
@@ -763,7 +814,15 @@ class RegistryViewModel(
         val trackingDate = trackingDay.value
         viewModelScope.launch {
             try {
-                registryRepository.deleteConfig(uid, configId, trackingDate)
+                if (optionBActive(uid)) {
+                    // The backend deletes the config and drops the tracker from the
+                    // current open day + ledger (historical days keep frozen state).
+                    gateway().execute("TRACKER_DELETE", mapOf(
+                        "operationId" to "del_${configId}_$trackingDate", "date" to trackingDate, "trackerId" to configId,
+                    ))
+                } else {
+                    registryRepository.deleteConfig(uid, configId, trackingDate)
+                }
             } catch (e: Exception) {
                 setError(e, "Could not delete the tracker. Try again.")
             }
@@ -806,7 +865,16 @@ class RegistryViewModel(
         }
         viewModelScope.launch {
             try {
-                registryRepository.updateHistoricalLog(uid, logId, counts)
+                if (optionBActive(uid)) {
+                    val date = logs.value.firstOrNull { it.id == logId }?.logDate
+                        ?: registryRepository.getLogDate(uid, logId)
+                        ?: throw IllegalStateException("LOG_NOT_FOUND")
+                    gateway().execute("MANUAL_UPDATE", mapOf(
+                        "operationId" to nextOpId(), "date" to date, "logId" to logId, "counts" to counts,
+                    ))
+                } else {
+                    registryRepository.updateHistoricalLog(uid, logId, counts)
+                }
             } catch (e: Exception) {
                 setError(e, "Could not update the history entry. Try again.")
             }
@@ -822,7 +890,13 @@ class RegistryViewModel(
         }
         viewModelScope.launch {
             try {
-                registryRepository.updateHistoricalDay(uid, date, counts)
+                if (optionBActive(uid)) {
+                    gateway().execute("HISTORICAL_DAY_UPDATE", mapOf(
+                        "operationId" to nextOpId(), "date" to date, "counts" to counts,
+                    ))
+                } else {
+                    registryRepository.updateHistoricalDay(uid, date, counts)
+                }
             } catch (e: Exception) {
                 setError(e, "Could not update the history entry. Try again.")
             }
