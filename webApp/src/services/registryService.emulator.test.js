@@ -18,7 +18,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, setDoc } from 'firebase/firestore';
 
 // registryService imports `db` from '../firebase', which needs VITE_* env at
 // import time. Swap it for the emulator-backed, authenticated instance. The
@@ -365,6 +365,123 @@ describe('RegistryService against the real SDK and rules', () => {
     const { buildCsv } = await import('../utils/ExportBuilder');
     const csv = buildCsv(snap);
     expect(csv).toContain('2026-07-29');
+  });
+
+  it('readCompleteExportSnapshot returns ALL pages of logs (cursor walks to exhaustion)', async () => {
+    // A naive implementation could stop after one page; the export contract
+    // is the COMPLETE dataset. Seed more logs than one page holds and verify
+    // every log arrives exactly once.
+    await seed();
+    const total = 230; // > default 200-page size
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      for (let i = 0; i < total; i++) {
+        await setDoc(doc(adminDb, 'users', UID, 'logs', `EX${String(i).padStart(3, '0')}`), {
+          logDate: '2026-06-15',
+          counts: { cig: 1 },
+          origin: 'MANUAL_ENTRY',
+        });
+      }
+    });
+    const snap = await RegistryService.readCompleteExportSnapshot(UID);
+    expect(snap.logs.length).toBeGreaterThanOrEqual(total);
+    expect(new Set(snap.logs.map((l) => l.id)).size).toBe(snap.logs.length);
+  });
+
+  describe('fetchOlderLogs (deterministic pagination)', () => {
+    const seedLogs = async () => {
+      // 25 logs; the boundary date 2026-06-03 carries 10 entries so a live
+      // window of 15 cuts that group in half — the exact case where a
+      // date-only cursor re-enters the middle of the group.
+      const dates = ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05'];
+      let n = 0;
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const adminDb = context.firestore();
+        for (const date of dates) {
+          const per = date === '2026-06-03' ? 10 : 5;
+          for (let i = 0; i < per; i++) {
+            n++;
+            await setDoc(doc(adminDb, 'users', UID, 'logs', `L${String(n).padStart(3, '0')}`), {
+              logDate: date,
+              counts: { cig: 1 },
+              origin: 'MANUAL_ENTRY',
+            });
+          }
+        }
+      });
+    };
+
+    it('resumes exactly after the live window — no overlap, no gaps, forward progress', async () => {
+      await seed();
+      await seedLogs();
+      // Total log count (seed() may contribute its own logs — never assume).
+      const allSnap = await getDocs(collection(holder.db, 'users', UID, 'logs'));
+      const total = allSnap.size;
+      // Simulate the live subscription window: newest 15 logs.
+      const windowSnap = await getDocs(query(
+        collection(holder.db, 'users', UID, 'logs'),
+        orderBy('logDate', 'desc'),
+        limit(15)
+      ));
+      const windowIds = windowSnap.docs.map((d) => d.id);
+      expect(windowIds).toHaveLength(15);
+      const windowLast = windowSnap.docs[14];
+      // The boundary group must actually be split by the window.
+      expect(windowLast.data().logDate).toBe('2026-06-03');
+      expect(windowSnap.docs.filter((d) => d.data().logDate === '2026-06-03').length).toBeGreaterThan(0);
+      expect(windowSnap.docs.filter((d) => d.data().logDate === '2026-06-03').length).toBeLessThan(10);
+
+      const page1 = await RegistryService.fetchOlderLogs(UID, {
+        cursorLogId: windowLast.id,
+        cursorLogDate: windowLast.data().logDate,
+        pageSize: 8,
+      });
+      const page1Ids = page1.items.map((l) => l.id);
+      expect(page1.items).toHaveLength(8);
+      expect(page1Ids.some((id) => windowIds.includes(id))).toBe(false);
+      expect(page1.hasMore).toBe(true);
+      expect(page1.nextCursorDocId).toBe(page1Ids[page1Ids.length - 1]);
+
+      const page2 = await RegistryService.fetchOlderLogs(UID, {
+        cursorLogId: page1.nextCursorDocId,
+        cursorLogDate: page1.nextCursor,
+        pageSize: 8,
+      });
+      expect(page2.items).toHaveLength(total - 15 - 8); // whatever remains
+      expect(page2.hasMore).toBe(false);
+
+      const all = new Set([...windowIds, ...page1Ids, ...page2.items.map((l) => l.id)]);
+      expect(all.size).toBe(total); // complete union: no duplicates, no missing rows
+    });
+
+    it('survives a deleted cursor document via date fallback and reports exhaustion with no usable cursor', async () => {
+      await seed();
+      await seedLogs();
+      const windowSnap = await getDocs(query(
+        collection(holder.db, 'users', UID, 'logs'),
+        orderBy('logDate', 'desc'),
+        limit(15)
+      ));
+      const windowLast = windowSnap.docs[14];
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await deleteDoc(doc(context.firestore(), 'users', UID, 'logs', windowLast.id));
+      });
+
+      // Deleted doc + valid date fallback -> resolves a position, never the
+      // deleted doc itself.
+      const page = await RegistryService.fetchOlderLogs(UID, {
+        cursorLogId: windowLast.id,
+        cursorLogDate: '2026-06-03',
+        pageSize: 100,
+      });
+      expect(page.items.every((l) => l.id !== windowLast.id)).toBe(true);
+
+      // Deleted doc + NO fallback -> exhaustion, not a restart from the top.
+      const dead = await RegistryService.fetchOlderLogs(UID, { cursorLogId: 'ghost-id' });
+      expect(dead.items).toEqual([]);
+      expect(dead.hasMore).toBe(false);
+      expect(dead.nextCursorDocId).toBeNull();
+    });
   });
 
   it('full lifecycle: new day → first counter write → second write → rapid concurrent → End Day → restart', async () => {

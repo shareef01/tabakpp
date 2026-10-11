@@ -223,21 +223,36 @@ export const HistoryScreen = React.memo(({
     setLoadingOlder(true);
     setActionError(null);
     try {
+      // Exact document cursor on EVERY page, including the first: the live
+      // window (orderBy logDate desc, limit 1200) ends mid-group when the
+      // boundary date holds many logs, so the first page must resume from the
+      // live window's LAST document id — a date-only cursor re-enters the
+      // middle of that group. The date cursor is passed as a fallback for the
+      // case where the cursor document has since been deleted.
+      const liveLast = (logs && logs.length) ? logs[logs.length - 1] : null;
+      const cursorDocId = olderCursorDocId || liveLast?.id || undefined;
+      const cursorDate = olderCursor || liveLast?.logDate || undefined;
       const { items, hasMore, nextCursor, nextCursorDocId } = await RegistryService.fetchOlderLogs(userId, {
-        cursorLogId: olderCursorDocId || undefined,
-        cursorLogDate: olderCursorDocId ? undefined : (olderCursor || (logs[logs.length - 1]?.logDate ?? undefined)),
+        cursorLogId: cursorDocId,
+        cursorLogDate: cursorDate,
       });
+      let added = 0;
       setOlderLogs((prev) => {
         // Dedupe against BOTH the paged window and the live subscription —
         // the live limit(1200) boundary can split a same-date group and the
         // next page re-fetches those rows.
         const seen = new Set(prev.map((l) => l.id));
         (logs || []).forEach((l) => seen.add(l.id));
-        return [...prev, ...items.filter((l) => !seen.has(l.id))];
+        const fresh = items.filter((l) => !seen.has(l.id));
+        added = fresh.length;
+        return [...prev, ...fresh];
       });
       setOlderCursor(nextCursor);
       setOlderCursorDocId(nextCursorDocId);
-      if (!hasMore) setOlderExhausted(true);
+      // Forward-progress guarantee: a page that adds nothing new (e.g. the
+      // cursor document was deleted and even the fallback returned known rows)
+      // must not leave the button spinning forever.
+      if (!hasMore || added === 0) setOlderExhausted(true);
     } catch (err) {
       console.error(err);
       setActionError(mapFirestoreError(err, 'Could not load older entries.'));
