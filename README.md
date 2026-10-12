@@ -42,9 +42,9 @@
 ### Android
 
 <p align="center">
-  <img src="assets/screenshots/showcase/phone-track.png" width="220" alt="Android — Track" />
+  <img src="assets/screenshots/showcase/android-track.png" width="220" alt="Android — Track" />
   &nbsp;
-  <img src="assets/screenshots/showcase/phone-history.png" width="220" alt="Android — History" />
+  <img src="assets/screenshots/showcase/android-history.png" width="220" alt="Android — History" />
 </p>
 
 ## Why it exists
@@ -304,7 +304,7 @@ tabakpp/
 ├── scripts/           Screenshot/demo tooling
 ├── .github/           Workflows, action-pin validator, release notes
 │   ├── workflows/     ci.yml · android-integration.yml · release-android.yml
-│   └── scripts/       validate-action-pins.py · validate-lockfile.py
+│   └── scripts/       validate-action-pins.py · test-validate-action-pins.py · validate-lockfile.py
 ├── firestore.rules    Authorization + validation (the primary security boundary)
 ├── firebase.json      Emulator / hosting configuration
 └── build.gradle.kts · settings.gradle.kts · gradle/libs.versions.toml
