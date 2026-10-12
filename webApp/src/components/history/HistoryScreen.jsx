@@ -166,7 +166,7 @@ export const HistoryScreen = React.memo(({
   const [olderLogs, setOlderLogs] = useState([]);
   const [olderDays, setOlderDays] = useState([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [olderCursor, setOlderCursor] = useState(null);
+  const [olderCursor, setOlderCursor] = useState(null); // {date, id} — exact document cursor
   const [olderExhausted, setOlderExhausted] = useState(false);
   const [olderDayCursor, setOlderDayCursor] = useState(null);
   const [daysExhausted, setDaysExhausted] = useState(false);
@@ -258,24 +258,41 @@ export const HistoryScreen = React.memo(({
     setLoadingOlder(true);
     setActionError(null);
     try {
+      // Exact document cursor on EVERY page, including the first: the live
+      // window (orderBy logDate desc, limit 1200) ends mid-group when the
+      // boundary date holds many logs, so the first page must resume from the
+      // live window's LAST document id — a date-only cursor re-enters the
+      // middle of that group. `fetchOlderLogs` falls back to the date cursor
+      // when the cursor document has since been deleted.
+      const liveLast = (logs && logs.length) ? logs[logs.length - 1] : null;
       const [logPage, dayPage] = await Promise.all([
         olderExhausted ? null : RegistryService.fetchOlderLogs(userId, {
-          cursorLogDate: olderCursor?.date ?? logs?.at(-1)?.logDate,
-          cursorLogId: olderCursor?.id ?? logs?.at(-1)?.id,
+          cursorLogDate: olderCursor?.date ?? liveLast?.logDate,
+          cursorLogId: olderCursor?.id ?? liveLast?.id,
         }),
         daysExhausted ? null : RegistryService.fetchOlderDays(userId, {
           cursorDate: olderDayCursor ?? dayDocs.at(-1)?.date,
         }),
       ]);
       if (activeUser.current !== userId) return;
+      let added = 0;
       if (logPage) {
-      const { items, hasMore, nextCursor, nextCursorDocId } = logPage;
-      setOlderLogs((prev) => {
-        const seen = new Set(prev.map((l) => l.id));
-        return [...prev, ...items.filter((l) => !seen.has(l.id))];
-      });
-      setOlderCursor({ date: nextCursor, id: nextCursorDocId });
-      if (!hasMore) setOlderExhausted(true);
+        const { items, hasMore, nextCursor, nextCursorDocId } = logPage;
+        setOlderLogs((prev) => {
+          // Dedupe against BOTH the paged window and the live subscription —
+          // the live limit(1200) boundary can split a same-date group and the
+          // next page re-fetches those rows.
+          const seen = new Set(prev.map((l) => l.id));
+          (logs || []).forEach((l) => seen.add(l.id));
+          const fresh = items.filter((l) => !seen.has(l.id));
+          added = fresh.length;
+          return [...prev, ...fresh];
+        });
+        setOlderCursor({ date: nextCursor, id: nextCursorDocId });
+        // Forward-progress guarantee: a page that adds nothing new (e.g. the
+        // cursor document was deleted and even the fallback returned known
+        // rows) must not leave the button spinning forever.
+        if (!hasMore || added === 0) setOlderExhausted(true);
       }
       if (dayPage) {
         setOlderDays((prev) => [...new Map([...prev, ...dayPage.items].map((d) => [d.date, d])).values()]);

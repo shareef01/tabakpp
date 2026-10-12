@@ -705,26 +705,51 @@ export const RegistryService = {
   /**
    * One-shot cursor page of logs older than the live subscription window.
    * Supports deterministic pagination (M-02 fix) via document snapshot cursor
-   * `cursorLogId` or legacy date cursor.
+   * `cursorLogId` — resumes strictly AFTER that document in (logDate, docId)
+   * order, so it never re-enters a same-date group the live window already
+   * partially showed. `cursorLogDate` is only a fallback for a deleted cursor
+   * document; if neither resolves a position the page is reported exhausted
+   * (forward progress is guaranteed — no restart-from-the-top loop).
    */
   fetchOlderLogs: async (uid, { cursorLogDate, cursorLogId, pageSize = 200 } = {}) => {
-    if (!uid) return { items: [], hasMore: false };
+    if (!uid) return { items: [], hasMore: false, nextCursor: null, nextCursorDocId: null };
     const ref = collection(db, 'users', uid, 'logs');
-    let q = query(ref, orderBy('logDate', 'desc'), orderBy('__name__', 'desc'), limit(pageSize));
-    if (cursorLogId && cursorLogDate) {
-      q = query(q, startAfter(cursorLogDate, cursorLogId));
-    } else if (cursorLogId) {
+    // Explicit __name__ tie-break (PR82): same-logDate groups paginate in a
+    // deterministic document order, so pages never overlap or skip rows.
+    let base = query(ref, orderBy('logDate', 'desc'), orderBy('__name__', 'desc'), limit(pageSize));
+    let q = null;
+    if (cursorLogId) {
       const cursorSnap = await getDoc(doc(db, 'users', uid, 'logs', cursorLogId));
       if (cursorSnap.exists()) {
-        q = query(q, startAfter(cursorSnap));
+        q = query(base, startAfter(cursorSnap));
+      } else if (cursorLogDate) {
+        // Deleted cursor document: fall back to the newest document that
+        // shares its date, positioning strictly after it.
+        const cursorDocs = await getDocs(
+          query(ref, orderBy('logDate', 'desc'), where('logDate', '==', cursorLogDate), limit(1))
+        );
+        if (!cursorDocs.empty) {
+          q = query(base, startAfter(cursorDocs.docs[0]));
+        }
+      }
+      if (!q) {
+        // Unresolvable cursor (deleted doc, no date fallback): report
+        // exhaustion instead of silently returning the FIRST page again,
+        // which would loop forever with no forward progress.
+        return { items: [], hasMore: false, nextCursor: null, nextCursorDocId: null };
       }
     } else if (cursorLogDate) {
       const cursorDocs = await getDocs(
-        query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), where('logDate', '==', cursorLogDate), limit(1))
+        query(ref, orderBy('logDate', 'desc'), where('logDate', '==', cursorLogDate), limit(1))
       );
       if (!cursorDocs.empty) {
-        q = query(collection(db, 'users', uid, 'logs'), orderBy('logDate', 'desc'), startAfter(cursorDocs.docs[0]), limit(pageSize));
+        q = query(base, startAfter(cursorDocs.docs[0]));
+      } else {
+        return { items: [], hasMore: false, nextCursor: null, nextCursorDocId: null };
       }
+    } else {
+      // No cursor at all: first page (legacy pre-pagination callers).
+      q = base;
     }
     const snap = await getDocs(q);
     const items = snap.docs.map(withDocId);
@@ -1059,6 +1084,11 @@ async function getAllDays(uid, pageSize = 400) {
   while (true) {
     let base = query(
       collection(db, 'users', uid, 'days'),
+      // Day docs carry their tracking date in `date` (see adjustCounter's
+      // payload) — ordering by the non-existent `dayDate` made Firestore
+      // exclude EVERY day document from this query, silently shipping
+      // exports without any daily history (regression covered by the
+      // emulator suite: "readCompleteExportSnapshot includes day documents").
       orderBy('date', 'desc'),
       limit(pageSize)
     );

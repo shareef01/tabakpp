@@ -16,13 +16,20 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
+import kotlinx.datetime.TimeZone
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RegistryViewModel(
     private val authRepository: AuthRepository,
     private val registryRepository: RegistryRepository,
     private val localSettings: LocalSettings,
-    private val networkObserver: NetworkObserver
+    private val networkObserver: NetworkObserver,
+    // Test seams (production defaults preserve exact behavior): the tracking
+    // date must be derived from the clock AT MUTATION TIME (see
+    // [currentTrackingDate]), so tests inject a fixed clock/zone to prove
+    // midnight, custom-boundary, and DST rollovers deterministically.
+    private val clock: Clock = Clock.System,
+    private val timeZoneProvider: () -> TimeZone = { TimeZone.currentSystemDefault() }
 ) : ViewModel() {
 
     val isOnline = networkObserver.isOnline
@@ -168,7 +175,7 @@ class RegistryViewModel(
     private val counterWriteMutex = Mutex()
 
     private fun nextOpId(): String =
-        "${Clock.System.now().toEpochMilliseconds()}_${++opSequence}"
+        "${clock.now().toEpochMilliseconds()}_${++opSequence}"
 
     private fun publishCounterOverlay() {
         val server = latestServerCounts
@@ -233,8 +240,45 @@ class RegistryViewModel(
     private val profileWriteMutex = Mutex()
     private var lastSubmittedProfile: UserProfile? = null
 
-    private val _trackingDay = MutableStateFlow(SmokingCalculator.getTrackingDate(Clock.System.now()))
+    private val _trackingDay = MutableStateFlow(currentTrackingDate())
     val trackingDay = _trackingDay.asStateFlow()
+
+    /**
+     * The tracking date derived from the clock RIGHT NOW with the freshest
+     * known day-start hour. This — not the cached [_trackingDay] — is what
+     * decides which `days/{date}` document a mutation targets. The cached
+     * state is only a UI reflection (live-listener key, metrics "today").
+     */
+    private fun currentTrackingDate(): String =
+        SmokingCalculator.getTrackingDate(
+            now = clock.now(),
+            dayStartHour = userProfile.value?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR,
+            timeZone = timeZoneProvider()
+        )
+
+    /**
+     * Derive the authoritative date for a mutation and, if the cached UI day
+     * has fallen behind (midnight/custom-boundary/DST rollover while the app
+     * is open or resumed from a throttled background), advance it first.
+     *
+     * Advancing [_trackingDay] re-keys the live `days/{date}` listener and
+     * metrics, so the UI transitions to the new day in the same frame the tap
+     * lands. The optimistic ledger is also reset: ops dated the previous day
+     * belong to that day's document (in-flight writes still settle there via
+     * their own transaction) and must not overlay — nor let their targetCounts
+     * (computed from the old day's server counts) poison acknowledgement of
+     * new-day ops.
+     */
+    private fun trackingDateForMutation(): String {
+        val fresh = currentTrackingDate()
+        if (fresh != _trackingDay.value) {
+            _trackingDay.value = fresh
+            latestServerCounts = emptyMap()
+            pendingOps.removeAll { it.trackingDate != fresh }
+            publishCounterOverlay()
+        }
+        return fresh
+    }
 
     // Local accent color for fast startup
     private val _localAccent = MutableStateFlow(
@@ -282,17 +326,23 @@ class RegistryViewModel(
                 }
             }
         }
-        // Refresh tracking day periodically
+        // Refresh tracking day periodically (UI refresher only — mutations
+        // derive their date independently via [trackingDateForMutation], so a
+        // throttled poll can never mis-date a count).
         viewModelScope.launch {
             while (true) {
-                val profile = userProfile.value
-                val dayStartHour = profile?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR
-                _trackingDay.value = SmokingCalculator.getTrackingDate(
-                    now = Clock.System.now(),
-                    dayStartHour = dayStartHour
-                )
+                _trackingDay.value = currentTrackingDate()
                 delay(30000) // 30 seconds
             }
+        }
+
+        // Recompute the tracking day IMMEDIATELY whenever the profile changes —
+        // the 30s poll above can leave the default dayStartHour applied for up
+        // to half a minute after sign-in/profile load. Mutations additionally
+        // re-derive the date at tap time (see [trackingDateForMutation]); this
+        // collector keeps the UI in sync without any user action.
+        viewModelScope.launch {
+            userProfile.collect { _trackingDay.value = currentTrackingDate() }
         }
 
         // On each auth session: ensure profile exists, then clear loading (with timeout).
@@ -451,7 +501,18 @@ class RegistryViewModel(
             setError(Exception("offline"), "Connect to the internet to update this count.")
             return
         }
-        val trackingDate = trackingDay.value
+        // Block writes until the profile sync resolves (or times out): before
+        // the user's dayStartHour is known, a tap near a custom day boundary
+        // would be dated with the default hour and land on the wrong
+        // days/{date} document. Once loading clears (profile loaded OR 12s
+        // timeout), taps proceed with the best-known hour.
+        if (_loading.value && userProfile.value == null) {
+            _error.value = "Still syncing your profile — try again in a moment."
+            return
+        }
+        // The date is derived from the clock at THIS moment, never from the
+        // (possibly stale) cached tracking day.
+        val trackingDate = trackingDateForMutation()
         val price = userProfile.value?.unitPrice ?: 0.5
         val currentServer = latestServerCounts[trackerId] ?: 0.0
 
@@ -500,7 +561,11 @@ class RegistryViewModel(
             setError(Exception("offline"), "Connect to the internet to update this count.")
             return
         }
-        val trackingDate = trackingDay.value
+        if (_loading.value && userProfile.value == null) {
+            _error.value = "Still syncing your profile — try again in a moment."
+            return
+        }
+        val trackingDate = trackingDateForMutation()
         val price = userProfile.value?.unitPrice ?: 0.5
         val currentServer = latestServerCounts[trackerId] ?: 0.0
 
@@ -545,12 +610,21 @@ class RegistryViewModel(
      */
     fun endDay() {
         val uid = authUser.value?.uid ?: return
-        val td = trackingDay.value
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to end the tracking day.")
             viewModelScope.launch { _endDayResult.emit(false) }
             return
         }
+        // Same protection as increment/decrement: closing with an unknown
+        // dayStartHour would archive the wrong day.
+        if (_loading.value && userProfile.value == null) {
+            _error.value = "Still syncing your profile — try again in a moment."
+            viewModelScope.launch { _endDayResult.emit(false) }
+            return
+        }
+        // Fresh derivation: closing must archive the day the clock says is
+        // current, even if the cached tracking day has not caught up yet.
+        val td = trackingDateForMutation()
         viewModelScope.launch {
             _endingDay.value = true
             try {
@@ -581,7 +655,8 @@ class RegistryViewModel(
         // Backfill cannot run forward. Firestore rules only check the YYYY-MM-DD
         // pattern, so this is the last enforcement point before the write (the
         // web guards in RegistryService.createManualEntry for the same reason).
-        if (!SmokingCalculator.isBackfillDateAllowed(date, trackingDay.value)) {
+        // Compare against the freshly derived day, not the cached one.
+        if (!SmokingCalculator.isBackfillDateAllowed(date, trackingDateForMutation())) {
             _error.value = "Pick today or an earlier date."
             return
         }
@@ -676,7 +751,9 @@ class RegistryViewModel(
             setError(Exception("offline"), "Connect to the internet to delete this tracker.")
             return
         }
-        val trackingDate = trackingDay.value
+        // Fresh derivation: hasOpenSession must evaluate the day the clock
+        // says is current, not a possibly stale cached tracking day.
+        val trackingDate = trackingDateForMutation()
         viewModelScope.launch {
             try {
                 registryRepository.deleteConfig(uid, configId, trackingDate)
