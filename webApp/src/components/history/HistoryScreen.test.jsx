@@ -95,6 +95,7 @@ describe('buildVelocitySeries', () => {
 vi.mock('../../services/registryService', () => ({
   RegistryService: {
     fetchOlderLogs: vi.fn(),
+    fetchOlderDays: vi.fn().mockResolvedValue({ items: [], hasMore: false, nextCursor: null }),
     deleteLog: vi.fn().mockResolvedValue(undefined),
     restoreLog: vi.fn().mockResolvedValue(undefined),
   },
