@@ -68,7 +68,8 @@ const fake = vi.hoisted(() => {
   return { store, snap, applyUpdate, collectionDocs, orderByCalls };
 });
 
-vi.mock('firebase/firestore', () => {
+vi.mock('firebase/firestore', async (importOriginal) => {
+  const { Timestamp } = await importOriginal();
   const { store, snap, applyUpdate, collectionDocs, orderByCalls } = fake;
 
   const doc = (first, ...rest) => {
@@ -142,7 +143,7 @@ vi.mock('firebase/firestore', () => {
   const deleteField = () => ({ __deleteField: true });
 
   return {
-    doc, collection, query, orderBy, where, limit, startAfter, serverTimestamp, deleteField,
+    doc, collection, query, orderBy, where, limit, startAfter, serverTimestamp, deleteField, Timestamp,
     getDoc, getDocs, setDoc, updateDoc, deleteDoc, runTransaction, writeBatch, onSnapshot,
   };
 });
@@ -480,7 +481,7 @@ describe('RegistryService.deleteProtocol (item 2 — deletion must not corrupt h
 });
 
 describe('RegistryService.deleteAllUserData', () => {
-  it('removes every subcollection and the user document', async () => {
+  it('removes personal data while retaining the deletion fence', async () => {
     seedUser({ name: 'X' });
     seedConfig(CIG);
     seedLog({ id: '2026-07-20_DAY', logDate: '2026-07-20', counts: { cig: 1 } });
@@ -491,7 +492,7 @@ describe('RegistryService.deleteAllUserData', () => {
 
     await RegistryService.deleteAllUserData(UID);
 
-    expect(userDoc()).toBeUndefined();
+    expect(userDoc()).toEqual({ deleting: true });
     expect(fake.store.has(`${USER_PATH}/configs/cig`)).toBe(false);
     expect(logPaths()).toHaveLength(0);
     expect(dayDoc('2026-07-21')).toBeUndefined();

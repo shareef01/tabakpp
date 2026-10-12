@@ -368,6 +368,10 @@ class FirebaseRegistryRepository(
     }
 
     override suspend fun closeDay(uid: String, date: String) {
+        closeDay(uid, date, false)
+    }
+
+    private suspend fun closeDay(uid: String, date: String, allowEmpty: Boolean) {
         val userRef = firestore.collection("users").document(uid)
         val dayRef = userRef.collection("days").document(date)
 
@@ -379,7 +383,10 @@ class FirebaseRegistryRepository(
             // (increment-then-decrement, or the last tracker removed after
             // activity). Closing it must fold its stamped credit, which a
             // zero-count day still carries as target-based `saved` (AUD-006).
-            // Previously a zero-count day threw here and stayed open forever.
+            // Reconcile passes allowEmpty=true so such days close; an explicit
+            // user "End day" with nothing open still throws NOTHING_TO_ARCHIVE.
+            if (!allowEmpty && !SmokingCalculator.hasOpenSession(day.counts)) throw Exception("NOTHING_TO_ARCHIVE")
+
             if (day.foldedIntoLifetime) {
                 if (day.status != "closed") {
                     updateFields(dayRef) {
@@ -419,7 +426,7 @@ class FirebaseRegistryRepository(
     override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) {
         for (date in listStaleOpenDays(uid, currentTrackingDate)) {
             try {
-                closeDay(uid, date)
+                closeDay(uid, date, true)
             } catch (_: Exception) {
                 // Best-effort — one failure must not block the rest.
             }
@@ -1341,39 +1348,41 @@ class FirebaseRegistryRepository(
 
     override suspend fun migrateSmokingUnitsIfNeeded(uid: String) {
         val userRef = firestore.collection("users").document(uid)
-        var maxRetries = 2
-        while (maxRetries-- >= 0) {
-            val snap = userRef.get()
-            if (!snap.exists) return
-            val profile = snap.data<UserProfile>()
-            if (profile.smokingUnitsMigrated) return
-            val initialAggs = profile.lifetimeAggregates
-
-            val configs = getConfigsOnce(uid)
-            val logs = getAllLogsOnce(uid)
-            val units = SmokingCalculator.sumSmokingUnitsFromLogs(logs, configs)
-
-            var retryNeeded = false
-            firestore.runTransaction {
-                val live = get(userRef)
-                if (!live.exists) return@runTransaction
-                val liveProfile = live.data<UserProfile>()
-                if (liveProfile.smokingUnitsMigrated) return@runTransaction
-                val currentAggs = liveProfile.lifetimeAggregates
-
-                if (currentAggs.saved != initialAggs.saved ||
-                    currentAggs.wasted != initialAggs.wasted ||
-                    currentAggs.baselineSaved != initialAggs.baselineSaved) {
-                    retryNeeded = true
-                    return@runTransaction
-                }
-
-                updateFields(userRef) {
-                    "lifetimeAggregates" to currentAggs.copy(smokingUnits = units)
-                    "smokingUnitsMigrated" to true
-                }
+        val leaseId = kotlin.random.Random.nextBytes(16).joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+        val untilMillis = Clock.System.now().toEpochMilliseconds() + 120000
+        val until = Timestamp(untilMillis / 1000, ((untilMillis % 1000) * 1_000_000).toInt())
+        val acquired = firestore.runTransaction {
+            val snapshot = get(userRef)
+            if (!snapshot.exists) return@runTransaction false
+            val profile = snapshot.data<UserProfile>()
+            if (profile.smokingUnitsMigrated || profile.deleting) return@runTransaction false
+            val currentLease = profile.smokingMigrationLeaseUntil
+            if (currentLease != null && currentLease.seconds * 1000 + currentLease.nanoseconds / 1_000_000 > Clock.System.now().toEpochMilliseconds()) return@runTransaction false
+            updateFields(userRef) {
+                "smokingMigrationLeaseId" to leaseId
+                "smokingMigrationLeaseUntil" to until
             }
-            if (!retryNeeded) break
+            true
+        }
+        if (!acquired) return
+        val configs = getConfigsOnce(uid)
+        val logs = getAllLogsOnce(uid)
+        val days = getAllDaysOnce(uid)
+        val units = SmokingCalculator.sumSmokingUnitsFromLogs(logs, configs) + days.filter { it.foldedIntoLifetime }.sumOf {
+            it.aggregateCredit?.smokingUnits ?: SmokingCalculator.sumSmokingUnits(it.counts, configs)
+        }
+        firestore.runTransaction {
+            val snapshot = get(userRef)
+            if (!snapshot.exists) return@runTransaction
+            val profile = snapshot.data<UserProfile>()
+            if (profile.deleting || profile.smokingMigrationLeaseId != leaseId) return@runTransaction
+            if (Clock.System.now().toEpochMilliseconds() >= untilMillis) throw IllegalStateException("MIGRATION_LEASE_EXPIRED")
+            updateFields(userRef) {
+                "lifetimeAggregates.smokingUnits" to units
+                "smokingUnitsMigrated" to true
+                "smokingMigrationLeaseId" to FieldValue.delete
+                "smokingMigrationLeaseUntil" to FieldValue.delete
+            }
         }
     }
 
@@ -1392,11 +1401,20 @@ class FirebaseRegistryRepository(
             deleteAccountDataRemotely()
             return
         }
-        val userDoc = firestore.collection("users").document(uid)
-        for (sub in USER_SUBCOLLECTIONS) {
-            deleteCollectionPaged(userDoc.collection(sub))
+        val userRef = firestore.collection("users").document(uid)
+        // Fence first (#83): tombstone the profile so a stale token (old
+        // session, in-flight retry) cannot recreate data mid-wipe — the rules
+        // reject every non-deleting write once the marker is set.
+        firestore.runTransaction {
+            if (get(userRef).exists) updateFields(userRef) { "deleting" to true }
+            else set(userRef, mapOf("deleting" to true))
         }
-        userDoc.delete()
+        for (sub in USER_SUBCOLLECTIONS) {
+            deleteCollectionPaged(userRef.collection(sub))
+        }
+        // Retain a minimal UID-keyed tombstone: old Auth tokens cannot recreate
+        // data. An Auth failure can retry the same fenced deletion safely.
+        userRef.set(mapOf("deleting" to true))
     }
 
     private suspend fun deleteCollectionPaged(collection: CollectionReference) {

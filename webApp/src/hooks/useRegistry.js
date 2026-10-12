@@ -40,6 +40,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   const [ledgersLoaded, setLedgersLoaded] = useState(false);
   const [financialMode, setFinancialMode] = useState(null);
   const [profileSettings, setProfileSettings] = useState(null);
+  const accountWriteState = useRef(null);
   const [avatar, setAvatar] = useState(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [loading, setLoading] = useState(!!user);
@@ -141,6 +142,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   // avatar ride along on this document for updated accounts (item 12) — see
   // the separate day-doc and profile-extra (avatar) listeners below.
   useEffect(() => {
+    accountWriteState.current = null;
     if (!user) {
       const cleared = emptyRegistry();
       setConfigs(cleared.configs);
@@ -205,6 +207,10 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
         }
         const d = s.data();
         setFinancialMode(d.financialMode || 'LEGACY');
+        accountWriteState.current = {
+          deleting: d.deleting === true,
+          leaseUntil: d.smokingMigrationLeaseUntil?.toMillis?.() || 0,
+        };
         setLifetimeAggregates((prev) => {
           const next = d.lifetimeAggregates || { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 };
           if (
@@ -493,6 +499,12 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   }, []);
 
   const requireOnline = useCallback((_actionName) => {
+    const state = accountWriteState.current;
+    if (state?.deleting || state?.leaseUntil > Date.now()) {
+      const message = state.deleting ? 'Account deletion is in progress. Retry deletion from Settings.' : 'History migration is in progress. Try again shortly.';
+      setRegistryError(message);
+      throw new Error(state.deleting ? 'ACCOUNT_DELETING' : 'MIGRATION_IN_PROGRESS');
+    }
     if (!isOnlineRef.current) {
       const err = new Error('Connect to the internet to update this count.');
       err.code = 'offline';
