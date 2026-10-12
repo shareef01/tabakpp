@@ -28,7 +28,18 @@ val commonModule = module {
     // which never calls ViewModel.onCleared. A factory here would leak one
     // eagerly-collecting instance per injection site.
     single { AuthViewModel(get(), get()) }
-    single { RegistryViewModel(get(), get(), get(), get()) }
+    single {
+        RegistryViewModel(get(), get(), get(), get()).apply {
+            // OPTION_B routing is decided per account by its SERVER-side
+            // financialMode, which only becomes OPTION_B after the trusted
+            // functions are deployed and an operator migrates the account. So the
+            // route is always on: LEGACY accounts keep their direct writes, and a
+            // migrated account goes through the callable instead of hitting rules
+            // that deny it every financial write.
+            optionBGateway = FirebaseTrustedFinancial()
+            optionBLedgerEnabled = true
+        }
+    }
 }
 
 expect fun platformModule(): org.koin.core.module.Module

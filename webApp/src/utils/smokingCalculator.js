@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SmokingCalculator — domain math ported 1:1 from the Kotlin
  * SmokingCalculator (shared/src/commonMain/kotlin/com/tabakpp/app/domain/).
  * Both clients read and write the same Firestore documents, so any change
@@ -41,6 +41,185 @@ const mergeCounts = (base, extra) => {
 
 // Day archives merged with same-date manual entries — an archive must not
 // shadow manual entries added afterwards. Matches the Kotlin implementation.
+const mergeEffectiveToday = (legacyTodayCounts, activeCounts, persistedDayDocCounts) => {
+  const overlay = activeCounts || {};
+  const base = Object.keys(overlay).length > 0
+    ? overlay
+    : (persistedDayDocCounts || {});
+  return mergeCounts(legacyTodayCounts, base);
+};
+
+/** `{ [date]: counts }` for every day-doc (its persisted counts, not snapshots). */
+const dayDocCountsByDate = (dayDocs) => {
+  const out = {};
+  (dayDocs || []).forEach((d) => {
+    if (d?.date) out[d.date] = d.counts || {};
+  });
+  return out;
+};
+
+/** A legacy day archive log (pre-days-model record of a whole day). */
+const isArchiveLog = (log) => log?.origin === 'DAY_RESET' || (log?.id || '').endsWith('_DAY');
+
+/**
+ * Reconstruct a tracker's historical config ({target, baseline, unitPrice}) from
+ * a manual log's stamped `aggregateCredit` (Option B, §8 of
+ * docs/financial-semantics.md). From `wasted = count*price` we recover the
+ * price; `target = count + saved/price`; `baseline = count + baselineSaved/price`.
+ * Returns null when the stamp is too incomplete to reconstruct (never invents).
+ */
+const deriveSnapshotFromLog = (log, trackerId, fallbackType) => {
+  const count = (log?.counts || {})[trackerId] || 0;
+  const c = log?.aggregateCredit;
+  if (!c || count <= 0) return null;
+  const price = Number.isFinite(c.wasted) ? c.wasted / count : null;
+  if (price == null || !(price > 0)) return null;
+  const target = Number.isFinite(c.saved) ? Math.max(0, Math.round(count + c.saved / price)) : null;
+  const baseline = Number.isFinite(c.baselineSaved) ? Math.max(0, Math.round(count + c.baselineSaved / price)) : null;
+  return {
+    type: fallbackType || 'CIGARETTE',
+    target: target ?? 0,
+    baseline,
+    unitPrice: price,
+    isFinanciallyTracked: true,
+    isPrimaryTracked: true,
+    __derived: true,
+  };
+};
+
+/**
+ * OPTION B — canonical per-date day-level financial aggregator (see
+ * docs/financial-semantics.md §8). Combines ONE tracking date's consumption
+ * (day document + its manual logs) and computes the day-level credit ONCE, so a
+ * daily target/baseline allowance is never credited per record.
+ *
+ * - `spent`/`smokingUnits` are consumption-based (event-additive).
+ * - `saved`/`baselineSaved` are day-level (computed once from the combined total).
+ * - Legacy day-archive logs are de-duplicated against an existing day document.
+ * - Historical targets/prices/baselines come from the day's stamped
+ *   `trackerSnapshots`, or are reconstructed from log stamps.
+ *
+ * PREPARED — not yet wired into the persisted write path (pending the
+ * data-model/activation decision). Returns `ambiguous` when two records for the
+ * same tracker imply different target/price, and `missingConfig` for trackers
+ * with no reconstructible stamp.
+ */
+const calculateDailyFinancials = (dayDoc, logsForDate = [], configs = [], defaultUnitPrice = 0.5) => {
+  const typeById = Object.fromEntries((configs || []).map((c) => [c.id, c.type]));
+  const counts = { ...(dayDoc?.counts || {}) };
+  const snapshots = { ...(dayDoc?.trackerSnapshots || {}) };
+  let ambiguous = false;
+  const missingConfig = new Set();
+
+  (logsForDate || []).forEach((log) => {
+    if (!log) return;
+    // A day document and a legacy archive for the same date are the same day.
+    if (dayDoc && isArchiveLog(log)) return;
+    Object.entries(log.counts || {}).forEach(([id, v]) => {
+      counts[id] = Math.max(0, (counts[id] || 0) + Math.max(0, v || 0));
+    });
+    Object.keys(log.counts || {}).forEach((id) => {
+      if ((log.counts || {})[id] <= 0) return;
+      const derived = deriveSnapshotFromLog(log, id, typeById[id]);
+      if (!derived) { missingConfig.add(id); return; }
+      const existing = snapshots[id];
+      if (!existing) { snapshots[id] = derived; return; }
+      const sameTarget = Math.round(Number(existing.target) || 0) === Math.round(Number(derived.target) || 0);
+      const samePrice = (Number(existing.unitPrice ?? defaultUnitPrice)) === (Number(derived.unitPrice ?? defaultUnitPrice));
+      if (!sameTarget || !samePrice) ambiguous = true;
+    });
+  });
+
+  const credit = SmokingCalculator.computeDayCredit(counts, snapshots, defaultUnitPrice);
+  return {
+    date: dayDoc?.date || logsForDate?.[0]?.logDate || null,
+    counts,
+    spent: credit.wasted,
+    saved: credit.saved,
+    baselineSaved: credit.baselineSaved,
+    smokingUnits: credit.smokingUnits,
+    ambiguous,
+    missingConfig: [...missingConfig],
+  };
+};
+
+/**
+ * OPTION B — read-only dry-run reconciliation. For every date that has records,
+ * reports the LEGACY credit (day-doc stamp + Σ log stamps) next to the OPTION B
+ * day-level credit, the difference, and a category. Never mutates; the input for
+ * a repair decision, not a repair.
+ *
+ * Categories: D=already correct (no difference), A=difference, no ambiguity,
+ * B=difference but ambiguous stamps, C=non-reconstructible (missing stamp).
+ */
+const optionBDailyDryRun = (dayDocs = [], logs = [], defaultUnitPrice = 0.5) => {
+  const logsByDate = {};
+  (logs || []).forEach((l) => { if (l?.logDate) (logsByDate[l.logDate] || (logsByDate[l.logDate] = [])).push(l); });
+  const dates = new Set([
+    ...(dayDocs || []).map((d) => d.date).filter(Boolean),
+    ...Object.keys(logsByDate),
+  ]);
+  const zero = { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 };
+  const result = [];
+  [...dates].sort().forEach((date) => {
+    const dayDoc = (dayDocs || []).find((d) => d.date === date) || null;
+    const dayLogs = logsByDate[date] || [];
+    const optionB = SmokingCalculator.calculateDailyFinancials(dayDoc, dayLogs, [], defaultUnitPrice);
+
+    const dayCredit = dayDoc?.foldedIntoLifetime ? (dayDoc.aggregateCredit || zero) : zero;
+    const legacy = dayLogs.reduce((acc, l) => {
+      const c = l.aggregateCredit || zero;
+      return {
+        saved: acc.saved + (c.saved || 0),
+        wasted: acc.wasted + (c.wasted || 0),
+        smokingUnits: acc.smokingUnits + (c.smokingUnits || 0),
+        baselineSaved: acc.baselineSaved + (c.baselineSaved || 0),
+      };
+    }, { ...zero, saved: dayCredit.saved, wasted: dayCredit.wasted, smokingUnits: dayCredit.smokingUnits, baselineSaved: dayCredit.baselineSaved });
+
+    const deltaSaved = optionB.saved - legacy.saved;
+    const deltaBaseline = optionB.baselineSaved - legacy.baselineSaved;
+    let category = 'D';
+    if (optionB.missingConfig.length > 0) category = 'C';
+    else if (Math.abs(deltaSaved) > 1e-9 || Math.abs(deltaBaseline) > 1e-9) category = optionB.ambiguous ? 'B' : 'A';
+    result.push({
+      date,
+      legacySaved: legacy.saved,
+      optionBSaved: optionB.saved,
+      deltaSaved,
+      legacyBaselineSaved: legacy.baselineSaved,
+      optionBBaselineSaved: optionB.baselineSaved,
+      deltaBaselineSaved: deltaBaseline,
+      ambiguous: optionB.ambiguous,
+      missingConfig: optionB.missingConfig,
+      category,
+    });
+  });
+  return result;
+};
+
+/**
+ * Authoritative totals from stamped history (read-only integrity / repair
+ * primitive). Only FOLDED day docs + stamped legacy logs count (a malicious or
+ * client could edit/delete a log without decrementing `baselineSaved`; see
+ * docs/financial-semantics.md). A repair would set the stored aggregates to
+ * this value, which is idempotent because it is derived, not a delta.
+ */
+const expectedLifetimeAggregates = (dayDocs = [], logs = []) => {
+  const out = { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 };
+  const add = (c) => {
+    if (!c) return;
+    out.saved += Number.isFinite(c.saved) ? c.saved : 0;
+    out.wasted += Number.isFinite(c.wasted) ? c.wasted : 0;
+    out.smokingUnits += Number.isFinite(c.smokingUnits) ? c.smokingUnits : 0;
+    out.baselineSaved += Number.isFinite(c.baselineSaved) ? c.baselineSaved : 0;
+  };
+  (dayDocs || []).forEach((d) => { if (d?.foldedIntoLifetime) add(d.aggregateCredit); });
+  (logs || []).forEach((l) => add(l?.aggregateCredit));
+  return out;
+};
+
+// Day archives merged with same-date manual entries — an archive must not
 const aggregateLoggedCounts = (logs) => {
   const archives = {};
   const others = {};
@@ -156,6 +335,11 @@ export const SmokingCalculator = {
   projectLoggedCounts,
   snapshotsByDate,
   computeDayCredit,
+  mergeEffectiveToday,
+  dayDocCountsByDate,
+  expectedLifetimeAggregates,
+  calculateDailyFinancials,
+  optionBDailyDryRun,
   LIFE_MINUTES_PER_UNIT,
 
   /**
@@ -507,20 +691,26 @@ export const SmokingCalculator = {
     const smokingIds = new Set(
       (configs || []).filter((c) => SMOKING_TYPES.includes(c.type)).map((c) => c.id)
     );
-    if (smokingIds.size === 0) return 0;
 
-    let total = lifetimeSmokingUnits != null
-      ? Math.max(0, lifetimeSmokingUnits)
-      : (() => {
-          let fromLogs = 0;
-          const logged = aggregateLoggedCounts(logs);
-          Object.values(logged).forEach((dayCounts) => {
-            smokingIds.forEach((id) => {
-              fromLogs += Math.max(0, dayCounts[id] || 0);
-            });
-          });
-          return fromLogs;
-        })();
+    // The archived smoking-unit total is an authoritative, config-independent
+    // stamp (AUD-008): deleting/renaming/retyping a tracker must NOT erase the
+    // historical health estimate. Only the legacy fallback (no stored total)
+    // needs the live configs to classify units, so its empty-config bail-out is
+    // confined to that branch.
+    let total;
+    if (lifetimeSmokingUnits != null) {
+      total = Math.max(0, lifetimeSmokingUnits);
+    } else {
+      if (smokingIds.size === 0) return 0;
+      let fromLogs = 0;
+      const logged = aggregateLoggedCounts(logs);
+      Object.values(logged).forEach((dayCounts) => {
+        smokingIds.forEach((id) => {
+          fromLogs += Math.max(0, dayCounts[id] || 0);
+        });
+      });
+      total = fromLogs;
+    }
 
     Object.entries(activeCounts || {}).forEach(([id, v]) => {
       if (smokingIds.has(id)) total += Math.max(0, v || 0);

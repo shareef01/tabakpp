@@ -10,9 +10,19 @@ import dev.gitlive.firebase.firestore.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlin.time.Clock
+import kotlinx.serialization.Serializable
+
+/** Minimal projection used to read `users/{uid}.financialMode` without touching UserProfile. */
+@Serializable
+private data class FinancialModeDoc(val financialMode: String = "LEGACY")
 
 /** Schema version marking the dated-daily-document migration. */
 private const val CURRENT_SCHEMA_VERSION = 2
+
+/** Every subcollection under `users/{uid}` (firestore.rules match blocks). */
+internal val USER_SUBCOLLECTIONS = listOf(
+    "configs", "logs", "days", "meta", "dailyFinancials", "financialOperations",
+)
 
 private fun nowTimestamp(): Timestamp {
     val ms = Clock.System.now().toEpochMilliseconds()
@@ -38,7 +48,9 @@ private fun nowTimestamp(): Timestamp {
  * `users/{uid}/meta/profile` — see [migrateAvatarToProfileMeta]/[updateAvatar].
  */
 class FirebaseRegistryRepository(
-    private val firestore: FirebaseFirestore
+    private val firestore: FirebaseFirestore,
+    /** Trusted server-side wipe for locked accounts; injectable for tests. */
+    private val deleteAccountDataRemotely: suspend () -> Unit = ::callDeleteAccountData,
 ) : RegistryRepository {
 
     private val BATCH_LIMIT = 400
@@ -76,6 +88,13 @@ class FirebaseRegistryRepository(
         }
     }
 
+    /** Same document as [subscribeToUserProfile] — the SDK shares one watch target. */
+    override fun subscribeToFinancialMode(uid: String): Flow<String> {
+        return firestore.collection("users").document(uid).snapshots().map {
+            if (it.exists) it.data<FinancialModeDoc>().financialMode else "LEGACY"
+        }
+    }
+
     override fun subscribeToConfigs(uid: String): Flow<List<TrackerConfig>> {
         return firestore.collection("users").document(uid).collection("configs")
             .orderBy("order")
@@ -103,6 +122,26 @@ class FirebaseRegistryRepository(
             .limit(LIVE_DAYS_QUERY_LIMIT)
             .snapshots()
             .map { snap -> snap.documents.mapNotNull { doc -> decodeDayDocument(doc) } }
+    }
+
+    /**
+     * Canonical OPTION B daily ledgers (bounded recent window — the Web
+     * equivalent uses 400 docs). The trusted callable is the only writer.
+     */
+    override fun subscribeToLedgers(uid: String): Flow<List<DailyFinancialRecord>> {
+        return firestore.collection("users").document(uid).collection("dailyFinancials")
+            .orderBy("date", Direction.DESCENDING)
+            .limit(LIVE_DAYS_QUERY_LIMIT)
+            .snapshots()
+            .map { snap -> snap.documents.mapNotNull { doc -> decodeLedger(doc) } }
+    }
+
+    private fun decodeLedger(doc: DocumentSnapshot): DailyFinancialRecord? {
+        return try {
+            if (doc.exists) doc.data<DailyFinancialRecord>().copy(date = doc.id) else null
+        } catch (e: Exception) {
+            null
+        }
     }
 
     override fun subscribeToProfileExtra(uid: String): Flow<ProfileExtra?> {
@@ -340,6 +379,12 @@ class FirebaseRegistryRepository(
             val daySnap = get(dayRef)
             if (!daySnap.exists) throw Exception("NOTHING_TO_ARCHIVE")
             val day = decodeDayDocument(daySnap) ?: throw Exception("NOTHING_TO_ARCHIVE")
+            // A day doc that exists IS a recorded day, even with all-zero counts
+            // (increment-then-decrement, or the last tracker removed after
+            // activity). Closing it must fold its stamped credit, which a
+            // zero-count day still carries as target-based `saved` (AUD-006).
+            // Reconcile passes allowEmpty=true so such days close; an explicit
+            // user "End day" with nothing open still throws NOTHING_TO_ARCHIVE.
             if (!allowEmpty && !SmokingCalculator.hasOpenSession(day.counts)) throw Exception("NOTHING_TO_ARCHIVE")
 
             if (day.foldedIntoLifetime) {
@@ -370,25 +415,55 @@ class FirebaseRegistryRepository(
         }
     }
 
+    /**
+     * Batched stale-day reconciliation (AUD-010). Pages the `days` collection in
+     * ASCENDING date order (single-field, auto-indexed) so the oldest — and
+     * therefore stale — days are reached first, and stops early once a page
+     * reaches the current tracking date. Bounded by both a page size and a hard
+     * page cap so a runaway backlog can never block the caller; best-effort per
+     * day so one failure does not abort the rest.
+     */
     override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) {
-        val stale = try {
-            firestore.collection("users").document(uid).collection("days")
-                .orderBy("date", Direction.DESCENDING)
-                .limit(LIVE_DAYS_QUERY_LIMIT)
-                .get()
-                .documents
-                .mapNotNull { decodeDayDocument(it) }
-                .filter { it.status == "open" && it.date < currentTrackingDate }
-        } catch (_: Exception) {
-            emptyList()
-        }
-        for (day in stale) {
+        for (date in listStaleOpenDays(uid, currentTrackingDate)) {
             try {
-                closeDay(uid, day.date, true)
+                closeDay(uid, date, true)
             } catch (_: Exception) {
                 // Best-effort — one failure must not block the rest.
             }
         }
+    }
+
+    override suspend fun listStaleOpenDays(uid: String, currentTrackingDate: String): List<String> {
+        val daysCollection = firestore.collection("users").document(uid).collection("days")
+        val pageSize = 200L
+        val maxPages = 10 // ≤2000 days per call — bounded, resumable on the next call
+        val stale = mutableListOf<String>()
+        var lastDoc: DocumentSnapshot? = null
+        var page = 0
+        while (page < maxPages) {
+            page++
+            var query: Query = daysCollection
+                .orderBy("date", Direction.ASCENDING)
+                .limit(pageSize)
+            if (lastDoc != null) query = query.startAfter(lastDoc!!)
+            val snap = try {
+                query.get()
+            } catch (_: Exception) {
+                return stale
+            }
+            val docs = snap.documents
+            if (docs.isEmpty()) return stale
+            for (doc in docs) {
+                val day = decodeDayDocument(doc) ?: continue
+                if (day.status != "open") continue
+                // Ascending order: no later document can be stale.
+                if (day.date >= currentTrackingDate) return stale
+                stale.add(day.date)
+            }
+            lastDoc = docs.lastOrNull() ?: return stale
+            if (docs.size < pageSize) return stale
+        }
+        return stale
     }
 
     override suspend fun updateHistoricalDay(uid: String, date: String, counts: Map<String, Double>) {
@@ -637,6 +712,399 @@ class FirebaseRegistryRepository(
                 "lifetimeAggregates.baselineSaved" to agg.baselineSaved
             }
         }
+    }
+
+    /**
+     * OPTION B atomic ledger write (parity with web `DailyLedger.createManualLog`).
+     * Source log + canonical ledger + (when folded) lifetime + idempotency receipt
+     * commit together or not at all. `operationId` makes the logical action
+     * request-idempotent. Local only — not called by production flows.
+     */
+    override suspend fun createManualLogAtomic(
+        uid: String,
+        logId: String,
+        date: String,
+        counts: Map<String, Double>,
+        snapshots: Map<String, TrackerSnapshot>,
+        defaultUnitPrice: Double,
+        operationId: String
+    ) {
+        if (!SmokingCalculator.isValidDate(date)) throw Exception("INVALID_DATE")
+        val userRef = firestore.collection("users").document(uid)
+        val ledgerRef = userRef.collection("dailyFinancials").document(date)
+        val logRef = userRef.collection("logs").document(logId)
+        val receiptRef = userRef.collection("financialOperations").document(operationId)
+        val normalized = InputSanitizer.counts(counts)
+        val fingerprint = "createManualLog|$date|$logId|" +
+            normalized.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
+
+        firestore.runTransaction {
+            val receiptSnap = get(receiptRef)
+            val ledgerSnap = get(ledgerRef)
+            val userSnap = get(userRef)
+            val logSnap = get(logRef)
+
+            if (receiptSnap.exists) {
+                val stored = receiptSnap.data<FinancialOperationReceipt>().payloadFingerprint
+                if (stored != fingerprint) throw Exception("OPERATION_CONFLICT")
+                return@runTransaction
+            }
+            if (logSnap.exists) throw Exception("LOG_EXISTS")
+
+            val existing = if (ledgerSnap.exists) ledgerSnap.data<DailyFinancialRecord>() else null
+            val oldCounts = existing?.countsByTracker ?: emptyMap()
+            val newCounts = addCounts(oldCounts, normalized)
+            val mergedSnapshots = (existing?.snapshots ?: emptyMap()) + snapshots
+            val oldCredit = existing?.canonicalCredit ?: LifetimeAggregates()
+            val newCredit = SmokingCalculator.computeDayCredit(newCounts, mergedSnapshots, defaultUnitPrice)
+            val logOwnCredit = SmokingCalculator.computeDayCredit(normalized, snapshots, defaultUnitPrice)
+            val folded = existing?.foldedIntoLifetime == true
+
+            set(logRef, LogEntry(
+                id = logId,
+                logDate = date,
+                counts = normalized,
+                isManual = true,
+                origin = "MANUAL_ENTRY",
+                // Per-log stamp is consumption-only; the day-level `saved` lives on the ledger.
+                aggregateCredit = LifetimeAggregates(
+                    saved = 0.0,
+                    wasted = logOwnCredit.wasted,
+                    smokingUnits = logOwnCredit.smokingUnits,
+                    baselineSaved = 0.0
+                )
+            ))
+            set(ledgerRef, DailyFinancialRecord(
+                date = date,
+                countsByTracker = newCounts,
+                snapshots = mergedSnapshots,
+                canonicalCredit = newCredit,
+                ledgerSchemaVersion = 2,
+                ambiguous = existing?.ambiguous ?: false,
+                missingConfig = existing?.missingConfig ?: emptyList(),
+                foldedIntoLifetime = folded,
+                migratedFromLegacy = existing?.migratedFromLegacy ?: false
+            ))
+            if (folded && userSnap.exists) {
+                val profile = userSnap.data<UserProfile>()
+                val cur = profile.lifetimeAggregates
+                updateFields(userRef) {
+                    "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + newCredit.saved)
+                    "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + newCredit.wasted)
+                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits)
+                    "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
+                }
+            }
+            set(receiptRef, FinancialOperationReceipt(
+                operationId = operationId,
+                operationType = "createManualLog",
+                sourceDocumentPath = logRef.path,
+                trackingDate = date,
+                payloadFingerprint = fingerprint,
+                resultStatus = "OK"
+            ))
+        }
+    }
+
+    /** Element-wise count addition (Kotlin's `Map + Map` replaces duplicate keys). */
+    private fun addCounts(a: Map<String, Double>, b: Map<String, Double>): Map<String, Double> =
+        (a.keys + b.keys)
+            .associateWith { maxOf(0.0, (a[it] ?: 0.0) + (b[it] ?: 0.0)) }
+            .filterValues { it > 0.0 }
+
+    /** Recompute a date's canonical ledger from an (optional) prior record + a delta. */
+    private fun deriveLedgerRecord(
+        date: String,
+        existing: DailyFinancialRecord?,
+        deltaCounts: Map<String, Double>,
+        extraSnapshots: Map<String, TrackerSnapshot>,
+        defaultUnitPrice: Double
+    ): Pair<DailyFinancialRecord, LifetimeAggregates> {
+        val oldCounts = existing?.countsByTracker ?: emptyMap()
+        val newCounts = addCounts(oldCounts, deltaCounts)
+        val snapshots = (existing?.snapshots ?: emptyMap()) + extraSnapshots
+        val oldCredit = existing?.canonicalCredit ?: LifetimeAggregates()
+        val newCredit = SmokingCalculator.computeDayCredit(newCounts, snapshots, defaultUnitPrice)
+        val rec = DailyFinancialRecord(
+            date = date,
+            countsByTracker = newCounts,
+            snapshots = snapshots,
+            canonicalCredit = newCredit,
+            ledgerSchemaVersion = 2,
+            ambiguous = existing?.ambiguous ?: false,
+            missingConfig = existing?.missingConfig ?: emptyList(),
+            foldedIntoLifetime = existing?.foldedIntoLifetime == true,
+            migratedFromLegacy = existing?.migratedFromLegacy ?: false
+        )
+        return rec to oldCredit
+    }
+
+    private fun ledgerFingerprint(type: String, vararg parts: String): String =
+        type + "|" + parts.joinToString("|")
+
+    override suspend fun updateManualLogAtomic(
+        uid: String,
+        logId: String,
+        date: String,
+        counts: Map<String, Double>,
+        snapshots: Map<String, TrackerSnapshot>,
+        defaultUnitPrice: Double,
+        operationId: String
+    ) {
+        val userRef = firestore.collection("users").document(uid)
+        val ledgerRef = userRef.collection("dailyFinancials").document(date)
+        val logRef = userRef.collection("logs").document(logId)
+        val receiptRef = userRef.collection("financialOperations").document(operationId)
+        val normalized = InputSanitizer.counts(counts)
+        val fingerprint = ledgerFingerprint("updateManualLog", date, logId,
+            normalized.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" })
+
+        firestore.runTransaction {
+            val receiptSnap = get(receiptRef)
+            val ledgerSnap = get(ledgerRef)
+            val userSnap = get(userRef)
+            val logSnap = get(logRef)
+            if (receiptSnap.exists) {
+                if (receiptSnap.data<FinancialOperationReceipt>().payloadFingerprint != fingerprint) throw Exception("OPERATION_CONFLICT")
+                return@runTransaction
+            }
+            if (!logSnap.exists) throw Exception("LOG_NOT_FOUND")
+            val oldLogCounts = logSnap.data<LogEntry>().counts
+            val delta = (oldLogCounts.keys + normalized.keys).associateWith {
+                (normalized[it] ?: 0.0) - (oldLogCounts[it] ?: 0.0)
+            }
+            val existing = if (ledgerSnap.exists) ledgerSnap.data<DailyFinancialRecord>() else null
+            val (rec, oldCredit) = deriveLedgerRecord(date, existing, delta, snapshots, defaultUnitPrice)
+            val logOwn = SmokingCalculator.computeDayCredit(normalized, snapshots, defaultUnitPrice)
+
+            updateFields(logRef) {
+                "counts" to normalized
+                "aggregateCredit.saved" to 0.0
+                "aggregateCredit.wasted" to logOwn.wasted
+                "aggregateCredit.smokingUnits" to logOwn.smokingUnits
+                "aggregateCredit.baselineSaved" to 0.0
+            }
+            set(ledgerRef, rec)
+            if (rec.foldedIntoLifetime && userSnap.exists) {
+                val cur = userSnap.data<UserProfile>().lifetimeAggregates
+                val n = rec.canonicalCredit
+                updateFields(userRef) {
+                    "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + n.saved)
+                    "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + n.wasted)
+                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + n.smokingUnits)
+                    "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + n.baselineSaved)
+                }
+            }
+            set(receiptRef, FinancialOperationReceipt(
+                operationId = operationId, operationType = "updateManualLog",
+                sourceDocumentPath = logRef.path, trackingDate = date,
+                payloadFingerprint = fingerprint, resultStatus = "OK"
+            ))
+        }
+    }
+
+    override suspend fun deleteManualLogAtomic(uid: String, logId: String, date: String, defaultUnitPrice: Double, operationId: String) {
+        val userRef = firestore.collection("users").document(uid)
+        val ledgerRef = userRef.collection("dailyFinancials").document(date)
+        val logRef = userRef.collection("logs").document(logId)
+        val receiptRef = userRef.collection("financialOperations").document(operationId)
+        val fingerprint = ledgerFingerprint("deleteManualLog", date, logId)
+
+        firestore.runTransaction {
+            val receiptSnap = get(receiptRef)
+            val ledgerSnap = get(ledgerRef)
+            val userSnap = get(userRef)
+            val logSnap = get(logRef)
+            if (receiptSnap.exists) {
+                if (receiptSnap.data<FinancialOperationReceipt>().payloadFingerprint != fingerprint) throw Exception("OPERATION_CONFLICT")
+                return@runTransaction
+            }
+            if (!logSnap.exists) return@runTransaction
+            val oldLogCounts = logSnap.data<LogEntry>().counts
+            val delta = oldLogCounts.mapValues { -it.value }
+            val existing = if (ledgerSnap.exists) ledgerSnap.data<DailyFinancialRecord>() else null
+            val (rec, oldCredit) = deriveLedgerRecord(date, existing, delta, emptyMap(), defaultUnitPrice)
+
+            delete(logRef)
+            set(ledgerRef, rec)
+            if (rec.foldedIntoLifetime && userSnap.exists) {
+                val cur = userSnap.data<UserProfile>().lifetimeAggregates
+                val n = rec.canonicalCredit
+                updateFields(userRef) {
+                    "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + n.saved)
+                    "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + n.wasted)
+                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + n.smokingUnits)
+                    "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + n.baselineSaved)
+                }
+            }
+            set(receiptRef, FinancialOperationReceipt(
+                operationId = operationId, operationType = "deleteManualLog",
+                sourceDocumentPath = logRef.path, trackingDate = date,
+                payloadFingerprint = fingerprint, resultStatus = "OK"
+            ))
+        }
+    }
+
+    override suspend fun restoreManualLogAtomic(uid: String, log: LogEntry, defaultUnitPrice: Double, operationId: String) {
+        val date = log.logDate
+        val userRef = firestore.collection("users").document(uid)
+        val ledgerRef = userRef.collection("dailyFinancials").document(date)
+        val logRef = userRef.collection("logs").document(log.id)
+        val receiptRef = userRef.collection("financialOperations").document(operationId)
+        val counts = InputSanitizer.counts(log.counts)
+        val fingerprint = ledgerFingerprint("restoreManualLog", date, log.id,
+            counts.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" })
+
+        firestore.runTransaction {
+            val receiptSnap = get(receiptRef)
+            val ledgerSnap = get(ledgerRef)
+            val userSnap = get(userRef)
+            val logSnap = get(logRef)
+            if (receiptSnap.exists) {
+                if (receiptSnap.data<FinancialOperationReceipt>().payloadFingerprint != fingerprint) throw Exception("OPERATION_CONFLICT")
+                return@runTransaction
+            }
+            if (logSnap.exists) return@runTransaction
+            val existing = if (ledgerSnap.exists) ledgerSnap.data<DailyFinancialRecord>() else null
+            val (rec, oldCredit) = deriveLedgerRecord(date, existing, counts, emptyMap(), defaultUnitPrice)
+            val logOwn = SmokingCalculator.computeDayCredit(counts, existing?.snapshots ?: emptyMap(), defaultUnitPrice)
+
+            set(logRef, LogEntry(
+                id = log.id, logDate = date, counts = counts, isManual = true, origin = "MANUAL_ENTRY",
+                aggregateCredit = LifetimeAggregates(saved = 0.0, wasted = logOwn.wasted, smokingUnits = logOwn.smokingUnits, baselineSaved = 0.0)
+            ))
+            set(ledgerRef, rec)
+            if (rec.foldedIntoLifetime && userSnap.exists) {
+                val cur = userSnap.data<UserProfile>().lifetimeAggregates
+                val n = rec.canonicalCredit
+                updateFields(userRef) {
+                    "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + n.saved)
+                    "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + n.wasted)
+                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + n.smokingUnits)
+                    "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + n.baselineSaved)
+                }
+            }
+            set(receiptRef, FinancialOperationReceipt(
+                operationId = operationId, operationType = "restoreManualLog",
+                sourceDocumentPath = logRef.path, trackingDate = date,
+                payloadFingerprint = fingerprint, resultStatus = "OK"
+            ))
+        }
+    }
+
+    override suspend fun adjustCounterAtomic(
+        uid: String,
+        date: String,
+        trackerId: String,
+        delta: Double,
+        snapshots: Map<String, TrackerSnapshot>,
+        defaultUnitPrice: Double,
+        operationId: String
+    ) {
+        if (!SmokingCalculator.isValidDate(date)) throw Exception("INVALID_TRACKING_DATE")
+        val userRef = firestore.collection("users").document(uid)
+        val ledgerRef = userRef.collection("dailyFinancials").document(date)
+        val dayRef = userRef.collection("days").document(date)
+        val receiptRef = userRef.collection("financialOperations").document(operationId)
+        val fingerprint = ledgerFingerprint("adjustCounter", date, trackerId, delta.toString())
+
+        firestore.runTransaction {
+            val receiptSnap = get(receiptRef)
+            val ledgerSnap = get(ledgerRef)
+            val userSnap = get(userRef)
+            val daySnap = get(dayRef)
+            if (receiptSnap.exists) {
+                if (receiptSnap.data<FinancialOperationReceipt>().payloadFingerprint != fingerprint) throw Exception("OPERATION_CONFLICT")
+                return@runTransaction
+            }
+            val day = if (daySnap.exists) daySnap.data<DayDocument>() else null
+            if (day?.status == "closed") throw Exception("DAY_CLOSED")
+
+            val dayCounts = (day?.counts ?: emptyMap()).toMutableMap()
+            val next = maxOf(0.0, (dayCounts[trackerId] ?: 0.0) + delta)
+            if (next > 0.0) dayCounts[trackerId] = next else dayCounts.remove(trackerId)
+            val daySnapshots = (day?.trackerSnapshots ?: emptyMap()) + snapshots
+
+            val existing = if (ledgerSnap.exists) ledgerSnap.data<DailyFinancialRecord>() else null
+            val (rec, oldCredit) = deriveLedgerRecord(date, existing, mapOf(trackerId to delta), snapshots, defaultUnitPrice)
+
+            val now = nowTimestamp()
+            val serverTs = Timestamp.ServerTimestamp as BaseTimestamp
+            if (daySnap.exists) {
+                updateFields(dayRef) {
+                    "counts" to dayCounts
+                    "trackerSnapshots" to daySnapshots
+                    "status" to "open"
+                    "updatedAt" to serverTs
+                }
+            } else {
+                set(dayRef, DayDocument(
+                    date = date,
+                    counts = dayCounts,
+                    trackerSnapshots = daySnapshots,
+                    aggregateCredit = rec.canonicalCredit,
+                    status = "open",
+                    legacyMigrationApplied = false,
+                    foldedIntoLifetime = false,
+                    createdAt = now,
+                    updatedAt = now,
+                    closedAt = null
+                ))
+                updateFields(dayRef) {
+                    "createdAt" to serverTs
+                    "updatedAt" to serverTs
+                }
+            }
+            set(ledgerRef, rec)
+            if (rec.foldedIntoLifetime && userSnap.exists) {
+                val cur = userSnap.data<UserProfile>().lifetimeAggregates
+                val n = rec.canonicalCredit
+                updateFields(userRef) {
+                    "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + n.saved)
+                    "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + n.wasted)
+                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + n.smokingUnits)
+                    "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + n.baselineSaved)
+                }
+            }
+            set(receiptRef, FinancialOperationReceipt(
+                operationId = operationId, operationType = "adjustCounter",
+                sourceDocumentPath = dayRef.path, trackingDate = date,
+                payloadFingerprint = fingerprint, resultStatus = "OK"
+            ))
+        }
+    }
+
+    override suspend fun foldLedgerIntoLifetime(uid: String, date: String) {
+        val userRef = firestore.collection("users").document(uid)
+        val ledgerRef = userRef.collection("dailyFinancials").document(date)
+        firestore.runTransaction {
+            val ledgerSnap = get(ledgerRef)
+            if (!ledgerSnap.exists) throw Exception("NOTHING_TO_ARCHIVE")
+            val ledger = ledgerSnap.data<DailyFinancialRecord>()
+            if (ledger.foldedIntoLifetime) return@runTransaction
+            val userSnap = get(userRef)
+            if (!userSnap.exists) return@runTransaction
+            val cur = userSnap.data<UserProfile>().lifetimeAggregates
+            val c = ledger.canonicalCredit
+            updateFields(ledgerRef) { "foldedIntoLifetime" to true }
+            updateFields(userRef) {
+                "lifetimeAggregates.saved" to (cur.saved + c.saved)
+                "lifetimeAggregates.wasted" to (cur.wasted + c.wasted)
+                "lifetimeAggregates.smokingUnits" to (cur.smokingUnits + c.smokingUnits)
+                "lifetimeAggregates.baselineSaved" to (cur.baselineSaved + c.baselineSaved)
+            }
+        }
+    }
+
+    override suspend fun getLogDate(uid: String, logId: String): String? {
+        val snap = firestore.collection("users").document(uid).collection("logs").document(logId).get()
+        return if (snap.exists) snap.get<String?>("logDate") else null
+    }
+
+    override suspend fun getFinancialMode(uid: String): String {
+        val snap = firestore.collection("users").document(uid).get()
+        if (!snap.exists) return "LEGACY"
+        return snap.data<FinancialModeDoc>().financialMode
     }
 
     override suspend fun deleteLog(uid: String, logId: String) {
@@ -917,16 +1385,35 @@ class FirebaseRegistryRepository(
             }
         }
     }
+
+    /**
+     * Firestore does not cascade deletes, so every subcollection under
+     * `users/{uid}` must be listed here (parity with the web
+     * `USER_SUBCOLLECTIONS`). The profile goes LAST: the rules'
+     * `financialLocked()` reads it to authorize the subcollection deletes.
+     */
     override suspend fun deleteAllUserData(uid: String) {
+        // MIGRATING/OPTION_B: the rules deny the client its financial deletes
+        // and the profile delete, so the trusted function wipes the whole tree
+        // (parity with the web deleteAllUserData).
+        val mode = getFinancialMode(uid)
+        if (mode == "MIGRATING" || mode == "OPTION_B") {
+            deleteAccountDataRemotely()
+            return
+        }
         val userRef = firestore.collection("users").document(uid)
+        // Fence first (#83): tombstone the profile so a stale token (old
+        // session, in-flight retry) cannot recreate data mid-wipe — the rules
+        // reject every non-deleting write once the marker is set.
         firestore.runTransaction {
             if (get(userRef).exists) updateFields(userRef) { "deleting" to true }
             else set(userRef, mapOf("deleting" to true))
         }
-        deleteCollectionPaged(firestore.collection("users").document(uid).collection("configs"))
-        deleteCollectionPaged(firestore.collection("users").document(uid).collection("logs"))
-        deleteCollectionPaged(firestore.collection("users").document(uid).collection("days"))
-        deleteCollectionPaged(firestore.collection("users").document(uid).collection("meta"))
+        for (sub in USER_SUBCOLLECTIONS) {
+            deleteCollectionPaged(userRef.collection(sub))
+        }
+        // Retain a minimal UID-keyed tombstone: old Auth tokens cannot recreate
+        // data. An Auth failure can retry the same fenced deletion safely.
         userRef.set(mapOf("deleting" to true))
     }
 

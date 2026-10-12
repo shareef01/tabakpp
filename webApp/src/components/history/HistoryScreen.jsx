@@ -80,6 +80,8 @@ export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = [
     name: 'NOW',
     date: today,
     dateLabel: 'Today',
+    // projectLoggedCounts already projected the live session over today's
+    // persisted day doc (replace, not merge) — no double-counting (AUD-001).
     val: sumCounts(logged[today]),
     isNow: true,
   });

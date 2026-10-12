@@ -44,7 +44,9 @@ jobs:
         with:
           node-version: "22.23.2"
           cache: npm
-          cache-dependency-path: webApp/package-lock.json
+          cache-dependency-path: |
+            webApp/package-lock.json
+            functions/package-lock.json
 
       - name: Pin npm to canonical version
         run: npm install -g npm@10.9.8
@@ -60,6 +62,12 @@ jobs:
 
       - name: Install web dependencies
         working-directory: webApp
+        run: npm ci
+
+      # The Functions emulator loads the trusted callables from functions/
+      # (testL/testM call executeFinancialOperation on-device).
+      - name: Install function dependencies
+        working-directory: functions
         run: npm ci
 
       # --- Web emulator tests (rules + emulator-backed service tests) ---
@@ -92,7 +100,7 @@ jobs:
                 "mobilesdk_app_id": "1:000000000000:android:0000000000000000",
                 "android_client_info": { "package_name": "com.tabakpp.app" }
               },
-              "api_key": [{ "current_key": "ci-test-only-not-a-real-api-key" }],
+              "api_key": [{ "current_key": "AIzaSyCI-test-only-not-a-real-key-00000" }],
               "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
             }],
             "configuration_version": "1"
@@ -144,14 +152,16 @@ jobs:
             "firestore": {
               "rules": "firestore.rules"
             },
+            "functions": { "source": "functions", "runtime": "nodejs22" },
             "emulators": {
               "firestore": { "port": 8080, "host": "0.0.0.0" },
               "auth": { "port": 9099, "host": "0.0.0.0" },
+              "functions": { "port": 5001, "host": "0.0.0.0" },
               "ui": { "enabled": false }
             }
           }
           JSON
-          firebase emulators:start --config firebase.ci.json --only firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
+          firebase emulators:start --config firebase.ci.json --only functions,firestore,auth --project demo-tabakpp-test > firebase-emulator.log 2>&1 &
           FIREBASE_PID=$!
           # LOGCAT_PID is only assigned later; readiness failures exit before that.
           # ${LOGCAT_PID:-} avoids an unbound-variable error under `set -u`
@@ -184,6 +194,22 @@ jobs:
           fi
           if ! curl -s http://localhost:9099 > /dev/null 2>&1; then
             echo "::error::Auth emulator failed to start"
+            cat firebase-emulator.log
+            exit 1
+          fi
+
+          # The Functions emulator listens before it has loaded the callables;
+          # the CLI prints "All emulators ready" only once everything is up
+          # (60 retries × 2s = 120s max).
+          for i in $(seq 1 60); do
+            if grep -q "All emulators ready" firebase-emulator.log; then
+              echo "All Firebase emulators (incl. Functions) are ready"
+              break
+            fi
+            sleep 2
+          done
+          if ! grep -q "All emulators ready" firebase-emulator.log; then
+            echo "::error::Functions emulator failed to start"
             cat firebase-emulator.log
             exit 1
           fi
@@ -359,6 +385,7 @@ jobs:
           # routes through 127.0.0.1 (IPv4-only loopback) instead.
           adb reverse tcp:8080 tcp:8080
           adb reverse tcp:9099 tcp:9099
+          adb reverse tcp:5001 tcp:5001
 
           # Verify the reverse tunnels are actually registered. This was never
           # checked before, so a silently-dropped tunnel reached Gradle.
@@ -370,6 +397,10 @@ jobs:
           case "$REVERSE_LIST" in
           *tcp:9099*) ;;
           *) fail_readiness "ADB_REVERSE_MISSING: tcp:9099 not present in adb reverse --list" ;;
+          esac
+          case "$REVERSE_LIST" in
+          *tcp:5001*) ;;
+          *) fail_readiness "ADB_REVERSE_MISSING: tcp:5001 not present in adb reverse --list" ;;
           esac
           echo "ADB_REVERSE_OK:"
           echo "$REVERSE_LIST"

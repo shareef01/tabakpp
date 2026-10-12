@@ -27,10 +27,15 @@ object RegistryMutations {
     ): LifetimeAggregates {
         val fin = SmokingCalculator.calculateFinancials(counts, configs, unitPrice)
         val units = SmokingCalculator.sumSmokingUnits(counts, configs)
+        // Baseline savings (item 3 / AUD-007): must move together with `saved`.
+        // Previously omitted here, so `baselineSaved` never advanced on the
+        // manual-entry / legacy-log write paths even though `saved` did.
+        val baselineSaved = SmokingCalculator.calculateBaselineSavings(counts, configs, unitPrice).moneySaved
         return LifetimeAggregates(
             saved = fin.saved,
             wasted = fin.wasted,
-            smokingUnits = units
+            smokingUnits = units,
+            baselineSaved = baselineSaved
         )
     }
 

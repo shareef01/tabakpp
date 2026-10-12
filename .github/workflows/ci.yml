@@ -119,3 +119,48 @@ jobs:
       - name: Test Firestore rules
         working-directory: webApp
         run: npm run test:rules
+
+  # The trusted financial boundary (Option B). Unit tests cover the pure
+  # calculation + input validation; the emulator integration exercises the
+  # callables end-to-end (idempotency, close-once, mode guard, migration
+  # resume, concurrency) against the Auth/Firestore/Functions emulators.
+  functions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Required by the Firestore emulator.
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.23.2"
+          cache: npm
+          cache-dependency-path: |
+            functions/package-lock.json
+            webApp/package-lock.json
+      - name: Pin npm to canonical version
+        run: npm install -g npm@10.9.8
+      - name: Install locked function dependencies
+        working-directory: functions
+        run: npm ci
+      - name: Function unit tests
+        working-directory: functions
+        run: npm test
+      # firebase-tools comes from webApp's lockfile, the same pinned CLI the
+      # rules tests use — no unpinned global install.
+      - name: Install locked web dependencies (firebase-tools)
+        working-directory: webApp
+        run: npm ci
+      # The integration script hardcodes the demo project id, so the
+      # emulators must be started under the same id.
+      - name: Function emulator integration
+        working-directory: webApp
+        run: >-
+          npx firebase emulators:exec
+          --config ../firebase.json
+          --project demo-takabpp-test
+          --only functions,firestore,auth
+          "node ../functions/emulator.integration.mjs"

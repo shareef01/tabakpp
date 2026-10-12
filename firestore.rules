@@ -29,8 +29,8 @@ rules_version = '2';
 //     trackerSnapshots stamp (item 2) so editing/deleting/repricing a
 //     tracker later can never change what an old day meant. On a closed day,
 //     rules freeze `trackerSnapshots`, `status`, `date`,
-//     `foldedIntoLifetime`, and `legacyMigrationApplied` (see validDayUpdate,
-//     line 433). `counts` and `aggregateCredit` remain writable by the
+//     `foldedIntoLifetime`, and `legacyMigrationApplied` (see
+//     validDayUpdate). `counts` and `aggregateCredit` remain writable by the
 //     authenticated owner — the application-layer `updateHistoricalDay`
 //     path additionally reconciles `lifetimeAggregates`.
 //   users/{uid}/logs/{id}          legacy ledger: manual backfill entries
@@ -39,6 +39,14 @@ rules_version = '2';
 //   users/{uid}/meta/{id}          low-frequency profile extras (avatar) —
 //     split out so a large, rarely-changing blob never rides along on a
 //     high-frequency write (item 12). Today the only doc id used is `profile`.
+//   users/{uid}/dailyFinancials/{YYYY-MM-DD}  OPTION B canonical per-date
+//     financial ledger.
+//   users/{uid}/financialOperations/{id}  OPTION B request-idempotency
+//     receipts (immutable once written).
+//     Both are deployed with these rules but stay client-writable only while
+//     the account is LEGACY; in MIGRATING/OPTION_B the trusted Cloud Function
+//     is their only writer (see financialLocked). Production has no
+//     MIGRATING/OPTION_B accounts until the functions are deployed (Blaze).
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -85,13 +93,24 @@ service cloud.firestore {
     }
 
     // Dynamic tracker ids — bound size, keys, and each numeric value (matches
-    // InputSanitizer.counts). Rules forbid recursion, so lists are unrolled.
+    // InputSanitizer.counts, which allows up to 50 entries). Rules forbid
+    // recursion, so lists are unrolled.
+    //
+    // NOTE: the 50-slot unroll below is deliberately retained. A previous
+    // attempt narrowed it to 25 slots to relieve Firestore's hard 1000
+    // evaluated-sub-expression cap (charged per COMMIT), but the cap was still
+    // exceeded AND the narrowing rejected 26–50-entry maps that
+    // `InputSanitizer.counts` (`.take(50)`) still produces — a backward
+    // compatibility regression — so it was reverted.
     function validCountValue(v) {
       return v >= 0 && v <= 10000 && v % 1 == 0;
     }
 
     function validCountKey(k) {
-      return k.matches('^[A-Za-z0-9_-]{1,64}$');
+      // `k.size() >= 1` is implied by the `+` in the pattern below.
+      return k is string
+        && k.size() <= 64
+        && k.matches('^[A-Za-z0-9_-]+$');
     }
 
 
@@ -262,8 +281,39 @@ service cloud.firestore {
         'lifetimeAggregates', 'smokingUnitsMigrated', 'avatar', 'createdAt', 'updatedAt',
         'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield',
         'deleting', 'smokingMigrationLeaseId', 'smokingMigrationLeaseUntil', 'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
-          'migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice'
+          'migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice',
+        // OPTION B — account financial write mode ('LEGACY' | 'OPTION_B').
+        'financialMode'
       ]);
+    }
+
+    /**
+     * True when the account is in OPTION B mode (default LEGACY for legacy/
+     * unset accounts). Reads the pre-commit user document. `database`/`userId`
+     * are passed in because rules functions cannot see the enclosing match's
+     * wildcards.
+     */
+    function optionBMode(database, userId) {
+      return financialModeOf(database, userId) == 'OPTION_B';
+    }
+
+    /** 'LEGACY' | 'MIGRATING' | 'OPTION_B' — authoritative server-side state. */
+    function financialModeOf(database, userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data.get('financialMode', 'LEGACY');
+    }
+
+    /**
+     * Phase-3 trusted-boundary lock. Once an account is MIGRATING or OPTION_B,
+     * ordinary clients may NOT write ANY financial state (days / logs /
+     * dailyFinancials / financialOperations, or the profile's
+     * lifetimeAggregates). The trusted Cloud Function writes via the Admin SDK,
+     * which bypasses these rules — so the rules close the direct-client path,
+     * but the FINANCIAL INTEGRITY boundary is the function, not the rules
+     * (see docs/financial-semantics.md §21).
+     */
+    function financialLocked(database, userId) {
+      let m = financialModeOf(database, userId);
+      return m == 'MIGRATING' || m == 'OPTION_B';
     }
 
     function validSettingsShape(d) {
@@ -346,7 +396,12 @@ service cloud.firestore {
         && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool)
         && (!('schemaVersion' in d) || (isWholeNumber(d.schemaVersion) && d.schemaVersion >= 0 && d.schemaVersion <= 1000))
         && (!('migratingLegacyDate' in d) || d.migratingLegacyDate == null || isDateString(d.migratingLegacyDate))
-        && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
+        && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000))
+        // A client-created profile always starts LEGACY. MIGRATING/OPTION_B are
+        // set only by the trusted migration function (Admin SDK); accepting them
+        // here would let a client self-assign a mode — together with deleting
+        // its profile, a way out of (or into) the trusted-write lock.
+        && (!('financialMode' in d) || d.financialMode == 'LEGACY');
     }
 
     // Counter/archive path: only validate fields this write may change.
@@ -402,6 +457,8 @@ service cloud.firestore {
         && (!changed.hasAny(['estimatedYield'])
           || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
         && (!changed.hasAny(['widgetSize']) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
+        // (financialMode is not a settings field: the users/{uid} update rule
+        // rejects any client change to it — only the trusted function sets it.)
         // `!('avatar' in d)` additionally covers `avatar: deleteField()` (used
         // by migrateAvatarToProfileMeta/updateAvatar's legacy-field cleanup) —
         // see validMutationUpdate's comment on why referencing a field that
@@ -564,52 +621,186 @@ service cloud.firestore {
         && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
     }
 
+    // ---- OPTION B canonical daily financial ledger -------------------------
+    // users/{uid}/dailyFinancials/{date} — the ONE authoritative day-level credit
+    // for a date. Reuses the day-doc validators (validDayCountMap / validSnapshotMap
+    // / validLifetimeAggregates) so the per-commit expression budget stays within
+    // the same envelope as a `days` write.
+    /** Component-level completeness map persisted by the trusted backend. */
+    function validUnresolvedComponents(d) {
+      return d is map
+        && d.keys().hasOnly(['spent', 'saved', 'baselineSaved', 'smokingUnits'])
+        && (!('spent' in d) || d.spent is bool)
+        && (!('saved' in d) || d.saved is bool)
+        && (!('baselineSaved' in d) || d.baselineSaved is bool)
+        && (!('smokingUnits' in d) || d.smokingUnits is bool);
+    }
+
+    function validLedgerKeys(d) {
+      return d.keys().hasOnly([
+          'date', 'countsByTracker', 'snapshots', 'canonicalCredit', 'ledgerSchemaVersion',
+          'ambiguous', 'missingConfig', 'foldedIntoLifetime', 'migratedFromLegacy',
+          // Server/ledger metadata persisted by the Kotlin client + trusted function.
+          'eligible', 'conflicting', 'unresolvedComponents',
+          'createdAt', 'updatedAt'
+        ]);
+    }
+
+    function validLedgerShape() {
+      let d = request.resource.data;
+      return validLedgerKeys(d)
+        && d.keys().hasAll(['date', 'countsByTracker', 'canonicalCredit'])
+        && isDateString(d.date)
+        && validDayCountMap(d.countsByTracker)
+        && (!('snapshots' in d) || validSnapshotMap(d.snapshots))
+        && validLifetimeAggregates(d.canonicalCredit)
+        && (!('ledgerSchemaVersion' in d) || (isWholeNumber(d.ledgerSchemaVersion) && d.ledgerSchemaVersion >= 1 && d.ledgerSchemaVersion <= 1000))
+        && (!('ambiguous' in d) || d.ambiguous is bool)
+        && (!('missingConfig' in d) || (d.missingConfig is list && d.missingConfig.size() <= 50))
+        && (!('migratedFromLegacy' in d) || d.migratedFromLegacy is bool)
+        && (!('eligible' in d) || d.eligible is bool)
+        && (!('conflicting' in d) || (d.conflicting is list && d.conflicting.size() <= 50))
+        && (!('unresolvedComponents' in d) || validUnresolvedComponents(d.unresolvedComponents))
+        && (!('foldedIntoLifetime' in d) || d.foldedIntoLifetime is bool);
+    }
+
+    function validLedgerCreate(dateParam) {
+      return validLedgerShape() && request.resource.data.date == dateParam;
+    }
+
+    function validLedgerUpdate(dateParam) {
+      let d = request.resource.data;
+      let before = resource.data;
+      let changed = d.diff(before).affectedKeys();
+      return validLedgerKeys(d)
+        && d.date == dateParam
+        && d.date == before.date // date is the document identity — immutable
+        && (!changed.hasAny(['countsByTracker']) || validDayCountMap(d.countsByTracker))
+        && (!changed.hasAny(['snapshots']) || validSnapshotMap(d.snapshots))
+        && (!changed.hasAny(['canonicalCredit']) || validLifetimeAggregates(d.canonicalCredit))
+        && (!changed.hasAny(['ledgerSchemaVersion']) || (isWholeNumber(d.ledgerSchemaVersion) && d.ledgerSchemaVersion >= 1 && d.ledgerSchemaVersion <= 1000))
+        && (!changed.hasAny(['ambiguous']) || d.ambiguous is bool)
+        && (!changed.hasAny(['missingConfig']) || (d.missingConfig is list && d.missingConfig.size() <= 50))
+        && (!changed.hasAny(['migratedFromLegacy']) || d.migratedFromLegacy is bool)
+        && (!changed.hasAny(['eligible']) || d.eligible is bool)
+        && (!changed.hasAny(['conflicting']) || (d.conflicting is list && d.conflicting.size() <= 50))
+        && (!changed.hasAny(['unresolvedComponents']) || validUnresolvedComponents(d.unresolvedComponents))
+        // foldedIntoLifetime is one-way: it can only go unset/false -> true.
+        && (!changed.hasAny(['foldedIntoLifetime'])
+          || (d.foldedIntoLifetime is bool && (!('foldedIntoLifetime' in before) || before.foldedIntoLifetime != true)));
+    }
+
+    // users/{uid}/financialOperations/{operationId} — request-idempotency receipt.
+    // Immutable once written (allow update: false), so a retried logical action
+    // can never rewrite its own result.
+    function validOperationReceipt() {
+      let d = request.resource.data;
+      return d.keys().hasOnly([
+          'operationId', 'operationType', 'sourceDocumentPath', 'trackingDate',
+          'payloadFingerprint', 'resultStatus', 'result', 'createdAt'
+        ])
+        && d.keys().hasAll(['operationId', 'operationType', 'payloadFingerprint', 'resultStatus'])
+        && d.operationId is string && d.operationId.size() >= 1 && d.operationId.size() <= 128
+        && d.operationType in ['createManualLog', 'updateManualLog', 'deleteManualLog', 'restoreManualLog', 'adjustCounter']
+        && d.payloadFingerprint is string && d.payloadFingerprint.size() <= 2000
+        && d.resultStatus == 'OK'
+        && (!('sourceDocumentPath' in d) || (d.sourceDocumentPath is string && d.sourceDocumentPath.size() <= 300))
+        && (!('trackingDate' in d) || isDateString(d.trackingDate))
+        && (!('result' in d) || d.result is map);
+    }
+
     match /users/{userId} {
       allow read: if isOwner(userId);
       allow create: if isOwner(userId) && (validCreateProfile() || request.resource.data.keys().hasOnly(['deleting']) && request.resource.data.deleting == true);
+      // The client may never rewrite its own financial mode (the trusted
+      // migration function owns LEGACY→MIGRATING→OPTION_B via the Admin SDK),
+      // and once the account is MIGRATING/OPTION_B the lifetime aggregates are
+      // server-owned. Deletion tombstones and the bounded lease protocol have
+      // their own narrowly-scoped paths (#83); everything else stays behind
+      // the mutation/settings split.
       allow update: if isOwner(userId) && (validDeletionUpdate(request.resource.data, resource.data)
-        || (resource.data.get('deleting', false) != true && (smokingMigrationFinish(request.resource.data, resource.data)
-          || (!smokingLeaseHeld(resource.data) && ((isMutationOnlyUpdate() && validMutationUpdate()) || (isSettingsOnlyUpdate() && validSettingsUpdate()))))));
-      allow delete: if isOwner(userId) && resource.data.get('deleting', false) != true && !smokingLeaseHeld(resource.data);
+        || (resource.data.get('deleting', false) != true
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['financialMode'])
+          && (smokingMigrationFinish(request.resource.data, resource.data)
+            || (!smokingLeaseHeld(resource.data)
+              && (!financialLocked(database, userId)
+                  || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['lifetimeAggregates']))
+              && (
+                (isMutationOnlyUpdate() && validMutationUpdate()) ||
+                (isSettingsOnlyUpdate() && validSettingsUpdate())
+              )))));
+      // A MIGRATING/OPTION_B profile cannot be deleted by the client: deleting
+      // and recreating it (as LEGACY) would drop the financial-mode lock while
+      // the account's financial history stays in place, re-opening every
+      // direct-write path the lock closes. Locked accounts are already unable
+      // to client-wipe their logs/days (see below), so this adds no new
+      // restriction to account deletion — that needs a trusted path. A held
+      // migration lease likewise blocks deletion; a tombstoned account can
+      // never be deleted by the client, so the marker survives token reuse.
+      allow delete: if isOwner(userId)
+        && !financialLocked(database, userId)
+        && resource.data.get('deleting', false) != true
+        && !smokingLeaseHeld(resource.data);
 
       match /configs/{configId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && accountWritable(userId) && validConfig();
-        allow delete: if isOwner(userId) && accountDeletable(userId);
+        allow create, update: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validConfig();
+        allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
       }
 
       match /logs/{logId} {
         allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && accountWritable(userId) && validLogEntry();
+        // Phase-3 lock: in MIGRATING/OPTION_B the trusted callable is the only
+        // writer of consumption; direct client writes are rejected outright.
+        allow create: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validLogEntry();
         // logDate is immutable: an edit may only re-count the day it already
         // belongs to. Relabelling a log to another date would move counts
         // between days while lifetimeAggregates stayed put.
-        allow update: if isOwner(userId) && accountWritable(userId)
+        allow update: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId)
           && validLogEntry()
           && request.resource.data.logDate == resource.data.logDate
           && request.resource.data.get('trackerSnapshots', {}) == resource.data.get('trackerSnapshots', {});
-        allow delete: if isOwner(userId) && accountDeletable(userId);
+        allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
       }
 
       match /days/{date} {
         allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && accountWritable(userId) && validDayCreate(date);
-        allow update: if isOwner(userId) && accountWritable(userId) && validDayUpdate(date);
+        allow create: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validDayCreate(date);
+        allow update: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validDayUpdate(date);
         // Deletion is intentionally still permitted (Spark account wipe, and
         // an owner's general right to erase their own data) — it does not
         // rewrite a day's meaning, only remove the record entirely.
-        allow delete: if isOwner(userId) && accountDeletable(userId);
+        allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
       }
 
       match /meta/{metaId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && accountWritable(userId) && (
+        allow create, update: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && (
           (metaId == 'profile' && validMetaShape()) ||
           (metaId.matches('^legacy_[0-9-]+_[A-Za-z0-9_-]+_[0-9]+$')
             && request.resource.data.keys().hasOnly(['date', 'applied'])
             && isDateString(request.resource.data.date)
             && request.resource.data.applied == true));
-        allow delete: if isOwner(userId) && accountDeletable(userId);
+        allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
+      }
+
+      // OPTION B canonical daily financial ledger. For a LEGACY account the
+      // ledger is app-maintained and, like the day doc, is owner-writable —
+      // same Spark residual as `days` (an owner can misstate their own
+      // non-identity data; cross-user isolation and shape bounds still hold).
+      match /dailyFinancials/{date} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && !financialLocked(database, userId) && validLedgerCreate(date);
+        allow update: if isOwner(userId) && !financialLocked(database, userId) && validLedgerUpdate(date);
+        allow delete: if isOwner(userId) && !financialLocked(database, userId);
+      }
+
+      // Request-idempotency receipts (created once per logical operation).
+      match /financialOperations/{operationId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && !financialLocked(database, userId) && validOperationReceipt();
+        allow update: if false; // immutable once written
+        allow delete: if isOwner(userId) && !financialLocked(database, userId);
       }
     }
 
