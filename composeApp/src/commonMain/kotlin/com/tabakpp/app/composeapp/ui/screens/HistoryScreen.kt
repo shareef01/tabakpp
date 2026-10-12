@@ -52,6 +52,7 @@ fun HistoryScreen(
     val trackingDay by viewModel.trackingDay.collectAsStateWithLifecycle()
     val historyIsTruncated by viewModel.historyIsTruncated.collectAsStateWithLifecycle()
     val dayDocs by viewModel.historyDays.collectAsStateWithLifecycle()
+    val activeCounts by viewModel.activeCounts.collectAsStateWithLifecycle()
     val loadingOlder by viewModel.loadingOlderHistory.collectAsStateWithLifecycle()
     val hasOlder by viewModel.hasOlderHistory.collectAsStateWithLifecycle()
     val records = remember(logs, dayDocs) { com.tabakpp.app.domain.historyRecords(logs, dayDocs) }
@@ -171,10 +172,18 @@ fun HistoryScreen(
                                     color = accentColor
                                 )
                                 Spacer(modifier = Modifier.height(24.dp))
+                                val velocitySeries = remember(logs, dayDocs, trackingDay, historyPeriod, activeCounts) {
+                                    SmokingCalculator.buildVelocitySeries(
+                                        logs = logs,
+                                        dayDocs = dayDocs,
+                                        trackingDay = trackingDay,
+                                        days = historyPeriod,
+                                        activeCounts = activeCounts
+                                    )
+                                }
                                 HistoryChart(
-                                    logs = periodLogs,
-                                    activeCount = if (dayDocs.any { it.date == trackingDay && it.foldedIntoLifetime }) 0 else metrics?.count ?: 0,
-                                    accentColor = accentColor, 
+                                    series = velocitySeries,
+                                    accentColor = accentColor,
                                     modifier = Modifier.height(180.dp).padding(horizontal = 8.dp)
                                 )
                             }
@@ -198,9 +207,10 @@ fun HistoryScreen(
                                 modifier = Modifier.weight(1f)
                             )
                             MetricBlock(
-                                value = SmokingCalculator.formatCurrency(metrics?.spentToday ?: 0.0),
+                                value = if (metrics?.todayAvailable == false || metrics?.todayUnresolved?.spent == true) "—"
+                                    else SmokingCalculator.formatCurrency(metrics?.spentToday ?: 0.0),
                                 label = "today",
-                                subLabel = "SPENT",
+                                subLabel = if (metrics?.todayAvailable == false || metrics?.todayUnresolved?.spent == true) "UNAVAILABLE" else "SPENT",
                                 icon = Icons.Default.Wallet,
                                 modifier = Modifier.weight(1f)
                             )

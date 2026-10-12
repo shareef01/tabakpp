@@ -217,9 +217,9 @@ class RegistryViewModelTest {
         auth: FakeAuthRepository = FakeAuthRepository(user),
         reg: FakeRegistryRepository = FakeRegistryRepository(),
         networkObserver: FakeNetworkObserver = FakeNetworkObserver(),
-        configure: RegistryViewModel.() -> Unit = {},
         clock: FakeClock = FakeClock(kotlinx.datetime.Instant.parse("2026-06-01T12:00:00Z")),
         timeZoneProvider: () -> kotlinx.datetime.TimeZone = { kotlinx.datetime.TimeZone.UTC },
+        configure: RegistryViewModel.() -> Unit = {},
     ): Triple<RegistryViewModel, FakeRegistryRepository, FakeNetworkObserver> {
         val vm = RegistryViewModel(auth, reg, FakeLocalSettings(), networkObserver, clock, timeZoneProvider).apply(configure)
         scheduler.runCurrent() // let Eagerly authUser + init collectors settle (loop stays parked)

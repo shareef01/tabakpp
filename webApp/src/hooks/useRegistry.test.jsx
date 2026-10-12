@@ -547,7 +547,10 @@ describe('useRegistry tracking-date boundary (AUD-011)', () => {
     const onRollover = vi.fn();
     const spy = vi.spyOn(SmokingCalculator, 'getTrackingDate').mockReturnValue('2026-07-21');
     try {
-      const { result } = renderHook(() => useRegistry(USER, '2026-07-20', 0.5, 6, onRollover));
+      // Reconciled signature: useRegistry(user, today, unitPrice,
+      // onTrackingDayChange, nowFn). The pinned clock reads AFTER the day
+      // boundary, so the cached `today` (2026-07-20) is stale by one tick.
+      const { result } = renderHook(() => useRegistry(USER, '2026-07-20', 0.5, onRollover, () => new Date('2026-07-21T10:00:00')));
       act(() => cap.profileCb.current(profileSnap(defaultProfile())));
       act(() => cap.configsCb.current([CIG]));
       act(() => cap.logsCb.current([]));
@@ -557,8 +560,7 @@ describe('useRegistry tracking-date boundary (AUD-011)', () => {
 
       await act(async () => { await result.current.increment('cig'); });
 
-      // The injected `today` (2026-07-20) is stale by one tick; the write must
-      // land on the freshly resolved tracking date.
+      // The write must land on the freshly resolved tracking date.
       expect(RegistryService.adjustCounter).toHaveBeenLastCalledWith('u1', 'cig', 1, '2026-07-21', 0.5, expect.any(String));
       expect(onRollover).toHaveBeenCalledWith('2026-07-21');
     } finally {
@@ -566,12 +568,15 @@ describe('useRegistry tracking-date boundary (AUD-011)', () => {
     }
   });
 
-  it('keeps the injected today when no rollover handler is supplied', async () => {
+  it('still derives the date at mutation time when no rollover handler is supplied', async () => {
     const spy = vi.spyOn(SmokingCalculator, 'getTrackingDate').mockReturnValue('2099-01-01');
     try {
+      // No onTrackingDayChange handler: the write STILL uses the freshly
+      // derived date (mutation-time derivation is unconditional; the handler
+      // only drives the App-level `today` state).
       const { result } = mountHydrated();
       await act(async () => { await result.current.increment('cig'); });
-      expect(RegistryService.adjustCounter).toHaveBeenLastCalledWith('u1', 'cig', 1, TODAY, 0.5, expect.any(String));
+      expect(RegistryService.adjustCounter).toHaveBeenLastCalledWith('u1', 'cig', 1, '2099-01-01', 0.5, expect.any(String));
     } finally {
       spy.mockRestore();
     }
