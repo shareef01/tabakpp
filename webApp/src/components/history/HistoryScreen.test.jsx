@@ -78,10 +78,14 @@ describe('buildVelocitySeries', () => {
       expect(series.find((p) => p.date === '2026-03-09').val).toBe(12);
     });
 
-    it('keeps today visible from a still-open dayDoc, merged with the live session', () => {
+    it('keeps today visible from a still-open dayDoc, replaced by the live session', () => {
+      // The still-open day doc is a persisted PROJECTION of the same live
+      // session (adjustCounter stamps every tap into days/{date}.counts), and
+      // activeCounts = server counts + pending ops. Replacing avoids
+      // double-counting today's committed taps.
       const dayDocs = [{ date: TODAY, counts: { cig: 5 } }];
       const series = buildVelocitySeries([], TODAY, 7, { cig: 2 }, dayDocs);
-      expect(last(series).val).toBe(7);
+      expect(last(series).val).toBe(2);
     });
 
     it('is backward compatible when dayDocs is omitted (existing callers)', () => {
