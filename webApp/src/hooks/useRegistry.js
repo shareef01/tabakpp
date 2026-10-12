@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { RegistryService } from '../services/registryService';
+import { RegistryService, MAX_TRACKERS } from '../services/registryService';
 import { SmokingCalculator } from '../utils/smokingCalculator';
 import { mapFirestoreError } from '../utils/errorHandlers';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
+import { FinancialSource, resolveDateFinancial, aggregateFinancials } from '../services/financialReadModel';
 
 const emptyRegistry = () => ({
   configs: [],
@@ -35,6 +36,9 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   const [dayDocs, setDayDocs] = useState([]);
   const [activeCounts, setActiveCounts] = useState({});
   const [lifetimeAggregates, setLifetimeAggregates] = useState(null);
+  const [ledgers, setLedgers] = useState([]);
+  const [ledgersLoaded, setLedgersLoaded] = useState(false);
+  const [financialMode, setFinancialMode] = useState(null);
   const [profileSettings, setProfileSettings] = useState(null);
   const accountWriteState = useRef(null);
   const [avatar, setAvatar] = useState(null);
@@ -148,6 +152,9 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       setLifetimeAggregates(cleared.lifetimeAggregates);
       setProfileSettings(cleared.profileSettings);
       setAvatar(cleared.avatar);
+      setLedgers([]);
+      setLedgersLoaded(false);
+      setFinancialMode(null);
       setConfigsHasPendingWrites(false);
       pendingOpsRef.current = [];
       latestServerCountsRef.current = {};
@@ -164,6 +171,9 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     setLifetimeAggregates(null);
     setProfileSettings(null);
     setAvatar(null);
+    setLedgers([]);
+    setLedgersLoaded(false);
+    setFinancialMode(null);
     setConfigsHasPendingWrites(false);
     setLoading(true);
     setRegistryError(null);
@@ -181,6 +191,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       (s) => {
         if (!s.exists()) {
           setLifetimeAggregates({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
+          setFinancialMode('LEGACY');
           setProfileSettings({
             name: '',
             accent: null,
@@ -195,6 +206,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
           return;
         }
         const d = s.data();
+        setFinancialMode(d.financialMode || 'LEGACY');
         accountWriteState.current = {
           deleting: d.deleting === true,
           leaseUntil: d.smokingMigrationLeaseUntil?.toMillis?.() || 0,
@@ -266,12 +278,20 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       setAvatar(data?.avatar ?? null);
     }, () => { /* non-fatal — avatar is decorative */ });
 
+    const unsubLedgers = RegistryService.subscribeToLedgers(user.uid, (data) => {
+      setLedgers(data);
+      setLedgersLoaded(true);
+    }, () => { /* a ledger read failure must not silently imply "no ledger" */
+      setLedgersLoaded(false);
+    });
+
     return () => {
       unsubProfile();
       unsubConfigs();
       unsubLogs();
       unsubDays();
       unsubAvatar();
+      unsubLedgers();
     };
   }, [user?.uid]);
 
@@ -381,6 +401,32 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   const avatarValue = avatar ?? profileSettings?.legacyAvatar ?? null;
   const effectiveUnitPrice = profileSettings?.unitPrice ?? unitPrice;
 
+  // OPTION B canonical projection (Part A/C). A ledger that has NOT loaded is
+  // not a missing ledger — `ledgersLoaded` gates the whole projection.
+  const canonical = useMemo(() => {
+    if (!financialMode || financialMode === 'LEGACY' || !ledgersLoaded) return null;
+    const byDate = Object.fromEntries(ledgers.map((l) => [l.date, l]));
+    const dayDates = new Set(dayDocs.map((d) => d.date));
+    const logDates = new Set(logs.map((l) => l.logDate));
+    const hasActivity = (date) => dayDates.has(date) || logDates.has(date);
+    const resolve = (date) => resolveDateFinancial({
+      financialMode, ledger: byDate[date] || null, hasSourceActivity: hasActivity(date),
+    });
+    const dates = new Set([...Object.keys(byDate), ...dayDates, ...logDates]);
+    return {
+      ready: true,
+      byDate,
+      resolve,
+      today: resolve(today),
+      totals: aggregateFinancials([...dates].map(resolve)),
+      // The UI listener is bounded (`subscribeToLedgers` maxDays). If it is full,
+      // the window may be truncated — never present the total as complete.
+      windowTruncated: ledgers.length >= 400,
+      savedLifetime: lifetimeAggregates?.saved ?? 0,
+      baselineSavedLifetime: lifetimeAggregates?.baselineSaved ?? 0,
+    };
+  }, [financialMode, ledgers, ledgersLoaded, dayDocs, logs, today, lifetimeAggregates]);
+
   const metrics = useMemo(() => {
     const base = SmokingCalculator.getGlobalMetrics(
       logs,
@@ -391,11 +437,54 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       lifetimeAggregates,
       dayDocs
     );
-    return {
+    const merged = {
       ...base,
       budgetLeft: base.budgetLeftToday,
     };
-  }, [logs, configs, activeCounts, effectiveUnitPrice, today, lifetimeAggregates, dayDocs]);
+    if (!canonical || !canonical.ready) return merged;
+    const t = canonical.today;
+    merged.financialSource = t.source;
+    merged.financialComplete = canonical.totals.complete && !canonical.windowTruncated;
+    if (t.source === FinancialSource.CANONICAL) {
+      merged.todayAvailable = true;
+      merged.todayUnresolved = t.unresolved;
+      merged.spentToday = t.canonical.spent;
+      merged.saved = t.canonical.saved;
+      merged.budgetLeftToday = t.canonical.saved;
+      merged.budgetLeft = t.canonical.saved;
+      merged.baselineSavedToday = t.canonical.baselineSaved;
+      merged.smokingUnitsToday = t.canonical.smokingUnits;
+      // Lifetime = folded total + today's still-open canonical credit (an open
+      // day is not folded yet, exactly like the legacy session-on-top-of-lifetime).
+      const todayOpen = t.eligible && canonical.byDate[today]?.foldedIntoLifetime !== true;
+      merged.savedLifetime = canonical.savedLifetime + (todayOpen ? t.canonical.saved : 0);
+      merged.baselineSavedLifetime = canonical.baselineSavedLifetime + (todayOpen ? t.canonical.baselineSaved : 0);
+    } else if (t.source === FinancialSource.MISSING_LEDGER) {
+      // Source activity exists but the canonical ledger does not — UNAVAILABLE,
+      // never a silent legacy fallback or a fabricated zero.
+      merged.todayAvailable = false;
+      merged.spentToday = null;
+      merged.saved = null;
+      merged.budgetLeftToday = null;
+      merged.budgetLeft = null;
+      merged.baselineSavedToday = null;
+    } else {
+      // NO_FINANCIAL_ACTIVITY: a genuine zero contribution. The legacy base
+      // would otherwise show a full phantom daily allowance — zero it.
+      merged.todayAvailable = true;
+      if (t.source === FinancialSource.NO_ACTIVITY) {
+        merged.spentToday = 0;
+        merged.saved = 0;
+        merged.budgetLeftToday = 0;
+        merged.budgetLeft = 0;
+        merged.baselineSavedToday = 0;
+        merged.smokingUnitsToday = 0;
+        merged.savedLifetime = canonical.savedLifetime;
+        merged.baselineSavedLifetime = canonical.baselineSavedLifetime;
+      }
+    }
+    return merged;
+  }, [logs, configs, activeCounts, effectiveUnitPrice, today, lifetimeAggregates, dayDocs, canonical]);
 
   const runMutation = useCallback(async (fn, fallback) => {
     try {
@@ -453,7 +542,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     publishCounterOverlay();
     try {
       await runMutation(
-        () => RegistryService.adjustCounter(user.uid, id, 1, trackingDate, effectiveUnitPrice),
+        () => RegistryService.adjustCounter(user.uid, id, 1, trackingDate, effectiveUnitPrice, op.id),
         'Could not update counter.'
       );
       op.settled = true;
@@ -492,7 +581,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     publishCounterOverlay();
     try {
       await runMutation(
-        () => RegistryService.adjustCounter(user.uid, id, -1, trackingDate, effectiveUnitPrice),
+        () => RegistryService.adjustCounter(user.uid, id, -1, trackingDate, effectiveUnitPrice, op.id),
         'Could not update counter.'
       );
       op.settled = true;
@@ -532,11 +621,12 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   const updateHistoricalLog = useCallback(async (logId, counts) => {
     if (!user) return;
     requireOnline('updateHistoricalLog');
+    const opId = nextOpId();
     return runMutation(
-      () => RegistryService.updateHistoricalLog(user.uid, logId, counts, effectiveUnitPrice),
+      () => RegistryService.updateHistoricalLog(user.uid, logId, counts, effectiveUnitPrice, opId),
       'Could not update history.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
 
   const updateHistoricalDay = useCallback(async (date, counts) => {
     if (!user) return;
@@ -550,31 +640,34 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   const deleteLog = useCallback(async (logId) => {
     if (!user) return;
     requireOnline('deleteLog');
+    const opId = nextOpId();
     return runMutation(
-      () => RegistryService.deleteLog(user.uid, logId, effectiveUnitPrice),
+      () => RegistryService.deleteLog(user.uid, logId, effectiveUnitPrice, opId),
       'Could not delete entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
 
   const restoreLog = useCallback(async (log) => {
     if (!user) return;
     requireOnline('restoreLog');
+    const opId = nextOpId();
     return runMutation(
-      () => RegistryService.restoreLog(user.uid, log, effectiveUnitPrice),
+      () => RegistryService.restoreLog(user.uid, log, effectiveUnitPrice, opId),
       'Could not restore entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
 
   const createManualEntry = useCallback(async (date, counts) => {
     if (!user) return;
     requireOnline('createManualEntry');
+    const opId = nextOpId();
     // Compare backfill against the freshly derived day (Android parity), not
     // the possibly stale cached one.
     return runMutation(
-      () => RegistryService.createManualEntry(user.uid, date, counts, effectiveUnitPrice, resolveTrackingDateForMutation()),
+      () => RegistryService.createManualEntry(user.uid, date, counts, effectiveUnitPrice, resolveTrackingDateForMutation(), opId),
       'Could not create entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, resolveTrackingDateForMutation]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, resolveTrackingDateForMutation, nextOpId]);
 
   const reorder = useCallback(async (id, dir) => {
     if (!user) return;
@@ -590,6 +683,12 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
 
   const addProtocol = useCallback(async (data) => {
     if (!user) return;
+    // Client-side cap matching firestore.rules' trackerSnapshots bound (AUD-005)
+    // so a 9th tracker is rejected up-front instead of failing a day write.
+    if (configs.length >= MAX_TRACKERS) {
+      setRegistryError(`You can track up to ${MAX_TRACKERS} counters at once.`);
+      return;
+    }
     return runMutation(
       () => RegistryService.addProtocol(user.uid, { ...data, order: configs.length }),
       'Could not add tracker.'
@@ -624,6 +723,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   return {
     configs, logs, dayDocs, metrics, loading, isEndingDay, isOnline, profileSettings,
     avatar: avatarValue, registryError, configsHasPendingWrites,
+    ledgers, ledgersLoaded, financialMode, canonical,
     clearRegistryError: () => setRegistryError(null),
     increment, decrement, endDay, updateHistoricalLog, updateHistoricalDay, deleteLog, restoreLog,
     createManualEntry, reorder, addProtocol, updateProtocol, deleteProtocol, updateAvatar

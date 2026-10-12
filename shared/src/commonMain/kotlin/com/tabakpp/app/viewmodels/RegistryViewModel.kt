@@ -3,9 +3,13 @@ package com.tabakpp.app.viewmodels
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tabakpp.app.data.*
+import com.tabakpp.app.domain.DateFinancial
 import com.tabakpp.app.domain.ExportBuilder
 import com.tabakpp.app.domain.ExportFormat
 import com.tabakpp.app.domain.ExportState
+import com.tabakpp.app.domain.FinancialReadModel
+import com.tabakpp.app.domain.FinancialSource
+import com.tabakpp.app.domain.FinancialTotals
 import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.domain.HistoryCursor
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -38,6 +42,25 @@ class RegistryViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val userUid: Flow<String?> = authUser.map { it?.uid }
+
+    /**
+     * Live (uid, financialMode) for routing — no profile read per mutation, and
+     * a migration takes effect as it happens. Paired with the uid so a cached
+     * mode can never apply to a different signed-in account; null until the
+     * first snapshot or after a listener error, which makes routing fall back to
+     * a one-off read (fail-closed, never a silent LEGACY default).
+     */
+    private val liveFinancialMode: StateFlow<Pair<String, String>?> = userUid.flatMapLatest { uid ->
+        if (uid == null) flowOf(null)
+        else registryRepository.subscribeToFinancialMode(uid)
+            .map<String, Pair<String, String>?> { uid to it }
+            .onStart { emit(null) }
+            .catch { emit(null) }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private suspend fun currentFinancialMode(uid: String): String =
+        liveFinancialMode.value?.takeIf { it.first == uid }?.second
+            ?: registryRepository.getFinancialMode(uid)
 
     // Every Firestore-backed flow below is defensively `.catch`-guarded: a
     // rejected/failed listener (permission-denied, a dropped connection, an
@@ -176,6 +199,20 @@ class RegistryViewModel(
 
     private fun nextOpId(): String =
         "${clock.now().toEpochMilliseconds()}_${++opSequence}"
+
+    /**
+     * Resolve the tracking date AT MUTATION TIME (AUD-011). `_trackingDay` is
+     * refreshed by a 30s loop, so near the configured day boundary it can be up
+     * to one tick stale; a write must not be misfiled onto the previous day.
+     * Assigning the flow here also re-subscribes to the correct day doc
+     * immediately instead of waiting for the next tick.
+     */
+    private fun resolveTrackingDate(): String {
+        val dayStartHour = userProfile.value?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR
+        val fresh = SmokingCalculator.getTrackingDate(Clock.System.now(), dayStartHour)
+        if (fresh != _trackingDay.value) _trackingDay.value = fresh
+        return fresh
+    }
 
     private fun publishCounterOverlay() {
         val server = latestServerCounts
@@ -362,11 +399,17 @@ class RegistryViewModel(
                 _loading.value = true
                 try {
                     registryRepository.ensureUserDocument(user.uid, user.displayName)
-                    registryRepository.migrateSmokingUnitsIfNeeded(user.uid)
-                    // One-time, idempotent, self-healing migrations (activeCounts ->
-                    // days, avatar -> meta/profile). Safe every session: each is a
-                    // no-op once already applied.
-                    registryRepository.migrateLegacyActiveCounts(user.uid)
+                    // The two financial legacy migrations write lifetimeAggregates /
+                    // day docs, which a MIGRATING/OPTION_B account's rules deny — and
+                    // the trusted migration already owns that state. Skip them there
+                    // (web parity) instead of failing "Could not prepare your profile".
+                    if (!financialLocked(user.uid)) {
+                        registryRepository.migrateSmokingUnitsIfNeeded(user.uid)
+                        // One-time, idempotent, self-healing migration (activeCounts ->
+                        // days). Safe every session: a no-op once already applied.
+                        registryRepository.migrateLegacyActiveCounts(user.uid)
+                    }
+                    // avatar -> meta/profile is not financial and is always allowed.
                     registryRepository.migrateAvatarToProfileMeta(user.uid)
                 } catch (e: Exception) {
                     setError(e, "Could not prepare your profile. Try again.")
@@ -450,7 +493,18 @@ class RegistryViewModel(
             combine(userUid, _trackingDay) { uid, day -> uid to day }.collect { (uid, day) ->
                 if (uid != null) {
                     try {
-                        registryRepository.reconcileStaleDays(uid, day)
+                        if (optionBActive(uid)) {
+                            // OPTION_B: each stale day closes through the trusted
+                            // DAY_CLOSE (same deterministic id as endDay/web, so a
+                            // concurrent close from another device is idempotent).
+                            for (date in registryRepository.listStaleOpenDays(uid, day)) {
+                                runCatching {
+                                    gateway().execute("DAY_CLOSE", mapOf("operationId" to "close_$date", "date" to date))
+                                }
+                            }
+                        } else {
+                            registryRepository.reconcileStaleDays(uid, day)
+                        }
                     } catch (_: Exception) {
                         // Best-effort — self-heals on the next tick/app start.
                     }
@@ -478,22 +532,156 @@ class RegistryViewModel(
         val trackingDay: String
     )
 
+    /** Server-side financial mode ('LEGACY' default) — drives the read projection. */
+    val financialMode: StateFlow<String> = userUid.flatMapLatest { uid ->
+        if (uid == null) flowOf("LEGACY")
+        else flow { emit(registryRepository.getFinancialMode(uid)) }
+    }.catch { e -> setError(e, "Could not read the account financial mode."); emit("LEGACY") }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "LEGACY")
+
+    /** Canonical OPTION B daily ledgers (bounded recent window; the trusted callable writes them). */
+    val ledgers: StateFlow<List<DailyFinancialRecord>> = userUid.flatMapLatest { uid ->
+        if (uid == null) flowOf(emptyList())
+        else registryRepository.subscribeToLedgers(uid)
+    }.catch { e -> setError(e, "Could not sync the financial ledger. Check your connection."); emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    data class CanonicalFinancials(
+        val mode: String,
+        val today: DateFinancial,
+        val totals: FinancialTotals,
+        val windowTruncated: Boolean
+    )
+
+    private data class CanonicalInputs(val mode: String, val ledgers: List<DailyFinancialRecord>)
+    private data class ActivityInputs(val trackingDay: String, val days: List<DayDocument>, val logs: List<LogEntry>)
+
+    /**
+     * Mode-aware canonical financial projection (Kotlin parity with the Web read
+     * contract). Null for LEGACY (legacy behaviour preserved). Consumes the
+     * persisted server-calculated values — never recomputes Option-B credit.
+     */
+    val canonical: StateFlow<CanonicalFinancials?> = combine(
+        combine(financialMode, ledgers, ::CanonicalInputs),
+        combine(trackingDay, dayDocs, logs, ::ActivityInputs),
+    ) { fin, act ->
+        if (fin.mode == "LEGACY") null
+        else {
+            val byDate = fin.ledgers.associateBy { it.date }
+            val dayDates = act.days.map { it.date }.toSet()
+            val logDates = act.logs.map { it.logDate }.toSet()
+            fun resolve(date: String): DateFinancial = FinancialReadModel.resolveDateFinancial(
+                fin.mode, byDate[date], dayDates.contains(date) || logDates.contains(date)
+            )
+            val dates = (byDate.keys + dayDates + logDates).toSortedSet()
+            CanonicalFinancials(
+                mode = fin.mode,
+                today = resolve(act.trackingDay),
+                totals = FinancialReadModel.aggregateFinancials(dates.map { resolve(it) }),
+                windowTruncated = fin.ledgers.size >= 400,
+            )
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     val metrics: StateFlow<SmokingCalculator.GlobalMetrics?> = combine(
         combine(logs, configs, _activeCounts, userProfile, trackingDay, ::MetricsInputs),
-        dayDocs
-    ) { inputs, dd ->
+        dayDocs,
+        canonical,
+    ) { inputs, dd, canon ->
         val p = inputs.profile
         if (p == null || inputs.trackingDay.isEmpty()) null
-        else SmokingCalculator.getGlobalMetrics(
-            logs = inputs.logs,
-            configs = inputs.configs,
-            activeCounts = inputs.activeCounts,
-            trackingDay = inputs.trackingDay,
-            userPrice = p.unitPrice,
-            lifetimeAggregates = p.lifetimeAggregates,
-            dayDocs = dd
-        )
+        else {
+            val base = SmokingCalculator.getGlobalMetrics(
+                logs = inputs.logs,
+                configs = inputs.configs,
+                activeCounts = inputs.activeCounts,
+                trackingDay = inputs.trackingDay,
+                userPrice = p.unitPrice,
+                lifetimeAggregates = p.lifetimeAggregates,
+                dayDocs = dd
+            )
+            if (canon == null) base
+            else when (canon.today.source) {
+                FinancialSource.OPTION_B_CANONICAL -> {
+                    val c = canon.today.canonical!!
+                    val foldedToday = ledgers.value.firstOrNull { it.date == inputs.trackingDay }?.foldedIntoLifetime == true
+                    val openCredit = canon.today.eligible && !foldedToday
+                    base.copy(
+                        spentToday = c.spent,
+                        saved = c.saved,
+                        budgetLeftToday = c.saved,
+                        baselineSavedToday = c.baselineSaved,
+                        savedLifetime = p.lifetimeAggregates.saved + (if (openCredit) c.saved else 0.0),
+                        baselineSavedLifetime = p.lifetimeAggregates.baselineSaved + (if (openCredit) c.baselineSaved else 0.0),
+                        todayAvailable = true,
+                        todayUnresolved = canon.today.unresolved,
+                    )
+                }
+                FinancialSource.MISSING_CANONICAL_LEDGER -> base.copy(
+                    // Source activity exists but the authoritative ledger is gone —
+                    // UNAVAILABLE, never a legacy fallback or a fabricated zero.
+                    spentToday = 0.0,
+                    saved = 0.0,
+                    budgetLeftToday = 0.0,
+                    baselineSavedToday = 0.0,
+                    todayAvailable = false,
+                    todayUnresolved = null,
+                )
+                FinancialSource.NO_ACTIVITY -> base.copy(
+                    spentToday = 0.0,
+                    saved = 0.0,
+                    budgetLeftToday = 0.0,
+                    baselineSavedToday = 0.0,
+                    savedLifetime = p.lifetimeAggregates.saved,
+                    baselineSavedLifetime = p.lifetimeAggregates.baselineSaved,
+                )
+                else -> base
+            }
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /**
+     * OPTION B routing switch. When true AND the account's server-side
+     * `financialMode == 'OPTION_B'`, every financial mutation routes through
+     * [optionBGateway]. Production (Koin) enables it together with the real
+     * gateway — routing is effectively per account, by server mode. The default
+     * false only keeps unit tests that build a bare view model on the legacy path.
+     */
+    var optionBLedgerEnabled: Boolean = false
+
+    /** Trusted write gateway (OPTION_B). Injected; never a direct Firestore write. */
+    var optionBGateway: TrustedFinancial? = null
+
+    private suspend fun optionBActive(uid: String): Boolean =
+        optionBLedgerEnabled && currentFinancialMode(uid) == "OPTION_B"
+
+    /**
+     * MIGRATING/OPTION_B: the trusted function owns all financial state and the
+     * rules deny direct client financial writes (parity with the web
+     * `financialWritesLocked`). Independent of [optionBLedgerEnabled].
+     */
+    private suspend fun financialLocked(uid: String): Boolean =
+        currentFinancialMode(uid).let { it == "MIGRATING" || it == "OPTION_B" }
+
+    /**
+     * The injected gateway, with every call stamped with the device's CURRENT
+     * tracking date (parity with the web `trustedExecute`). The server has no
+     * timezone for the user and accepts this, bounds-checked, as the user's
+     * "today" instead of evaluating it in UTC.
+     */
+    private fun gateway(): TrustedFinancial {
+        val inner = optionBGateway ?: error("OPTION_B requires the trusted financial gateway")
+        return object : TrustedFinancial {
+            override suspend fun execute(type: String, payload: Map<String, Any?>) =
+                inner.execute(type, payload + ("currentTrackingDate" to currentTrackingDateNow()))
+        }
+    }
+
+    /** Same rule as [resolveTrackingDate], without its flow side effect. */
+    private fun currentTrackingDateNow(): String = SmokingCalculator.getTrackingDate(
+        clock.now(),
+        userProfile.value?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR,
+    )
 
     private fun mutationBlocked(): Boolean {
         val profile = userProfile.value ?: return false
@@ -504,6 +692,8 @@ class RegistryViewModel(
             if (profile.deleting) "Account deletion is in progress. Retry deletion from Settings." else "History migration is in progress. Try again shortly.")
         return true
     }
+
+
     fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
         if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
@@ -546,7 +736,11 @@ class RegistryViewModel(
         viewModelScope.launch {
             counterWriteMutex.withLock {
                 try {
-                    registryRepository.updateLiveCounter(uid, trackerId, 1.0, trackingDate, price)
+                    if (optionBActive(uid)) {
+                        gateway().execute("COUNTER_INCREMENT", mapOf("operationId" to op.id, "date" to trackingDate, "trackerId" to trackerId, "delta" to 1.0, "defaultUnitPrice" to price))
+                    } else {
+                        registryRepository.updateLiveCounter(uid, trackerId, 1.0, trackingDate, price)
+                    }
                     op.settled = true
                     purgeAcknowledgedOrCanceledOps()
                     publishCounterOverlay()
@@ -600,7 +794,11 @@ class RegistryViewModel(
         viewModelScope.launch {
             counterWriteMutex.withLock {
                 try {
-                    registryRepository.updateLiveCounter(uid, trackerId, -1.0, trackingDate, price)
+                    if (optionBActive(uid)) {
+                        gateway().execute("COUNTER_DECREMENT", mapOf("operationId" to op.id, "date" to trackingDate, "trackerId" to trackerId, "delta" to -1.0, "defaultUnitPrice" to price))
+                    } else {
+                        registryRepository.updateLiveCounter(uid, trackerId, -1.0, trackingDate, price)
+                    }
                     op.settled = true
                     purgeAcknowledgedOrCanceledOps()
                     publishCounterOverlay()
@@ -645,7 +843,13 @@ class RegistryViewModel(
                 // Without this, a pending increment causes closeDay to
                 // read stale server counts (still 0) and throw NOTHING_TO_ARCHIVE.
                 counterWriteMutex.withLock {
-                    registryRepository.closeDay(uid, td)
+                    if (optionBActive(uid)) {
+                        // Deterministic id for "close this date": a retried request
+                        // after a lost response stays idempotent (web parity).
+                        gateway().execute("DAY_CLOSE", mapOf("operationId" to "close_$td", "date" to td))
+                    } else {
+                        registryRepository.closeDay(uid, td)
+                    }
                 }
                 _endDayResult.emit(true)
             } catch (e: Exception) {
@@ -674,7 +878,16 @@ class RegistryViewModel(
         }
         viewModelScope.launch {
             try {
-                registryRepository.createManualEntry(uid, date, counts)
+                if (optionBActive(uid)) {
+                    val opId = nextOpId()
+                    val logId = "${date}-M-$opId"
+                    gateway().execute("MANUAL_CREATE", mapOf(
+                        "operationId" to opId, "date" to date, "logId" to logId, "counts" to counts,
+                        "defaultUnitPrice" to (userProfile.value?.unitPrice ?: 0.5)
+                    ))
+                } else {
+                    registryRepository.createManualEntry(uid, date, counts)
+                }
             } catch (e: Exception) {
                 setError(e, "Could not create the history entry. Try again.")
             }
@@ -690,7 +903,11 @@ class RegistryViewModel(
         }
         viewModelScope.launch {
             try {
-                registryRepository.deleteLog(uid, log.id)
+                if (optionBActive(uid)) {
+                    gateway().execute("MANUAL_DELETE", mapOf("operationId" to nextOpId(), "date" to log.logDate, "logId" to log.id, "defaultUnitPrice" to (userProfile.value?.unitPrice ?: 0.5)))
+                } else {
+                    registryRepository.deleteLog(uid, log.id)
+                }
                 if (authUser.value?.uid == uid) olderLogs.value = olderLogs.value.filterNot { it.id == log.id }
                 onSuccess()
             } catch (e: Exception) {
@@ -708,7 +925,11 @@ class RegistryViewModel(
         }
         viewModelScope.launch {
             try {
-                registryRepository.restoreLog(uid, log)
+                if (optionBActive(uid)) {
+                    gateway().execute("MANUAL_RESTORE", mapOf("operationId" to nextOpId(), "date" to log.logDate, "logId" to log.id, "counts" to log.counts, "defaultUnitPrice" to (userProfile.value?.unitPrice ?: 0.5)))
+                } else {
+                    registryRepository.restoreLog(uid, log)
+                }
                 if (authUser.value?.uid == uid) olderLogs.value = (olderLogs.value + log).distinctBy { it.id }
             } catch (e: Exception) {
                 setError(e, "Could not restore the history entry. Try again.")
@@ -720,8 +941,11 @@ class RegistryViewModel(
         if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         val currentConfigs = configs.value
-        if (currentConfigs.size >= 8) {
-            setError(Exception("TRACKER_LIMIT"), "Could not add the tracker.")
+        // Client-side cap matching firestore.rules' trackerSnapshots bound
+        // (AUD-005) so a 9th tracker is rejected up-front instead of failing a
+        // later day write with permission-denied.
+        if (currentConfigs.size >= MAX_TRACKERS) {
+            _error.value = "You can track up to $MAX_TRACKERS counters at once."
             return
         }
         val nextOrder = if (currentConfigs.isEmpty()) 0 else currentConfigs.maxOf { it.order } + 1
@@ -773,7 +997,15 @@ class RegistryViewModel(
         val trackingDate = trackingDateForMutation()
         viewModelScope.launch {
             try {
-                registryRepository.deleteConfig(uid, configId, trackingDate)
+                if (optionBActive(uid)) {
+                    // The backend deletes the config and drops the tracker from the
+                    // current open day + ledger (historical days keep frozen state).
+                    gateway().execute("TRACKER_DELETE", mapOf(
+                        "operationId" to "del_${configId}_$trackingDate", "date" to trackingDate, "trackerId" to configId,
+                    ))
+                } else {
+                    registryRepository.deleteConfig(uid, configId, trackingDate)
+                }
             } catch (e: Exception) {
                 setError(e, "Could not delete the tracker. Try again.")
             }
@@ -818,7 +1050,16 @@ class RegistryViewModel(
         }
         viewModelScope.launch {
             try {
-                registryRepository.updateHistoricalLog(uid, logId, counts)
+                if (optionBActive(uid)) {
+                    val date = logs.value.firstOrNull { it.id == logId }?.logDate
+                        ?: registryRepository.getLogDate(uid, logId)
+                        ?: throw IllegalStateException("LOG_NOT_FOUND")
+                    gateway().execute("MANUAL_UPDATE", mapOf(
+                        "operationId" to nextOpId(), "date" to date, "logId" to logId, "counts" to counts,
+                    ))
+                } else {
+                    registryRepository.updateHistoricalLog(uid, logId, counts)
+                }
                 if (olderLogs.value.any { it.id == logId }) {
                     val updated = registryRepository.getHistoricalLog(uid, logId)
                     if (authUser.value?.uid == uid && updated != null) {
@@ -841,7 +1082,13 @@ class RegistryViewModel(
         }
         viewModelScope.launch {
             try {
-                registryRepository.updateHistoricalDay(uid, date, counts)
+                if (optionBActive(uid)) {
+                    gateway().execute("HISTORICAL_DAY_UPDATE", mapOf(
+                        "operationId" to nextOpId(), "date" to date, "counts" to counts,
+                    ))
+                } else {
+                    registryRepository.updateHistoricalDay(uid, date, counts)
+                }
                 if (olderDays.value.any { it.date == date }) {
                     val updated = registryRepository.getHistoricalDay(uid, date)
                     if (authUser.value?.uid == uid && updated != null) {

@@ -178,6 +178,28 @@ class SmokingCalculatorTest {
     }
 
     @Test
+    fun testCalculateLifeLostMinutes_survivesTrackerDeletion() {
+        // AUD-008: the archived smoking-unit total is a stored stamp — deleting
+        // the smoking tracker must not erase the historical health estimate.
+        val noSmoking = listOf(TrackerConfig("simple", "Other", 5, 1, TrackerType.SIMPLE))
+        assertEquals(
+            1100,
+            SmokingCalculator.calculateLifeLostMinutes(emptyList(), noSmoking, emptyMap(), 100.0)
+        )
+        // A still-resolvable tracker adds today's live overlay on top of the stamp.
+        val cig = listOf(TrackerConfig("cig", "Cig", 10, 1, TrackerType.CIGARETTE))
+        assertEquals(
+            (100 + 2) * 11,
+            SmokingCalculator.calculateLifeLostMinutes(emptyList(), cig, mapOf("cig" to 2.0), 100.0)
+        )
+        // Legacy fallback (no stored total) still needs a smoking tracker.
+        assertEquals(
+            0,
+            SmokingCalculator.calculateLifeLostMinutes(emptyList(), noSmoking, emptyMap(), null)
+        )
+    }
+
+    @Test
     fun auditFixtureA_quota20_count5_unit50c() {
         val configs = listOf(TrackerConfig("c1", "Cig", 20, 1, TrackerType.CIGARETTE, pricePerUnit = 0.5))
         val fin = SmokingCalculator.calculateFinancials(mapOf("c1" to 5.0), configs)
@@ -328,6 +350,296 @@ class SmokingCalculatorTest {
         // No snapshot for a legacy log -> falls back to the live limit (documented fallback).
         val logs = listOf(LogEntry("d1", "2024-07-13", mapOf("c1" to 8.0), origin = "DAY_RESET"))
         assertEquals(1, SmokingCalculator.calculateStreak(logs, liveConfigs, mapOf("c1" to 1.0), today, emptyList()))
+    }
+
+    @Test
+    fun testCalculateStreak_todayNotDoubleCounted() {
+        val today = "2024-07-14"
+        val configs = listOf(TrackerConfig("c1", "Cig", 20, 0, TrackerType.CIGARETTE))
+        val dayDocs = listOf(
+            DayDocument(
+                date = "2024-07-13",
+                counts = mapOf("c1" to 5.0),
+                trackerSnapshots = mapOf("c1" to TrackerSnapshot(target = 20))
+            ),
+            DayDocument(
+                date = today,
+                counts = mapOf("c1" to 12.0),
+                trackerSnapshots = mapOf("c1" to TrackerSnapshot(target = 20))
+            )
+        )
+        // Persisted today = 12 and the overlay (server value, no pending) = 12.
+        // Before AUD-001 this read as 24 > 20 and collapsed the streak to 0.
+        assertEquals(2, SmokingCalculator.calculateStreak(emptyList(), configs, mapOf("c1" to 12.0), today, dayDocs))
+        // Only a genuinely over-target effective count breaks it.
+        assertEquals(0, SmokingCalculator.calculateStreak(emptyList(), configs, mapOf("c1" to 21.0), today, dayDocs))
+    }
+
+    @Test
+    fun testCalculateStreak_pendingDeltaAndRollback() {
+        val today = "2024-07-14"
+        val configs = listOf(TrackerConfig("c1", "Cig", 20, 0, TrackerType.CIGARETTE))
+        val dayDocs = listOf(
+            DayDocument(
+                date = today,
+                counts = mapOf("c1" to 20.0),
+                trackerSnapshots = mapOf("c1" to TrackerSnapshot(target = 20))
+            )
+        )
+        assertEquals(1, SmokingCalculator.calculateStreak(emptyList(), configs, mapOf("c1" to 20.0), today, dayDocs))
+        assertEquals(0, SmokingCalculator.calculateStreak(emptyList(), configs, mapOf("c1" to 21.0), today, dayDocs)) // +1 pending
+        assertEquals(1, SmokingCalculator.calculateStreak(emptyList(), configs, mapOf("c1" to 20.0), today, dayDocs)) // rollback
+    }
+
+    @Test
+    fun testMergeEffectiveToday_legacyAdditiveOverlayNotDoubled() {
+        // Legacy/manual today (2) is additive with the live overlay (3).
+        assertEquals(mapOf("c1" to 5.0), SmokingCalculator.mergeEffectiveToday(mapOf("c1" to 2.0), mapOf("c1" to 3.0)))
+        // No legacy base -> the overlay alone (never doubled).
+        assertEquals(mapOf("c1" to 3.0), SmokingCalculator.mergeEffectiveToday(null, mapOf("c1" to 3.0)))
+    }
+
+    @Test
+    fun testAggregateMonthlyData_todayNotDoubleCounted() {
+        val dayDocs = listOf(DayDocument(date = "2026-09-15", counts = mapOf("cig" to 3.0), status = "open"))
+        val (_, mtd) = SmokingCalculator.aggregateMonthlyData(
+            emptyList(), dayDocs, "2026-09-15", mapOf("cig" to 3.0)
+        )
+        assertEquals(3, mtd?.units)
+        // Pending +1 is reflected, not added to the persisted base.
+        val (_, mtd2) = SmokingCalculator.aggregateMonthlyData(
+            emptyList(), dayDocs, "2026-09-15", mapOf("cig" to 4.0)
+        )
+        assertEquals(4, mtd2?.units)
+    }
+
+    @Test
+    fun testAggregateMonthlyData_includesManualLogCredit() {
+        // AUD-003: a stamped manual-log credit must appear in the month, matching
+        // the lifetimeAggregates credit createManualEntry already applied.
+        val logs = listOf(
+            LogEntry(
+                id = "2026-08-10_M1",
+                logDate = "2026-08-10",
+                counts = mapOf("cig" to 5.0),
+                origin = "MANUAL_ENTRY",
+                aggregateCredit = LifetimeAggregates(saved = 7.5, wasted = 2.5, smokingUnits = 5.0, baselineSaved = 3.0)
+            )
+        )
+        val (months, _) = SmokingCalculator.aggregateMonthlyData(logs, emptyList(), "2026-09-15")
+        val aug = months.first { it.month == "2026-08" }
+        assertEquals(5, aug.units)
+        assertEquals(2.5, aug.spent, 1e-9)
+        assertEquals(7.5, aug.saved, 1e-9)
+        assertEquals(3.0, aug.baselineSaved, 1e-9)
+    }
+
+    @Test
+    fun testBuildVelocitySeries_includesDayDocsAndClosesToday() {
+        // AUD-004: the chart must read day documents (not just legacy logs) and
+        // must not double-count today (AUD-001).
+        val today = "2026-03-10"
+        val dayDocs = listOf(
+            DayDocument(date = "2026-03-09", counts = mapOf("cig" to 12.0), status = "closed"),
+            DayDocument(date = today, counts = mapOf("cig" to 5.0), status = "open")
+        )
+        val series = SmokingCalculator.buildVelocitySeries(
+            logs = emptyList(),
+            dayDocs = dayDocs,
+            trackingDay = today,
+            days = 7,
+            activeCounts = mapOf("cig" to 5.0)
+        )
+        assertEquals(7, series.size)
+        assertEquals(today, series.last().date)
+        assertEquals(5, series.last().total) // not 10
+        assertEquals(12, series.first { it.date == "2026-03-09" }.total)
+        assertEquals(0, series.first { it.date == "2026-03-07" }.total)
+    }
+
+    @Test
+    fun testMergeEffectiveToday_emptyOverlayFallsBackToDayDoc() {
+        // AUD-001 regression: an empty live overlay must not make today vanish.
+        assertEquals(
+            mapOf("cig" to 3.0),
+            SmokingCalculator.mergeEffectiveToday(null, emptyMap(), mapOf("cig" to 3.0))
+        )
+        // Overlay present is preferred (superset of persisted + pending).
+        assertEquals(
+            mapOf("cig" to 4.0),
+            SmokingCalculator.mergeEffectiveToday(null, mapOf("cig" to 4.0), mapOf("cig" to 3.0))
+        )
+        // Legacy base is additive in both cases.
+        assertEquals(
+            mapOf("cig" to 5.0),
+            SmokingCalculator.mergeEffectiveToday(mapOf("cig" to 2.0), emptyMap(), mapOf("cig" to 3.0))
+        )
+    }
+
+    @Test
+    fun testAggregateMonthlyData_emptyOverlayKeepsToday() {
+        val dayDocs = listOf(DayDocument(date = "2026-09-15", counts = mapOf("cig" to 3.0), status = "open"))
+        val (_, mtd) = SmokingCalculator.aggregateMonthlyData(emptyList(), dayDocs, "2026-09-15", emptyMap())
+        assertEquals(3, mtd?.units) // not 0
+    }
+
+    @Test
+    fun testMergeEffectiveToday_stateMatrix() {
+        // Not loaded (empty overlay) → persisted day doc is the best estimate.
+        assertEquals(
+            mapOf("c1" to 5.0),
+            SmokingCalculator.mergeEffectiveToday(null, emptyMap(), mapOf("c1" to 5.0))
+        )
+        // Loaded zero is authoritative — never resurrect the stale persisted 5.
+        assertEquals(
+            mapOf("c1" to 0.0),
+            SmokingCalculator.mergeEffectiveToday(null, mapOf("c1" to 0.0), mapOf("c1" to 5.0))
+        )
+        // Loaded counts win over the persisted copy.
+        assertEquals(
+            mapOf("c1" to 5.0),
+            SmokingCalculator.mergeEffectiveToday(null, mapOf("c1" to 5.0), mapOf("c1" to 3.0))
+        )
+        // Pending deltas (already folded into the overlay) are reflected.
+        assertEquals(
+            mapOf("c1" to 6.0),
+            SmokingCalculator.mergeEffectiveToday(null, mapOf("c1" to 6.0), mapOf("c1" to 5.0))
+        )
+        // Legacy/manual logs dated today stay additive.
+        assertEquals(
+            mapOf("c1" to 5.0),
+            SmokingCalculator.mergeEffectiveToday(mapOf("c1" to 2.0), mapOf("c1" to 3.0), mapOf("c1" to 5.0))
+        )
+        // Missing doc and not loaded → empty.
+        assertEquals(
+            emptyMap<String, Double>(),
+            SmokingCalculator.mergeEffectiveToday(null, emptyMap(), null)
+        )
+    }
+
+    @Test
+    fun testAggregateMonthlyData_loadedZeroBeatsStaleDayDoc() {
+        val dayDocs = listOf(DayDocument(date = "2026-09-15", counts = mapOf("cig" to 5.0), status = "open"))
+        val (_, mtd) = SmokingCalculator.aggregateMonthlyData(
+            emptyList(), dayDocs, "2026-09-15", mapOf("cig" to 0.0)
+        )
+        assertEquals(0, mtd?.units) // the loaded zero wins over the stale day doc
+    }
+
+    @Test
+    fun testExpectedLifetimeAggregates_recomputesFromStamps() {
+        // Read-only integrity/repair primitive (docs/financial-semantics.md).
+        val days = listOf(
+            DayDocument(
+                date = "2026-07-01",
+                aggregateCredit = LifetimeAggregates(saved = 5.0, wasted = 5.0, smokingUnits = 5.0, baselineSaved = 2.0),
+                foldedIntoLifetime = true
+            ),
+            DayDocument(
+                date = "2026-07-02",
+                aggregateCredit = LifetimeAggregates(saved = 9.0, wasted = 9.0, smokingUnits = 9.0, baselineSaved = 9.0),
+                foldedIntoLifetime = false // not folded → excluded
+            ),
+        )
+        val logs = listOf(
+            LogEntry(
+                id = "L", logDate = "2026-07-03",
+                aggregateCredit = LifetimeAggregates(saved = 8.0, wasted = 2.0, smokingUnits = 2.0, baselineSaved = 18.0)
+            )
+        )
+        val expected = SmokingCalculator.expectedLifetimeAggregates(days, logs)
+        assertEquals(13.0, expected.saved, 1e-9)
+        assertEquals(7.0, expected.wasted, 1e-9)
+        assertEquals(7.0, expected.smokingUnits, 1e-9)
+        assertEquals(20.0, expected.baselineSaved, 1e-9)
+    }
+
+    @Test
+    fun testExpectedLifetimeAggregates_fractionalPrecision() {
+        val logs = listOf(
+            LogEntry("A", "2026-07-01", aggregateCredit = LifetimeAggregates(saved = 0.1, wasted = 0.2, baselineSaved = 0.3)),
+            LogEntry("B", "2026-07-02", aggregateCredit = LifetimeAggregates(saved = 0.2, wasted = 0.1, baselineSaved = 0.3)),
+        )
+        val r = SmokingCalculator.expectedLifetimeAggregates(emptyList(), logs)
+        assertEquals(0.3, r.saved, 1e-10)
+        assertEquals(0.3, r.wasted, 1e-10)
+        assertEquals(0.6, r.baselineSaved, 1e-10)
+    }
+
+    @Test
+    fun testExpectedLifetimeAggregates_boundedWindowIsIncomplete() {
+        // A bounded live window undercounts; reconciliation must feed FULL history.
+        val allLogs = (0 until 5).map {
+            LogEntry("L$it", "2026-07-0${it + 1}", aggregateCredit = LifetimeAggregates(saved = 1.0, wasted = 1.0, smokingUnits = 1.0))
+        }
+        assertEquals(3.0, SmokingCalculator.expectedLifetimeAggregates(emptyList(), allLogs.take(3)).saved, 1e-9)
+        assertEquals(5.0, SmokingCalculator.expectedLifetimeAggregates(emptyList(), allLogs).saved, 1e-9)
+    }
+
+    @Test
+    fun testLifetimeIntegrityDiagnostic_detectsDrift() {
+        // Test-only read-only diagnostic (docs/financial-semantics.md). Illustrative
+        // example: stored saved €120 vs expected €115.
+        val days = listOf(
+            DayDocument(
+                date = "d",
+                aggregateCredit = LifetimeAggregates(saved = 115.0, wasted = 80.0, smokingUnits = 160.0, baselineSaved = 85.0),
+                foldedIntoLifetime = true
+            )
+        )
+        val expected = SmokingCalculator.expectedLifetimeAggregates(days, emptyList())
+        val stored = LifetimeAggregates(saved = 120.0, wasted = 80.0, smokingUnits = 160.0, baselineSaved = 90.0)
+        assertEquals(5.0, stored.saved - expected.saved, 1e-9)
+        assertEquals(5.0, stored.baselineSaved - expected.baselineSaved, 1e-9)
+        assertEquals(0.0, stored.wasted - expected.wasted, 1e-9)
+        assertEquals(0.0, stored.smokingUnits - expected.smokingUnits, 1e-9)
+    }
+
+    @Test
+    fun testCalculateDailyFinancials_optionBDayLevel() {
+        // Phase 3 example: day doc 3 + logs 2 + 1 (target 10, baseline 15, €1).
+        val snap = mapOf("cig" to TrackerSnapshot(type = TrackerType.CIGARETTE, target = 10, baseline = 15, unitPrice = 1.0))
+        val day = DayDocument(date = "2026-10-01", counts = mapOf("cig" to 3.0), trackerSnapshots = snap, status = "closed")
+        val logs = listOf(
+            LogEntry("2026-10-01_M1", "2026-10-01", mapOf("cig" to 2.0), origin = "MANUAL_ENTRY",
+                aggregateCredit = LifetimeAggregates(wasted = 2.0, saved = 8.0, smokingUnits = 2.0, baselineSaved = 13.0)),
+            LogEntry("2026-10-01_M2", "2026-10-01", mapOf("cig" to 1.0), origin = "MANUAL_ENTRY",
+                aggregateCredit = LifetimeAggregates(wasted = 1.0, saved = 9.0, smokingUnits = 1.0, baselineSaved = 14.0)),
+        )
+        val r = SmokingCalculator.calculateDailyFinancials(day, logs, emptyList(), 0.5)
+        assertEquals(6.0, r.counts["cig"] ?: 0.0, 1e-9)
+        assertEquals(6.0, r.spent, 1e-9)         // 6 × €1
+        assertEquals(4.0, r.saved, 1e-9)         // (10 − 6) × €1
+        assertEquals(9.0, r.baselineSaved, 1e-9) // (15 − 6) × €1
+        assertEquals(6.0, r.smokingUnits, 1e-9)
+        assertEquals(false, r.ambiguous)
+
+        // Two logs, no day doc, target 10 → ONE allowance (saved €5, not €15).
+        val twoLogs = listOf(
+            LogEntry("A", "2026-10-02", mapOf("cig" to 2.0),
+                aggregateCredit = LifetimeAggregates(wasted = 2.0, saved = 8.0, smokingUnits = 2.0)),
+            LogEntry("B", "2026-10-02", mapOf("cig" to 3.0),
+                aggregateCredit = LifetimeAggregates(wasted = 3.0, saved = 7.0, smokingUnits = 3.0)),
+        )
+        val r2 = SmokingCalculator.calculateDailyFinancials(null, twoLogs, emptyList(), 0.5)
+        assertEquals(5.0, r2.spent, 1e-9)
+        assertEquals(5.0, r2.saved, 1e-9)
+    }
+
+    @Test
+    fun testOptionBDailyDryRun_quantifiesDifferenceAndCategories() {
+        val logs = listOf(
+            LogEntry("A", "2026-10-01", mapOf("cig" to 2.0),
+                aggregateCredit = LifetimeAggregates(wasted = 2.0, saved = 8.0, smokingUnits = 2.0)),
+            LogEntry("B", "2026-10-01", mapOf("cig" to 3.0),
+                aggregateCredit = LifetimeAggregates(wasted = 3.0, saved = 7.0, smokingUnits = 3.0)),
+        )
+        val report = SmokingCalculator.optionBDailyDryRun(emptyList(), logs, 0.5)
+        assertEquals(1, report.size)
+        assertEquals(15.0, report[0].legacySaved, 1e-9)
+        assertEquals(5.0, report[0].optionBSaved, 1e-9)
+        assertEquals(-10.0, report[0].deltaSaved, 1e-9)
+        assertEquals("A", report[0].category)
     }
 
     @Test

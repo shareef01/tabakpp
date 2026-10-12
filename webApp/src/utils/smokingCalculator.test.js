@@ -356,6 +356,76 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
     });
   });
 
+  describe('calculateStreak — today is never double-counted (AUD-001)', () => {
+    const today = '2024-07-14';
+    const config = () => ([{ id: 'c1', type: 'CIGARETTE', limit: 20 }]);
+
+    it('keeps the streak alive while today is within target, with the overlay mirroring the persisted day doc', () => {
+      const dayDocs = [
+        { date: '2024-07-13', counts: { c1: 5 }, trackerSnapshots: { c1: { target: 20 } } },
+        { date: today, counts: { c1: 12 }, trackerSnapshots: { c1: { target: 20 } } },
+      ];
+      // Persisted today = 12 and the overlay (server value, no pending) = 12.
+      // Previously this read as 24 > 20 and collapsed the streak to 0.
+      expect(SmokingCalculator.calculateStreak([], config(), { c1: 12 }, today, dayDocs)).toBe(2);
+    });
+
+    it('breaks the streak only when the effective overlay count truly exceeds the target', () => {
+      const dayDocs = [
+        { date: '2024-07-13', counts: { c1: 5 }, trackerSnapshots: { c1: { target: 20 } } },
+        { date: today, counts: { c1: 12 }, trackerSnapshots: { c1: { target: 20 } } },
+      ];
+      expect(SmokingCalculator.calculateStreak([], config(), { c1: 21 }, today, dayDocs)).toBe(0);
+    });
+
+    it('a pending increment over target breaks the streak; rollback restores it', () => {
+      const dayDocs = [{ date: today, counts: { c1: 20 }, trackerSnapshots: { c1: { target: 20 } } }];
+      expect(SmokingCalculator.calculateStreak([], config(), { c1: 20 }, today, dayDocs)).toBe(1);
+      expect(SmokingCalculator.calculateStreak([], config(), { c1: 21 }, today, dayDocs)).toBe(0); // +1 pending
+      expect(SmokingCalculator.calculateStreak([], config(), { c1: 20 }, today, dayDocs)).toBe(1); // rolled back
+    });
+
+    it('works when today has no day doc yet (first tap of the day)', () => {
+      const dayDocs = [{ date: '2024-07-13', counts: { c1: 5 }, trackerSnapshots: { c1: { target: 20 } } }];
+      expect(SmokingCalculator.calculateStreak([], config(), { c1: 1 }, today, dayDocs)).toBe(2);
+    });
+
+    it('adds a legacy/manual log dated today on top of the overlay', () => {
+      // Manual backfill for today lives in the legacy ledger; it is additive
+      // with the persisted day doc, which the overlay already reflects.
+      const logs = [{ id: '2024-07-14_M1', logDate: today, counts: { c1: 9 }, origin: 'MANUAL_ENTRY' }];
+      const dayDocs = [{ date: today, counts: { c1: 12 }, trackerSnapshots: { c1: { target: 20 } } }];
+      // 12 (day doc, via overlay) + 9 (manual) = 21 > 20 → today is over target.
+      expect(SmokingCalculator.calculateStreak(logs, config(), { c1: 12 }, today, dayDocs)).toBe(0);
+    });
+
+    it('falls back to the persisted day doc when the live overlay is empty (today never vanishes)', () => {
+      // No snapshot on the day doc → the live limit applies, so the count is
+      // what decides: 12 within a limit of 20, but over a limit of 2.
+      const dayDocs = [{ date: today, counts: { c1: 12 } }];
+      expect(SmokingCalculator.calculateStreak([], config(), {}, today, dayDocs)).toBe(1);
+      const tight = [{ id: 'c1', type: 'CIGARETTE', limit: 2 }];
+      expect(SmokingCalculator.calculateStreak([], tight, {}, today, dayDocs)).toBe(0);
+    });
+
+    it('distinguishes a loaded zero from a not-yet-loaded overlay (AUD-001 state matrix)', () => {
+      const { mergeEffectiveToday } = SmokingCalculator;
+      // Not loaded (empty overlay) → the persisted day doc is the best estimate.
+      expect(mergeEffectiveToday({}, {}, { c1: 5 })).toEqual({ c1: 5 });
+      // Loaded zero ({id:0}) is authoritative — never resurrect the stale 5.
+      expect(mergeEffectiveToday({}, { c1: 0 }, { c1: 5 })).toEqual({ c1: 0 });
+      // Loaded counts win over the persisted copy.
+      expect(mergeEffectiveToday({}, { c1: 5 }, { c1: 3 })).toEqual({ c1: 5 });
+      // Pending deltas (already folded into the overlay) are reflected.
+      expect(mergeEffectiveToday({}, { c1: 6 }, { c1: 5 })).toEqual({ c1: 6 });
+      expect(mergeEffectiveToday({}, { c1: 4 }, { c1: 5 })).toEqual({ c1: 4 });
+      // Legacy/manual logs dated today stay additive in every case.
+      expect(mergeEffectiveToday({ c1: 2 }, { c1: 3 }, { c1: 5 })).toEqual({ c1: 5 });
+      // Missing doc, not loaded → empty.
+      expect(mergeEffectiveToday(undefined, {}, undefined)).toEqual({});
+    });
+  });
+
   describe('calculateTrackingStreak (item 7 — tracking consistency vs. goal streak)', () => {
     const today = '2024-07-14';
 
@@ -728,6 +798,219 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       const state = SmokingCalculator.getFirstWeekGuidance([cig], [], dayDocs, {}, today);
       expect(state.hasTrackingEvidence).toBe(true);
       expect(state.showGettingStarted).toBe(false);
+    });
+  });
+
+  describe('calculateLifeLostMinutes (AUD-008 — history survives tracker deletion)', () => {
+    it('keeps the archived life-lost estimate when every smoking tracker is deleted', () => {
+      // Only a non-smoking tracker remains (or none) — the historical smoking
+      // units are a stored stamp and must not be erased by the deletion.
+      const configs = [{ id: 'simple', type: 'SIMPLE', limit: 5 }];
+      expect(SmokingCalculator.calculateLifeLostMinutes([], configs, {}, 100)).toBe(1100);
+    });
+
+    it('still adds today\'s live overlay for the trackers it can classify', () => {
+      const configs = [{ id: 'cig', type: 'CIGARETTE', limit: 10 }];
+      expect(SmokingCalculator.calculateLifeLostMinutes([], configs, { cig: 2 }, 100)).toBe((100 + 2) * 11);
+    });
+
+    it('legacy fallback (no stored total) returns 0 when no smoking tracker exists', () => {
+      const configs = [{ id: 'simple', type: 'SIMPLE', limit: 5 }];
+      expect(SmokingCalculator.calculateLifeLostMinutes([], configs, {}, null)).toBe(0);
+    });
+  });
+
+  describe('Option B (day-level) financial contract — REFERENCE, AWAITING PRODUCT APPROVAL', () => {
+    // See docs/financial-semantics.md §8. This does NOT change live behavior; it
+    // pins the Option B target value so the (unapproved) policy change has a
+    // concrete, testable contract the moment it is authorized.
+    const snapshot = { cig: { type: 'CIGARETTE', target: 10, unitPrice: 1, isFinanciallyTracked: true } };
+
+    it('computes ONE day-level credit from a date\'s combined consumption', () => {
+      const combined = { cig: 5 }; // 2 (log A) + 3 (log B)
+      const credit = SmokingCalculator.computeDayCredit(combined, snapshot, 0.5);
+      expect(credit.wasted).toBeCloseTo(5); // 5 × €1
+      expect(credit.saved).toBeCloseTo(5); // (10 − 5) × €1   ← Option B
+    });
+
+    it('differs from the current per-entry (Option A) sum', () => {
+      const savedA = SmokingCalculator.computeDayCredit({ cig: 2 }, snapshot, 0.5).saved;
+      const savedB = SmokingCalculator.computeDayCredit({ cig: 3 }, snapshot, 0.5).saved;
+      expect(savedA + savedB).toBeCloseTo(15); // Option A (current)
+      const optionB = SmokingCalculator.computeDayCredit({ cig: 5 }, snapshot, 0.5).saved;
+      expect(optionB).toBeCloseTo(5);
+      expect(optionB).not.toBeCloseTo(savedA + savedB);
+    });
+
+    it('consumption stays event-additive under both models', () => {
+      const combined = { cig: 5 };
+      const credit = SmokingCalculator.computeDayCredit(combined, snapshot, 0.5);
+      expect(credit.wasted).toBeCloseTo(
+        SmokingCalculator.computeDayCredit({ cig: 2 }, snapshot, 0.5).wasted +
+        SmokingCalculator.computeDayCredit({ cig: 3 }, snapshot, 0.5).wasted
+      );
+    });
+  });
+
+  describe('expectedLifetimeAggregates (read-only integrity / repair primitive)', () => {
+    it('recomputes the authoritative totals from stamped history', () => {
+      const days = [{ date: '2026-07-01', foldedIntoLifetime: true, aggregateCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 2 } }];
+      const logs = [{ id: 'L', logDate: '2026-07-02', aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 18 } }];
+      expect(SmokingCalculator.expectedLifetimeAggregates(days, logs))
+        .toEqual({ saved: 13, wasted: 7, smokingUnits: 7, baselineSaved: 20 });
+    });
+
+    it('ignores unfolded days and credit-less legacy logs', () => {
+      const days = [{ date: 'd', foldedIntoLifetime: false, aggregateCredit: { saved: 9, wasted: 9, smokingUnits: 9, baselineSaved: 9 } }];
+      const logs = [{ id: 'L', logDate: 'd' }]; // pre-aggregateCredit legacy
+      expect(SmokingCalculator.expectedLifetimeAggregates(days, logs))
+        .toEqual({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
+    });
+
+    it('is NOT complete from a bounded window — it only sums what it is given', () => {
+      // The live UI windows are limit(400) days / limit(1200) logs; a total
+      // derived from them can UNDERCOUNT. Completeness is the caller's
+      // responsibility: reconciliation must feed the FULL paginated history
+      // (e.g. readCompleteExportSnapshot), never the bounded live subscriptions.
+      const allLogs = Array.from({ length: 5 }, (_, i) => ({
+        id: `L${i}`, logDate: `2026-07-0${i + 1}`,
+        aggregateCredit: { saved: 1, wasted: 1, smokingUnits: 1, baselineSaved: 0 },
+      }));
+      const boundedWindow = allLogs.slice(0, 3); // as a limit(3) window would return
+      expect(SmokingCalculator.expectedLifetimeAggregates([], boundedWindow).saved).toBe(3);
+      expect(SmokingCalculator.expectedLifetimeAggregates([], allLogs).saved).toBe(5); // true value
+    });
+
+    it('sums fractional currency precisely (cent-space parity with Kotlin)', () => {
+      const logs = [
+        { id: 'A', aggregateCredit: { saved: 0.1, wasted: 0.2, smokingUnits: 0, baselineSaved: 0.3 } },
+        { id: 'B', aggregateCredit: { saved: 0.2, wasted: 0.1, smokingUnits: 0, baselineSaved: 0.3 } },
+      ];
+      const r = SmokingCalculator.expectedLifetimeAggregates([], logs);
+      expect(r.saved).toBeCloseTo(0.3, 10);
+      expect(r.wasted).toBeCloseTo(0.3, 10);
+      expect(r.baselineSaved).toBeCloseTo(0.6, 10);
+    });
+
+    // Test-only read-only integrity diagnostic (developer mechanism, not wired
+    // into any production path). See docs/financial-semantics.md §5-style design.
+    const integrityReport = (stored, dayDocs, logs) => {
+      const expected = SmokingCalculator.expectedLifetimeAggregates(dayDocs, logs);
+      const difference = {};
+      ['saved', 'wasted', 'smokingUnits', 'baselineSaved'].forEach((k) => {
+        difference[k] = (stored?.[k] ?? 0) - expected[k];
+      });
+      const missingCreditRecords =
+        (dayDocs || []).filter((d) => d.foldedIntoLifetime && !d.aggregateCredit).length +
+        (logs || []).filter((l) => !l.aggregateCredit).length;
+      const hasDrift = ['saved', 'wasted', 'smokingUnits', 'baselineSaved'].some((k) => Math.abs(difference[k]) > 1e-9);
+      return { stored, expected, difference, missingCreditRecords, hasDrift };
+    };
+
+    it('diagnostic reports zero drift when the stored aggregate matches history', () => {
+      const days = [{ foldedIntoLifetime: true, aggregateCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 2 } }];
+      const logs = [{ aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 18 } }];
+      const stored = { saved: 13, wasted: 7, smokingUnits: 7, baselineSaved: 20 };
+      const rep = integrityReport(stored, days, logs);
+      expect(rep.hasDrift).toBe(false);
+      expect(rep.difference).toEqual({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
+      expect(rep.missingCreditRecords).toBe(0);
+    });
+
+    it('diagnostic detects a stored-vs-history drift and quantifies it', () => {
+      // Illustrative example from the brief: stored saved €120 vs expected €115.
+      const days = [{ foldedIntoLifetime: true, aggregateCredit: { saved: 115, wasted: 80, smokingUnits: 160, baselineSaved: 85 } }];
+      const stored = { saved: 120, wasted: 80, smokingUnits: 160, baselineSaved: 90 };
+      const rep = integrityReport(stored, days, []);
+      expect(rep.hasDrift).toBe(true);
+      expect(rep.difference.saved).toBeCloseTo(5);
+      expect(rep.difference.baselineSaved).toBeCloseTo(5);
+      expect(rep.difference.wasted).toBeCloseTo(0);
+      expect(rep.difference.smokingUnits).toBeCloseTo(0);
+    });
+
+    it('diagnostic surfaces missing-credit records instead of silently trusting zero', () => {
+      const logs = [{ id: 'legacy' }]; // no aggregateCredit → contributes 0, but is flagged
+      const rep = integrityReport({ saved: 40, wasted: 0, smokingUnits: 0, baselineSaved: 0 }, [], logs);
+      expect(rep.missingCreditRecords).toBe(1);
+      expect(rep.hasDrift).toBe(true); // stored 40 has no reconstructible source
+    });
+  });
+
+  describe('Option B canonical day-level aggregator + dry-run (PREPARED, not wired)', () => {
+    const dayDoc = (date, counts, snapshots) => ({ date, counts, trackerSnapshots: snapshots || {}, status: 'closed' });
+    const manLog = (date, counts, credit) => ({ id: `${date}_M`, logDate: date, counts, origin: 'MANUAL_ENTRY', aggregateCredit: credit });
+
+    it('Phase 3 example: day doc 3 + logs 2 + 1 (target 10, baseline 15, €1)', () => {
+      const snap = { cig: { type: 'CIGARETTE', target: 10, baseline: 15, unitPrice: 1, isFinanciallyTracked: true } };
+      const day = dayDoc('2026-10-01', { cig: 3 }, snap);
+      const logs = [
+        manLog('2026-10-01', { cig: 2 }, { wasted: 2, saved: 8, smokingUnits: 2, baselineSaved: 13 }),
+        manLog('2026-10-01', { cig: 1 }, { wasted: 1, saved: 9, smokingUnits: 1, baselineSaved: 14 }),
+      ];
+      const r = SmokingCalculator.calculateDailyFinancials(day, logs, [], 0.5);
+      expect(r.counts.cig).toBe(6);
+      expect(r.spent).toBeCloseTo(6); // 6 × €1
+      expect(r.saved).toBeCloseTo(4); // (10 − 6) × €1
+      expect(r.baselineSaved).toBeCloseTo(9); // (15 − 6) × €1
+      expect(r.smokingUnits).toBe(6);
+      expect(r.ambiguous).toBe(false);
+    });
+
+    it('two manual logs, no day doc (target 10, €1, 2 & 3) ⇒ ONE allowance (saved €5)', () => {
+      const logs = [
+        manLog('2026-10-01', { cig: 2 }, { wasted: 2, saved: 8, smokingUnits: 2, baselineSaved: 0 }),
+        manLog('2026-10-01', { cig: 3 }, { wasted: 3, saved: 7, smokingUnits: 3, baselineSaved: 0 }),
+      ];
+      const r = SmokingCalculator.calculateDailyFinancials(null, logs, [], 0.5);
+      expect(r.spent).toBeCloseTo(5);
+      expect(r.saved).toBeCloseTo(5); // NOT 15
+      expect(r.smokingUnits).toBe(5);
+    });
+
+    it('de-duplicates a legacy archive against the day document', () => {
+      const snap = { cig: { type: 'CIGARETTE', target: 10, unitPrice: 1, isFinanciallyTracked: true } };
+      const day = dayDoc('2026-10-01', { cig: 4 }, snap);
+      const archive = { id: '2026-10-01_DAY', logDate: '2026-10-01', counts: { cig: 4 }, origin: 'DAY_RESET', aggregateCredit: { wasted: 4, saved: 6, smokingUnits: 4, baselineSaved: 0 } };
+      expect(SmokingCalculator.calculateDailyFinancials(day, [archive], [], 0.5).counts.cig).toBe(4);
+    });
+
+    it('flags ambiguous stamps and non-reconstructible logs', () => {
+      const logs = [
+        manLog('2026-10-01', { cig: 2 }, { wasted: 2, saved: 8, smokingUnits: 2, baselineSaved: 0 }), // price €1
+        manLog('2026-10-01', { cig: 3 }, { wasted: 6, saved: 4, smokingUnits: 3, baselineSaved: 0 }), // price €2
+      ];
+      expect(SmokingCalculator.calculateDailyFinancials(null, logs, [], 0.5).ambiguous).toBe(true);
+      const noCredit = [{ id: 'L', logDate: '2026-10-01', counts: { cig: 2 } }];
+      expect(SmokingCalculator.calculateDailyFinancials(null, noCredit, [], 0.5).missingConfig).toContain('cig');
+    });
+
+    it('dry-run classifies dates and quantifies the Option B difference', () => {
+      const logs = [
+        manLog('2026-10-01', { cig: 2 }, { wasted: 2, saved: 8, smokingUnits: 2, baselineSaved: 0 }),
+        manLog('2026-10-01', { cig: 3 }, { wasted: 3, saved: 7, smokingUnits: 3, baselineSaved: 0 }),
+      ];
+      const report = SmokingCalculator.optionBDailyDryRun([], logs, 0.5);
+      expect(report).toHaveLength(1);
+      expect(report[0].legacySaved).toBeCloseTo(15);
+      expect(report[0].optionBSaved).toBeCloseTo(5);
+      expect(report[0].deltaSaved).toBeCloseTo(-10);
+      expect(report[0].category).toBe('A');
+    });
+
+    it('dry-run: Category D (already correct) and Category C (non-reconstructible)', () => {
+      // D — a single folded day doc whose credit already matches Option B.
+      const day = { date: '2026-10-02', counts: { cig: 4 }, status: 'closed', foldedIntoLifetime: true,
+        trackerSnapshots: { cig: { type: 'CIGARETTE', target: 10, unitPrice: 1, isFinanciallyTracked: true } },
+        aggregateCredit: { saved: 6, wasted: 4, smokingUnits: 4, baselineSaved: 0 } };
+      const dReport = SmokingCalculator.optionBDailyDryRun([day], [], 1);
+      expect(dReport[0].category).toBe('D');
+      expect(dReport[0].deltaSaved).toBeCloseTo(0);
+
+      // C — a legacy manual log with no stamped credit (missing historical inputs).
+      const cReport = SmokingCalculator.optionBDailyDryRun([], [{ id: 'L', logDate: '2026-10-03', counts: { cig: 2 } }], 0.5);
+      expect(cReport[0].category).toBe('C');
+      expect(cReport[0].missingConfig).toContain('cig');
     });
   });
 });
