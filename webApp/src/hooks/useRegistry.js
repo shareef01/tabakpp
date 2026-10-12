@@ -30,7 +30,7 @@ const emptyRegistry = () => ({
  * decides which date a count belongs to (that already happened at write
  * time).
  */
-export const useRegistry = (user, today, unitPrice = 0.5, dayStartHour = 6, onRollover = null) => {
+export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = null, nowFn = () => new Date()) => {
   const [configs, setConfigs] = useState([]);
   const [logs, setLogs] = useState([]);
   const [dayDocs, setDayDocs] = useState([]);
@@ -60,29 +60,16 @@ export const useRegistry = (user, today, unitPrice = 0.5, dayStartHour = 6, onRo
   isEndingDayRef.current = isEndingDay;
   const todayRef = useRef(today);
   todayRef.current = today;
-  const dayStartHourRef = useRef(dayStartHour);
-  dayStartHourRef.current = dayStartHour;
-  const onRolloverRef = useRef(onRollover);
-  onRolloverRef.current = onRollover;
-
-  /**
-   * Resolve the tracking date for a write AT WRITE TIME (AUD-011). `today` is
-   * refreshed by a 30s timer, so near the configured day boundary it can be up
-   * to one tick stale and a write could be misfiled onto the previous day.
-   *
-   * When the owner supplies an [onRollover] handler (App passes its `setToday`),
-   * the date is recomputed from wall-clock and the owner is notified so the day
-   * subscription re-attaches immediately. Without a handler the hook keeps the
-   * injected `today` as the single source of truth — the contract existing
-   * callers and tests rely on.
-   */
-  const resolveWriteDate = useCallback(() => {
-    const acceptRollover = onRolloverRef.current;
-    if (typeof acceptRollover !== 'function') return todayRef.current;
-    const fresh = SmokingCalculator.getTrackingDate(new Date(), dayStartHourRef.current);
-    if (fresh !== todayRef.current) acceptRollover(fresh);
-    return fresh;
-  }, []);
+  const profileSettingsRef = useRef(profileSettings);
+  profileSettingsRef.current = profileSettings;
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
+  const onTrackingDayChangeRef = useRef(onTrackingDayChange);
+  onTrackingDayChangeRef.current = onTrackingDayChange;
+  // Injectable clock (Android RegistryViewModel parity): production uses the
+  // real clock; tests pin it so day-boundary logic is deterministic.
+  const nowFnRef = useRef(nowFn);
+  nowFnRef.current = nowFn;
 
   const publishCounterOverlay = useCallback(() => {
     const server = latestServerCountsRef.current || {};
@@ -106,6 +93,37 @@ export const useRegistry = (user, today, unitPrice = 0.5, dayStartHour = 6, onRo
       next[id] = Math.max(0, (server[id] || 0) + (pendingByTracker[id] || 0));
     });
     setActiveCounts(next);
+  }, []);
+
+  /**
+   * Mirrors Android RegistryViewModel.trackingDateForMutation: the date that
+   * decides which days/{date} document a mutation targets is derived from the
+   * clock AT TAP TIME with the freshest known dayStartHour — never from the
+   * (possibly stale) cached `today` prop, which is only refreshed by a 30s
+   * interval that throttles in background tabs. If the day has rolled over
+   * (midnight, custom day-start, DST), the cached day and the optimistic
+   * ledger are advanced first so the UI transitions in the same frame.
+   */
+  const resolveTrackingDateForMutation = useCallback(() => {
+    const dayStartHour = profileSettingsRef.current?.dayStartHour ?? SmokingCalculator.DAY_START_HOUR_DEFAULT;
+    const fresh = SmokingCalculator.getTrackingDate(nowFnRef.current(), dayStartHour);
+    if (fresh !== todayRef.current) {
+      todayRef.current = fresh;
+      latestServerCountsRef.current = {};
+      pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.trackingDate === fresh);
+      publishCounterOverlay();
+      onTrackingDayChangeRef.current?.(fresh);
+    }
+    return fresh;
+  }, [publishCounterOverlay]);
+
+  /** Taps are blocked while the user's dayStartHour is still unknown. */
+  const guardDayStartKnown = useCallback(() => {
+    if (loadingRef.current && !profileSettingsRef.current) {
+      setRegistryError('Still syncing your profile — try again in a moment.');
+      return false;
+    }
+    return true;
   }, []);
 
   useEffect(() => {
@@ -488,7 +506,10 @@ export const useRegistry = (user, today, unitPrice = 0.5, dayStartHour = 6, onRo
   const increment = useCallback(async (id) => {
     if (!user) return;
     requireOnline('increment');
-    const trackingDate = resolveWriteDate();
+    if (!guardDayStartKnown()) return;
+    // Date derived from the clock at THIS moment (Android parity) — see
+    // resolveTrackingDateForMutation.
+    const trackingDate = resolveTrackingDateForMutation();
     const currentServer = latestServerCountsRef.current[id] || 0;
     let expectedBase = currentServer;
     for (const o of pendingOpsRef.current) {
@@ -521,12 +542,13 @@ export const useRegistry = (user, today, unitPrice = 0.5, dayStartHour = 6, onRo
       setRegistryError('Could not save that change. Your count was restored.');
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveWriteDate]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   const decrement = useCallback(async (id) => {
     if (!user || (activeCountsRef.current[id] || 0) <= 0) return;
     requireOnline('decrement');
-    const trackingDate = resolveWriteDate();
+    if (!guardDayStartKnown()) return;
+    const trackingDate = resolveTrackingDateForMutation();
     const currentServer = latestServerCountsRef.current[id] || 0;
     let expectedBase = currentServer;
     for (const o of pendingOpsRef.current) {
@@ -559,26 +581,30 @@ export const useRegistry = (user, today, unitPrice = 0.5, dayStartHour = 6, onRo
       setRegistryError('Could not save that change. Your count was restored.');
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveWriteDate]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   /**
    * "Close day" — a UX affordance only (see registryService.closeDay). It
    * never decides which date a count belongs to; that already happened, at
-   * write time, in `increment`/`decrement` above.
+   * write time, in `increment`/`decrement` above. The date is still derived
+   * fresh at call time (Android parity) so a stale cached day can never
+   * archive the wrong day.
    */
   const endDay = useCallback(async () => {
     if (!user || isEndingDayRef.current) return;
     requireOnline('endDay');
+    if (!guardDayStartKnown()) return;
+    const closeDate = resolveTrackingDateForMutation();
     setIsEndingDay(true);
     try {
       await runMutation(
-        () => RegistryService.closeDay(user.uid, today),
+        () => RegistryService.closeDay(user.uid, closeDate),
         'Could not close the tracking day. Try again.'
       );
     } finally {
       setIsEndingDay(false);
     }
-  }, [user?.uid, today, runMutation, requireOnline]);
+  }, [user?.uid, runMutation, requireOnline, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   const updateHistoricalLog = useCallback(async (logId, counts) => {
     if (!user) return;
@@ -623,11 +649,13 @@ export const useRegistry = (user, today, unitPrice = 0.5, dayStartHour = 6, onRo
     if (!user) return;
     requireOnline('createManualEntry');
     const opId = nextOpId();
+    // Compare backfill against the freshly derived day (Android parity), not
+    // the possibly stale cached one.
     return runMutation(
-      () => RegistryService.createManualEntry(user.uid, date, counts, effectiveUnitPrice, resolveWriteDate(), opId),
+      () => RegistryService.createManualEntry(user.uid, date, counts, effectiveUnitPrice, resolveTrackingDateForMutation(), opId),
       'Could not create entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, today, runMutation, requireOnline, resolveWriteDate, nextOpId]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, resolveTrackingDateForMutation, nextOpId]);
 
   const reorder = useCallback(async (id, dir) => {
     if (!user) return;
@@ -667,10 +695,10 @@ export const useRegistry = (user, today, unitPrice = 0.5, dayStartHour = 6, onRo
     if (!user) return;
     requireOnline('deleteProtocol');
     return runMutation(
-      () => RegistryService.deleteProtocol(user.uid, id, todayRef.current),
+      () => RegistryService.deleteProtocol(user.uid, id, resolveTrackingDateForMutation()),
       'Could not delete tracker.'
     );
-  }, [user?.uid, runMutation, requireOnline]);
+  }, [user?.uid, runMutation, requireOnline, resolveTrackingDateForMutation]);
 
   const updateAvatar = useCallback(async (nextAvatar) => {
     if (!user) return;

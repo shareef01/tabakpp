@@ -114,12 +114,14 @@ object RegistryMutations {
     fun mergeHistoricalEditCounts(
         incoming: Map<String, Double>,
         previous: Map<String, Double>,
-        liveConfigIds: Collection<String>
+        liveConfigIds: Collection<String>,
+        historicalIds: Collection<String> = emptyList()
     ): Map<String, Double> {
         val live = liveConfigIds.toSet()
+        val editable = historicalIds.toSet()
         val merged = incoming.toMutableMap()
         previous.forEach { (id, value) ->
-            if (id !in live) merged[id] = value
+            if (id !in live && (id !in editable || id !in incoming)) merged[id] = value
         }
         return merged
     }

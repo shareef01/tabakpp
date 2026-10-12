@@ -197,6 +197,12 @@ class DomainContractFixturesTest {
                     assertNotNull(actualPct, "percentChange should not be null for non-null expected")
                     assertEquals(expPct, actualPct, 1e-9)
                 }
+                // Symmetric with the JS runner, which deep-equals the whole
+                // result — without these, a Kotlin delta/current/previous
+                // regression would pass this contract suite silently.
+                assertEquals(exp["current"]!!.jsonPrimitive.double, actual.current, 1e-9, "current")
+                assertEquals(exp["previous"]!!.jsonPrimitive.double, actual.previous, 1e-9, "previous")
+                assertEquals(exp["delta"]!!.jsonPrimitive.double, actual.delta, 1e-9, "delta")
             }
             "export" -> {
                 val configs = (input["configs"]?.jsonArray ?: emptyList()).map { parseConfig(it.jsonObject) }

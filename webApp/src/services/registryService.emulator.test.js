@@ -18,7 +18,7 @@
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, setDoc, updateDoc } from 'firebase/firestore';
 
 // registryService imports `db` from '../firebase', which needs VITE_* env at
 // import time. Swap it for the emulator-backed, authenticated instance. The
@@ -101,6 +101,21 @@ afterAll(async () => {
 });
 
 describe('RegistryService against the real SDK and rules', () => {
+  it('supports eight full trackers through counter, close, historical edit and manual entry', async () => {
+    await seed();
+    await updateDoc(doc(holder.db, 'users', UID), { unitPrice: 0.8 });
+    await updateDoc(doc(holder.db, 'users', UID, 'configs', 'cig'), { pricePerUnit: null, baseline: 20 });
+    for (let i = 1; i < 8; i++) await RegistryService.addProtocol(UID, { ...cigConfig, name: `Tracker ${i}`, order: i, pricePerUnit: null, baseline: 20 });
+    await expect(RegistryService.addProtocol(UID, { ...cigConfig, name: 'Ninth' })).rejects.toThrow('TRACKER_LIMIT');
+    const ids = (await getDocs(collection(holder.db, 'users', UID, 'configs'))).docs.map((d) => d.id);
+    for (const id of ids) await RegistryService.adjustCounter(UID, id, 1, '2026-08-01', 0.8);
+    expect(Object.keys((await dayDoc('2026-08-01')).trackerSnapshots)).toHaveLength(8);
+    await RegistryService.closeDay(UID, '2026-08-01');
+    await RegistryService.updateHistoricalDay(UID, '2026-08-01', Object.fromEntries(ids.map((id) => [id, 2])));
+    expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(12.8);
+    await RegistryService.createManualEntry(UID, '2026-07-01', Object.fromEntries(ids.map((id) => [id, 1])), 0.8, '2026-08-02');
+    expect((await logs())[0].trackerSnapshots).toBeDefined();
+  });
   it('adjustCounter creates/increments the dated day doc and clamps at zero', async () => {
     await seed();
     await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
@@ -228,8 +243,9 @@ describe('RegistryService against the real SDK and rules', () => {
         id: '2026-07-28_MANUAL',
         logDate: '2026-07-28',
         counts: { cig: 3, retired: 5 },
+        trackerSnapshots: { cig: SmokingCalculator.buildTrackerSnapshot(cigConfig), retired: { target: 0, unitPrice: 0, type: 'SIMPLE', isFinanciallyTracked: false } },
         origin: 'MANUAL_ENTRY',
-        aggregateCredit: { saved: 7, wasted: 3, smokingUnits: 3 },
+        aggregateCredit: { saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 },
       });
       await setDoc(
         doc(context.firestore(), 'users', UID),
@@ -346,6 +362,146 @@ describe('RegistryService against the real SDK and rules', () => {
     await RegistryService.updateAvatar(UID, 'data:short');
     const snap = await getDoc(doc(holder.db, 'users', UID, 'meta', 'profile'));
     expect(snap.data().avatar).toBe('data:short');
+  });
+
+  it('readCompleteExportSnapshot includes day documents (getAllDays must order by `date`)', async () => {
+    // Regression: getAllDays used orderBy('dayDate') but day docs carry their
+    // date in `date` — Firestore excludes documents missing the orderBy field,
+    // so the export silently shipped with days: [] (no daily history at all).
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 3, '2026-07-29', 0.5);
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+
+    const snap = await RegistryService.readCompleteExportSnapshot(UID);
+    const dayDates = snap.days.map((d) => d.date || d.id).sort();
+    expect(dayDates).toEqual(['2026-07-29', '2026-07-30']);
+    const day29 = snap.days.find((d) => (d.date || d.id) === '2026-07-29');
+    expect(day29.counts).toEqual({ cig: 3 });
+    // And the export builder must render those days into the CSV too.
+    const { buildCsv } = await import('../utils/ExportBuilder');
+    const csv = buildCsv(snap);
+    expect(csv).toContain('2026-07-29');
+  });
+
+  it('readCompleteExportSnapshot returns ALL pages of logs (cursor walks to exhaustion)', async () => {
+    // A naive implementation could stop after one page; the export contract
+    // is the COMPLETE dataset. Seed more logs than one page holds and verify
+    // every log arrives exactly once.
+    await seed();
+    const total = 230; // > default 200-page size
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      for (let i = 0; i < total; i++) {
+        await setDoc(doc(adminDb, 'users', UID, 'logs', `EX${String(i).padStart(3, '0')}`), {
+          logDate: '2026-06-15',
+          counts: { cig: 1 },
+          origin: 'MANUAL_ENTRY',
+        });
+      }
+    });
+    const snap = await RegistryService.readCompleteExportSnapshot(UID);
+    expect(snap.logs.length).toBeGreaterThanOrEqual(total);
+    expect(new Set(snap.logs.map((l) => l.id)).size).toBe(snap.logs.length);
+  });
+
+  describe('fetchOlderLogs (deterministic pagination)', () => {
+    const seedLogs = async () => {
+      // 25 logs; the boundary date 2026-06-03 carries 10 entries so a live
+      // window of 15 cuts that group in half — the exact case where a
+      // date-only cursor re-enters the middle of the group.
+      const dates = ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05'];
+      let n = 0;
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const adminDb = context.firestore();
+        for (const date of dates) {
+          const per = date === '2026-06-03' ? 10 : 5;
+          for (let i = 0; i < per; i++) {
+            n++;
+            await setDoc(doc(adminDb, 'users', UID, 'logs', `L${String(n).padStart(3, '0')}`), {
+              logDate: date,
+              counts: { cig: 1 },
+              origin: 'MANUAL_ENTRY',
+            });
+          }
+        }
+      });
+    };
+
+    it('resumes exactly after the live window — no overlap, no gaps, forward progress', async () => {
+      await seed();
+      await seedLogs();
+      // Total log count (seed() may contribute its own logs — never assume).
+      const allSnap = await getDocs(collection(holder.db, 'users', UID, 'logs'));
+      const total = allSnap.size;
+      // Simulate the live subscription window: newest 15 logs. Explicit
+      // __name__ desc ordering matches fetchOlderLogs' tie-break so the
+      // window boundary and the page cursor use identical semantics.
+      const windowSnap = await getDocs(query(
+        collection(holder.db, 'users', UID, 'logs'),
+        orderBy('logDate', 'desc'),
+        orderBy('__name__', 'desc'),
+        limit(15)
+      ));
+      const windowIds = windowSnap.docs.map((d) => d.id);
+      expect(windowIds).toHaveLength(15);
+      const windowLast = windowSnap.docs[14];
+      // The boundary group must actually be split by the window.
+      expect(windowLast.data().logDate).toBe('2026-06-03');
+      expect(windowSnap.docs.filter((d) => d.data().logDate === '2026-06-03').length).toBeGreaterThan(0);
+      expect(windowSnap.docs.filter((d) => d.data().logDate === '2026-06-03').length).toBeLessThan(10);
+
+      const page1 = await RegistryService.fetchOlderLogs(UID, {
+        cursorLogId: windowLast.id,
+        cursorLogDate: windowLast.data().logDate,
+        pageSize: 8,
+      });
+      const page1Ids = page1.items.map((l) => l.id);
+      expect(page1.items).toHaveLength(8);
+      expect(page1Ids.some((id) => windowIds.includes(id))).toBe(false);
+      expect(page1.hasMore).toBe(true);
+      expect(page1.nextCursorDocId).toBe(page1Ids[page1Ids.length - 1]);
+
+      const page2 = await RegistryService.fetchOlderLogs(UID, {
+        cursorLogId: page1.nextCursorDocId,
+        cursorLogDate: page1.nextCursor,
+        pageSize: 8,
+      });
+      expect(page2.items).toHaveLength(total - 15 - 8); // whatever remains
+      expect(page2.hasMore).toBe(false);
+
+      const all = new Set([...windowIds, ...page1Ids, ...page2.items.map((l) => l.id)]);
+      expect(all.size).toBe(total); // complete union: no duplicates, no missing rows
+    });
+
+    it('survives a deleted cursor document via date fallback and reports exhaustion with no usable cursor', async () => {
+      await seed();
+      await seedLogs();
+      const windowSnap = await getDocs(query(
+        collection(holder.db, 'users', UID, 'logs'),
+        orderBy('logDate', 'desc'),
+        orderBy('__name__', 'desc'),
+        limit(15)
+      ));
+      const windowLast = windowSnap.docs[14];
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await deleteDoc(doc(context.firestore(), 'users', UID, 'logs', windowLast.id));
+      });
+
+      // Deleted doc + valid date fallback -> resolves a position, never the
+      // deleted doc itself.
+      const page = await RegistryService.fetchOlderLogs(UID, {
+        cursorLogId: windowLast.id,
+        cursorLogDate: '2026-06-03',
+        pageSize: 100,
+      });
+      expect(page.items.every((l) => l.id !== windowLast.id)).toBe(true);
+
+      // Deleted doc + NO fallback -> exhaustion, not a restart from the top.
+      const dead = await RegistryService.fetchOlderLogs(UID, { cursorLogId: 'ghost-id' });
+      expect(dead.items).toEqual([]);
+      expect(dead.hasMore).toBe(false);
+      expect(dead.nextCursorDocId).toBeNull();
+    });
   });
 
   it('full lifecycle: new day → first counter write → second write → rapid concurrent → End Day → restart', async () => {
@@ -632,5 +788,103 @@ describe('account wipe against the real rules', () => {
       }
     });
     expect(leftovers).toEqual([]);
+  });
+});
+
+describe('audit release blocker regressions', () => {
+  it('freezes inherited manual prices and baseline credit through config changes', async () => {
+    await seed();
+    await updateDoc(doc(holder.db, 'users', UID), { unitPrice: 0.8 });
+    await updateDoc(doc(holder.db, 'users', UID, 'configs', 'cig'), { pricePerUnit: null, baseline: 20 });
+    await RegistryService.createManualEntry(UID, '2026-07-01', { cig: 2 });
+    const [entry] = await logs();
+    expect(entry.trackerSnapshots.cig.unitPrice).toBe(0.8);
+    await updateDoc(doc(holder.db, 'users', UID), { unitPrice: 4 });
+    await updateDoc(doc(holder.db, 'users', UID, 'configs', 'cig'), { limit: 1, baseline: 1, pricePerUnit: 5 });
+    await RegistryService.updateHistoricalLog(UID, entry.id, { cig: 3 });
+    const [edited] = await logs();
+    expect(edited.aggregateCredit.wasted).toBeCloseTo(2.4);
+    expect(edited.aggregateCredit.saved).toBeCloseTo(5.6);
+    expect(edited.aggregateCredit.baselineSaved).toBeCloseTo(13.6);
+    expect((await profile()).lifetimeAggregates.baselineSaved).toBeCloseTo(13.6);
+  });
+
+  it('recovers a closed-target claim once across concurrent clients', async () => {
+    await seed();
+    const date = '2026-07-01';
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users', UID, 'days', date), {
+        date, counts: { cig: 2 }, trackerSnapshots: { cig: SmokingCalculator.buildTrackerSnapshot(cigConfig) },
+        status: 'closed', foldedIntoLifetime: true, aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 },
+      });
+      await updateDoc(doc(context.firestore(), 'users', UID), {
+        migratingLegacyCounts: { cig: 3 }, migratingLegacyDate: date,
+        lifetimeAggregates: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 },
+      });
+    });
+    await Promise.all([RegistryService.migrateLegacyActiveCounts(UID), RegistryService.migrateLegacyActiveCounts(UID)]);
+    expect((await dayDoc(date)).counts).toEqual({ cig: 2 });
+    const recovered = await logs();
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ origin: 'LEGACY_RECOVERY', economicStatus: 'UNKNOWN', counts: { cig: 3 } });
+    expect((await profile()).lifetimeAggregates).toEqual({ saved: 8, wasted: 2, smokingUnits: 5, baselineSaved: 0 });
+    await RegistryService.migrateLegacyActiveCounts(UID);
+    expect(await logs()).toHaveLength(1);
+    expect((await profile()).migratingLegacyCounts).toBeUndefined();
+  });
+
+  it('rejects old-client claim cleanup and day folding while the resumable fence is held', async () => {
+    await seed();
+    await updateDoc(doc(holder.db, 'users', UID), {
+      migratingLegacyCounts: { cig: 1 }, migratingLegacyDate: '2026-07-01',
+      migratingLegacyId: 'claim1', migratingLegacyVersion: 3, migratingLegacyUnitPrice: 0.5,
+    });
+    const { deleteField } = await import('firebase/firestore');
+    await expect(updateDoc(doc(holder.db, 'users', UID), {
+      migratingLegacyCounts: deleteField(), migratingLegacyDate: deleteField(),
+    })).rejects.toMatchObject({ code: 'permission-denied' });
+    await expect(setDoc(doc(holder.db, 'users', UID, 'days', '2026-07-01'), {
+      date: '2026-07-01', counts: { cig: 1 }, legacyMigrationApplied: true,
+    })).rejects.toMatchObject({ code: 'permission-denied' });
+    await RegistryService.migrateLegacyActiveCounts(UID);
+    expect((await dayDoc('2026-07-01')).counts).toEqual({ cig: 1 });
+    expect((await profile()).migratingLegacyVersion).toBeUndefined();
+  });
+
+  it('pages tied log dates without duplicates even after deleting the cursor', async () => {
+    await seed();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await Promise.all(Array.from({ length: 7 }, (_, i) => setDoc(doc(context.firestore(), 'users', UID, 'logs', `log${i}`), {
+        logDate: '2026-07-01', counts: { cig: 1 },
+      })));
+    });
+    const first = await RegistryService.fetchOlderLogs(UID, { pageSize: 3 });
+    await deleteDoc(doc(holder.db, 'users', UID, 'logs', first.nextCursorDocId));
+    const second = await RegistryService.fetchOlderLogs(UID, {
+      pageSize: 3, cursorLogDate: first.nextCursor, cursorLogId: first.nextCursorDocId,
+    });
+    const third = await RegistryService.fetchOlderLogs(UID, {
+      pageSize: 3, cursorLogDate: second.nextCursor, cursorLogId: second.nextCursorDocId,
+    });
+    expect(new Set([...first.items, ...second.items, ...third.items].map((l) => l.id)).size).toBe(7);
+    expect(third.items).toHaveLength(1);
+  });
+
+  it('exports dated history beyond the 400-day live window', async () => {
+    await seed();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const { writeBatch } = await import('firebase/firestore');
+      const db = context.firestore();
+      const batch = writeBatch(db);
+      for (let i = 0; i < 405; i++) {
+        const date = new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10);
+        batch.set(doc(db, 'users', UID, 'days', date), { date, counts: {}, status: 'closed' });
+      }
+      await batch.commit();
+    });
+    const exported = await RegistryService.readCompleteExportSnapshot(UID);
+    expect(exported.days).toHaveLength(405);
+    const page = await RegistryService.fetchOlderDays(UID, { cursorDate: exported.days[399].date });
+    expect(page.items).toHaveLength(5);
   });
 });

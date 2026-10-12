@@ -11,6 +11,7 @@ import com.tabakpp.app.domain.FinancialReadModel
 import com.tabakpp.app.domain.FinancialSource
 import com.tabakpp.app.domain.FinancialTotals
 import com.tabakpp.app.domain.SmokingCalculator
+import com.tabakpp.app.domain.HistoryCursor
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -19,13 +20,20 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
+import kotlinx.datetime.TimeZone
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RegistryViewModel(
     private val authRepository: AuthRepository,
     private val registryRepository: RegistryRepository,
     private val localSettings: LocalSettings,
-    private val networkObserver: NetworkObserver
+    private val networkObserver: NetworkObserver,
+    // Test seams (production defaults preserve exact behavior): the tracking
+    // date must be derived from the clock AT MUTATION TIME (see
+    // [currentTrackingDate]), so tests inject a fixed clock/zone to prove
+    // midnight, custom-boundary, and DST rollovers deterministically.
+    private val clock: Clock = Clock.System,
+    private val timeZoneProvider: () -> TimeZone = { TimeZone.currentSystemDefault() }
 ) : ViewModel() {
 
     val isOnline = networkObserver.isOnline
@@ -74,14 +82,14 @@ class RegistryViewModel(
 
     val logs: StateFlow<List<LogEntry>> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(emptyList())
-        else registryRepository.subscribeToLogs(uid)
+        else registryRepository.subscribeToLogs(uid).onStart { emit(emptyList()) }
     }.catch { e -> setError(e, "Could not sync your history. Check your connection and try again."); emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Bounded window of `days/{date}` documents (item 1) — chart/streak use. */
     val dayDocs: StateFlow<List<DayDocument>> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(emptyList())
-        else registryRepository.subscribeToDays(uid)
+        else registryRepository.subscribeToDays(uid).onStart { emit(emptyList()) }
     }.catch { e -> setError(e, "Could not sync your history. Check your connection and try again."); emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -98,6 +106,53 @@ class RegistryViewModel(
     val historyIsTruncated: StateFlow<Boolean> = logs
         .map { it.size.toLong() >= LIVE_LOG_QUERY_LIMIT }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    private val olderLogs = MutableStateFlow<List<LogEntry>>(emptyList())
+    private val olderDays = MutableStateFlow<List<DayDocument>>(emptyList())
+    val historyLogs = combine(olderLogs, logs) { older, live -> (older + live).associateBy { it.id }.values.sortedWith(
+        compareByDescending<LogEntry> { it.logDate }.thenByDescending { it.id }) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val historyDays = combine(olderDays, dayDocs) { older, live -> (older + live).associateBy { it.date }.values.sortedByDescending { it.date } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private var logCursor: HistoryCursor? = null
+    private var dayCursor: HistoryCursor? = null
+    private var logsExhausted = false
+    private var daysExhausted = false
+    private var historyGeneration = 0
+    private val _loadingOlderHistory = MutableStateFlow(false)
+    val loadingOlderHistory = _loadingOlderHistory.asStateFlow()
+    private val _hasOlderHistory = MutableStateFlow(true)
+    val hasOlderHistory = _hasOlderHistory.asStateFlow()
+
+    fun loadOlderHistory() {
+        val uid = authUser.value?.uid ?: return
+        if (_loadingOlderHistory.value || !_hasOlderHistory.value) return
+        _loadingOlderHistory.value = true
+        val generation = historyGeneration
+        viewModelScope.launch {
+            try {
+                if (!logsExhausted) {
+                    val page = registryRepository.fetchOlderLogs(uid, logCursor ?: logs.value.lastOrNull()?.let { HistoryCursor(it.logDate, it.id) })
+                    if (generation != historyGeneration || uid != authUser.value?.uid) return@launch
+                    olderLogs.value = (olderLogs.value + page.items).distinctBy { it.id }
+                    logCursor = page.cursor
+                    logsExhausted = !page.hasMore
+                }
+                if (!daysExhausted) {
+                    val page = registryRepository.fetchOlderDays(uid, dayCursor ?: dayDocs.value.lastOrNull()?.let { HistoryCursor(it.date, it.date) })
+                    if (generation != historyGeneration || uid != authUser.value?.uid) return@launch
+                    olderDays.value = (olderDays.value + page.items).distinctBy { it.date }
+                    dayCursor = page.cursor
+                    daysExhausted = !page.hasMore
+                }
+                _hasOlderHistory.value = !(logsExhausted && daysExhausted)
+            } catch (e: Exception) {
+                if (generation == historyGeneration) setError(e, "Could not load older history. Try again.")
+            } finally {
+                if (generation == historyGeneration) _loadingOlderHistory.value = false
+            }
+        }
+    }
 
     private val _loading = MutableStateFlow(true)
     val loading = _loading.asStateFlow()
@@ -143,7 +198,7 @@ class RegistryViewModel(
     private val counterWriteMutex = Mutex()
 
     private fun nextOpId(): String =
-        "${Clock.System.now().toEpochMilliseconds()}_${++opSequence}"
+        "${clock.now().toEpochMilliseconds()}_${++opSequence}"
 
     /**
      * Resolve the tracking date AT MUTATION TIME (AUD-011). `_trackingDay` is
@@ -222,8 +277,45 @@ class RegistryViewModel(
     private val profileWriteMutex = Mutex()
     private var lastSubmittedProfile: UserProfile? = null
 
-    private val _trackingDay = MutableStateFlow(SmokingCalculator.getTrackingDate(Clock.System.now()))
+    private val _trackingDay = MutableStateFlow(currentTrackingDate())
     val trackingDay = _trackingDay.asStateFlow()
+
+    /**
+     * The tracking date derived from the clock RIGHT NOW with the freshest
+     * known day-start hour. This — not the cached [_trackingDay] — is what
+     * decides which `days/{date}` document a mutation targets. The cached
+     * state is only a UI reflection (live-listener key, metrics "today").
+     */
+    private fun currentTrackingDate(): String =
+        SmokingCalculator.getTrackingDate(
+            now = clock.now(),
+            dayStartHour = userProfile.value?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR,
+            timeZone = timeZoneProvider()
+        )
+
+    /**
+     * Derive the authoritative date for a mutation and, if the cached UI day
+     * has fallen behind (midnight/custom-boundary/DST rollover while the app
+     * is open or resumed from a throttled background), advance it first.
+     *
+     * Advancing [_trackingDay] re-keys the live `days/{date}` listener and
+     * metrics, so the UI transitions to the new day in the same frame the tap
+     * lands. The optimistic ledger is also reset: ops dated the previous day
+     * belong to that day's document (in-flight writes still settle there via
+     * their own transaction) and must not overlay — nor let their targetCounts
+     * (computed from the old day's server counts) poison acknowledgement of
+     * new-day ops.
+     */
+    private fun trackingDateForMutation(): String {
+        val fresh = currentTrackingDate()
+        if (fresh != _trackingDay.value) {
+            _trackingDay.value = fresh
+            latestServerCounts = emptyMap()
+            pendingOps.removeAll { it.trackingDate != fresh }
+            publishCounterOverlay()
+        }
+        return fresh
+    }
 
     // Local accent color for fast startup
     private val _localAccent = MutableStateFlow(
@@ -232,17 +324,62 @@ class RegistryViewModel(
     val localAccent = _localAccent.asStateFlow()
 
     init {
-        // Refresh tracking day periodically
+        viewModelScope.launch {
+            userUid.distinctUntilChanged().collect {
+                historyGeneration++
+                olderLogs.value = emptyList(); olderDays.value = emptyList()
+                logCursor = null; dayCursor = null
+                logsExhausted = false; daysExhausted = false
+                _hasOlderHistory.value = true; _loadingOlderHistory.value = false
+            }
+        }
+        viewModelScope.launch {
+            userUid.distinctUntilChanged().collectLatest {
+                var previous = emptyList<DayDocument>()
+                var first = true
+                dayDocs.collect { head ->
+                    if (first) { first = false; return@collect }
+                    val oldest = head.lastOrNull()?.date
+                    if (head.size.toLong() >= LIVE_DAYS_QUERY_LIMIT && oldest != null) {
+                        val evicted = previous.filter { it.date < oldest }
+                        if (evicted.isNotEmpty()) olderDays.value = (evicted + olderDays.value).associateBy { it.date }.values.toList()
+                    }
+                    previous = head
+                }
+            }
+        }
+        viewModelScope.launch {
+            userUid.distinctUntilChanged().collectLatest {
+                var previous = emptyList<LogEntry>()
+                var first = true
+                logs.collect { head ->
+                    if (first) { first = false; return@collect }
+                    val oldest = head.lastOrNull()
+                    if (head.size.toLong() >= LIVE_LOG_QUERY_LIMIT && oldest != null) {
+                        val evicted = previous.filter { it.logDate < oldest.logDate || (it.logDate == oldest.logDate && it.id < oldest.id) }
+                        if (evicted.isNotEmpty()) olderLogs.value = (evicted + olderLogs.value).associateBy { it.id }.values.toList()
+                    }
+                    previous = head
+                }
+            }
+        }
+        // Refresh tracking day periodically (UI refresher only — mutations
+        // derive their date independently via [trackingDateForMutation], so a
+        // throttled poll can never mis-date a count).
         viewModelScope.launch {
             while (true) {
-                val profile = userProfile.value
-                val dayStartHour = profile?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR
-                _trackingDay.value = SmokingCalculator.getTrackingDate(
-                    now = Clock.System.now(),
-                    dayStartHour = dayStartHour
-                )
+                _trackingDay.value = currentTrackingDate()
                 delay(30000) // 30 seconds
             }
+        }
+
+        // Recompute the tracking day IMMEDIATELY whenever the profile changes —
+        // the 30s poll above can leave the default dayStartHour applied for up
+        // to half a minute after sign-in/profile load. Mutations additionally
+        // re-derive the date at tap time (see [trackingDateForMutation]); this
+        // collector keeps the UI in sync without any user action.
+        viewModelScope.launch {
+            userProfile.collect { _trackingDay.value = currentTrackingDate() }
         }
 
         // On each auth session: ensure profile exists, then clear loading (with timeout).
@@ -552,8 +689,18 @@ class RegistryViewModel(
             setError(Exception("offline"), "Connect to the internet to update this count.")
             return
         }
-        // Resolve at mutation time so a boundary tap is never misfiled (AUD-011).
-        val trackingDate = resolveTrackingDate()
+        // Block writes until the profile sync resolves (or times out): before
+        // the user's dayStartHour is known, a tap near a custom day boundary
+        // would be dated with the default hour and land on the wrong
+        // days/{date} document. Once loading clears (profile loaded OR 12s
+        // timeout), taps proceed with the best-known hour.
+        if (_loading.value && userProfile.value == null) {
+            _error.value = "Still syncing your profile — try again in a moment."
+            return
+        }
+        // The date is derived from the clock at THIS moment, never from the
+        // (possibly stale) cached tracking day.
+        val trackingDate = trackingDateForMutation()
         val price = userProfile.value?.unitPrice ?: 0.5
         val currentServer = latestServerCounts[trackerId] ?: 0.0
 
@@ -606,8 +753,11 @@ class RegistryViewModel(
             setError(Exception("offline"), "Connect to the internet to update this count.")
             return
         }
-        // Resolve at mutation time so a boundary tap is never misfiled (AUD-011).
-        val trackingDate = resolveTrackingDate()
+        if (_loading.value && userProfile.value == null) {
+            _error.value = "Still syncing your profile — try again in a moment."
+            return
+        }
+        val trackingDate = trackingDateForMutation()
         val price = userProfile.value?.unitPrice ?: 0.5
         val currentServer = latestServerCounts[trackerId] ?: 0.0
 
@@ -656,12 +806,21 @@ class RegistryViewModel(
      */
     fun endDay() {
         val uid = authUser.value?.uid ?: return
-        val td = resolveTrackingDate()
         if (!networkObserver.isOnline.value) {
             setError(Exception("offline"), "Connect to the internet to end the tracking day.")
             viewModelScope.launch { _endDayResult.emit(false) }
             return
         }
+        // Same protection as increment/decrement: closing with an unknown
+        // dayStartHour would archive the wrong day.
+        if (_loading.value && userProfile.value == null) {
+            _error.value = "Still syncing your profile — try again in a moment."
+            viewModelScope.launch { _endDayResult.emit(false) }
+            return
+        }
+        // Fresh derivation: closing must archive the day the clock says is
+        // current, even if the cached tracking day has not caught up yet.
+        val td = trackingDateForMutation()
         viewModelScope.launch {
             _endingDay.value = true
             try {
@@ -698,7 +857,8 @@ class RegistryViewModel(
         // Backfill cannot run forward. Firestore rules only check the YYYY-MM-DD
         // pattern, so this is the last enforcement point before the write (the
         // web guards in RegistryService.createManualEntry for the same reason).
-        if (!SmokingCalculator.isBackfillDateAllowed(date, trackingDay.value)) {
+        // Compare against the freshly derived day, not the cached one.
+        if (!SmokingCalculator.isBackfillDateAllowed(date, trackingDateForMutation())) {
             _error.value = "Pick today or an earlier date."
             return
         }
@@ -733,6 +893,7 @@ class RegistryViewModel(
                 } else {
                     registryRepository.deleteLog(uid, log.id)
                 }
+                if (authUser.value?.uid == uid) olderLogs.value = olderLogs.value.filterNot { it.id == log.id }
                 onSuccess()
             } catch (e: Exception) {
                 setError(e, "Could not delete the history entry. Try again.")
@@ -753,6 +914,7 @@ class RegistryViewModel(
                 } else {
                     registryRepository.restoreLog(uid, log)
                 }
+                if (authUser.value?.uid == uid) olderLogs.value = (olderLogs.value + log).distinctBy { it.id }
             } catch (e: Exception) {
                 setError(e, "Could not restore the history entry. Try again.")
             }
@@ -811,7 +973,9 @@ class RegistryViewModel(
             setError(Exception("offline"), "Connect to the internet to delete this tracker.")
             return
         }
-        val trackingDate = trackingDay.value
+        // Fresh derivation: hasOpenSession must evaluate the day the clock
+        // says is current, not a possibly stale cached tracking day.
+        val trackingDate = trackingDateForMutation()
         viewModelScope.launch {
             try {
                 if (optionBActive(uid)) {
@@ -875,6 +1039,12 @@ class RegistryViewModel(
                 } else {
                     registryRepository.updateHistoricalLog(uid, logId, counts)
                 }
+                if (olderLogs.value.any { it.id == logId }) {
+                    val updated = registryRepository.getHistoricalLog(uid, logId)
+                    if (authUser.value?.uid == uid && updated != null) {
+                        olderLogs.value = olderLogs.value.map { if (it.id == logId) updated else it }
+                    }
+                }
             } catch (e: Exception) {
                 setError(e, "Could not update the history entry. Try again.")
             }
@@ -896,6 +1066,12 @@ class RegistryViewModel(
                     ))
                 } else {
                     registryRepository.updateHistoricalDay(uid, date, counts)
+                }
+                if (olderDays.value.any { it.date == date }) {
+                    val updated = registryRepository.getHistoricalDay(uid, date)
+                    if (authUser.value?.uid == uid && updated != null) {
+                        olderDays.value = olderDays.value.map { if (it.date == date) updated else it }
+                    }
                 }
             } catch (e: Exception) {
                 setError(e, "Could not update the history entry. Try again.")
