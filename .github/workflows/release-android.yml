@@ -278,6 +278,9 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: v${{ needs.require-ci.outputs.release_version }}
+          # Release notes files are versioned WITH the v prefix (see the
+          # existence check above) — a missing v here made the release step
+          # look for the wrong file and publish with an empty body.
           body_path: .github/release-notes/v${{ needs.require-ci.outputs.release_version }}.md
           files: |
             dist/tabakpp-${{ needs.require-ci.outputs.release_version }}.apk

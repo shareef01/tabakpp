@@ -261,6 +261,22 @@
       "input": { "currentAvg": 0, "previousAvg": 10 },
       "expected": { "current": 0.0, "previous": 10.0, "delta": -10.0, "percentChange": -100.0, "direction": "to_zero", "text": "100% fewer units" } },
 
+    { "case": "trend_down_non_integer_percent_rounds_half_up", "op": "trendComparison",
+      "input": { "currentAvg": 1, "previousAvg": 3 },
+      "expected": { "current": 1.0, "previous": 3.0, "delta": -2.0, "percentChange": -66.66666666666666, "direction": "down", "text": "67% fewer units" } },
+
+    { "case": "trend_up_fractional_inputs_exact_half_rounds_up", "op": "trendComparison",
+      "input": { "currentAvg": 112.5, "previousAvg": 100 },
+      "expected": { "current": 112.5, "previous": 100.0, "delta": 12.5, "percentChange": 12.5, "direction": "up", "text": "13% more units" } },
+
+    { "case": "trend_down_exact_half_rounds_away_from_zero", "op": "trendComparison",
+      "input": { "currentAvg": 1, "previousAvg": 8 },
+      "expected": { "current": 1.0, "previous": 8.0, "delta": -7.0, "percentChange": -87.5, "direction": "down", "text": "88% fewer units" } },
+
+    { "case": "trend_down_repeating_decimal_below_half_keeps_floor", "op": "trendComparison",
+      "input": { "currentAvg": 2, "previousAvg": 3 },
+      "expected": { "current": 2.0, "previous": 3.0, "delta": -1.0, "percentChange": -33.33333333333333, "direction": "down", "text": "33% fewer units" } },
+
     { "case": "monthly_additive_merge_same_tracker_same_date", "op": "monthlyInsights",
       "input": {
         "logs": [{ "id": "l1", "logDate": "2026-08-10", "counts": { "cig": 4 }, "origin": "MANUAL_ENTRY" }],

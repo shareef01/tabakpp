@@ -118,15 +118,19 @@ const AppContent = () => {
 
   // 1. BUILD ID — force a one-shot reload when a new deploy is detected.
   // Service worker autoUpdate (virtual:pwa-register) handles subsequent SW swaps.
+  // localStorage can throw (Safari "block all cookies", embedded webviews) —
+  // an unguarded throw here would crash the whole app behind the error
+  // boundary, whose own Reset path then throws again before reloading.
   useEffect(() => {
-    const localBuildId = localStorage.getItem('tabak_build_id');
     const serverBuildId = String(typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'initial');
+    let localBuildId = null;
+    try { localBuildId = localStorage.getItem('tabak_build_id'); } catch { /* storage blocked */ }
 
     if (localBuildId && localBuildId !== serverBuildId && localBuildId !== 'initial') {
-      localStorage.setItem('tabak_build_id', serverBuildId);
+      try { localStorage.setItem('tabak_build_id', serverBuildId); } catch { /* storage blocked */ }
       window.location.reload();
     } else {
-      localStorage.setItem('tabak_build_id', serverBuildId);
+      try { localStorage.setItem('tabak_build_id', serverBuildId); } catch { /* storage blocked */ }
     }
   }, []);
 
@@ -184,15 +188,28 @@ const AppContent = () => {
 
   // Tracking day in LOCAL time with the user's day-start hour (Android
   // parity) — recomputed live so a tab left open rolls over correctly.
+  // Mutations additionally re-derive the date at tap time (useRegistry
+  // resolveTrackingDateForMutation) — this state is the UI reflection.
   const [today, setToday] = useState(() => SmokingCalculator.getTrackingDate());
   useEffect(() => {
     const tick = () => setToday(SmokingCalculator.getTrackingDate(new Date(), settings.dayStartHour));
     tick();
     const id = setInterval(tick, 30000);
-    return () => clearInterval(id);
+    // Background tabs throttle setInterval (Chrome intensive throttling: one
+    // run per minute or worse), so a tab resumed across a day boundary would
+    // keep the stale date until the next throttled tick. Recompute the moment
+    // the tab becomes visible again.
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', tick);
+    };
   }, [settings.dayStartHour]);
 
-  const registry = useRegistry(user, today, settings.unitPrice);
+  const registry = useRegistry(user, today, settings.unitPrice, setToday);
 
   const {
     configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings,
