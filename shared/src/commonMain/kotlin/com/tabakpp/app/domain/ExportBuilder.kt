@@ -103,9 +103,9 @@ object ExportBuilder {
                     trackerId = trackerId,
                     trackerName = snap?.name ?: config?.name,
                     count = countVal,
-                    target = snap?.target ?: config?.limit,
-                    baseline = snap?.baseline ?: config?.baseline,
-                    unitPrice = snap?.unitPrice ?: config?.pricePerUnit,
+                    target = snap?.target,
+                    baseline = snap?.baseline,
+                    unitPrice = snap?.unitPrice,
                     spent = spent,
                     saved = saved,
                     status = day.status
@@ -116,22 +116,23 @@ object ExportBuilder {
         // Logs: manual entries and legacy archives
         for (log in sortLogsForExport(logs)) {
             val isArchive = log.origin == "DAY_RESET" || log.id.endsWith("_DAY")
-            val source = if (isArchive) "legacy_day_archive" else "manual_entry"
+            val source = if (log.origin == "LEGACY_RECOVERY") "legacy_recovery_unknown_money" else if (isArchive) "legacy_day_archive" else "manual_entry"
             for ((trackerId, count) in log.counts) {
                 val config = configByName[trackerId]
                 val countVal = count
-                // Logs do not carry stamped economics — null where unavailable (spec item 9)
+                val snap = log.trackerSnapshots[trackerId]
+                val (spent, saved) = if (log.economicStatus == "UNKNOWN") Pair(null, null) else computeDayEconomics(countVal, snap, config, defaultUnitPrice)
                 rows.add(CsvActivityRow(
                     date = log.logDate,
                     source = source,
                     trackerId = trackerId,
-                    trackerName = config?.name,
+                    trackerName = snap?.name ?: config?.name,
                     count = countVal,
-                    target = null,
-                    baseline = null,
-                    unitPrice = null,
-                    spent = null,
-                    saved = null,
+                    target = snap?.target,
+                    baseline = snap?.baseline,
+                    unitPrice = if (log.economicStatus == "UNKNOWN") null else snap?.unitPrice,
+                    spent = spent,
+                    saved = saved,
                     status = null
                 ))
             }
@@ -155,7 +156,7 @@ object ExportBuilder {
             // No stamped snapshot — cannot compute historical economics without risk
             return Pair(null, null)
         }
-        val price = snap.unitPrice ?: defaultUnitPrice
+        val price = snap.unitPrice ?: return Pair(null, null)
         val target = snap.target
         val actual = maxOf(0.0, count)
         val spent = if (snap.isFinanciallyTracked) actual * price else null
@@ -202,8 +203,7 @@ object ExportBuilder {
         // Numeric fields pass through unchanged.
         val neutralized = when {
             value is String -> neutralizeFormula(value)
-            value != null -> s  // numeric/bool — no neutralization
-            else -> ""
+            else -> s  // numeric/bool — no neutralization
         }
         // Standard CSV escaping (spec item 11)
         if (neutralized.contains(',') || neutralized.contains('"') ||

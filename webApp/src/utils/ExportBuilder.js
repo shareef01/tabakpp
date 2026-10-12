@@ -32,7 +32,8 @@ export function buildJson(snapshot, generatedAt = null) {
       if (c.type !== undefined) obj.type = c.type;
       if (c.pricePerUnit !== undefined) obj.pricePerUnit = c.pricePerUnit;
       if (c.isFinanciallyTracked !== undefined) obj.isFinanciallyTracked = c.isFinanciallyTracked;
-      if (c.baseline !== undefined && c.baseline !== null) obj.baseline = c.baseline;
+      if (c.isPrimaryTracked !== undefined) obj.isPrimaryTracked = c.isPrimaryTracked;
+      if (c.baseline !== undefined) obj.baseline = c.baseline;
       if (c.createdAt !== undefined) obj.createdAt = c.createdAt;
       if (c.updatedAt !== undefined) obj.updatedAt = c.updatedAt;
       return obj;
@@ -51,6 +52,9 @@ export function buildJson(snapshot, generatedAt = null) {
       }
       if (d.aggregateCredit !== undefined) obj.aggregateCredit = d.aggregateCredit;
       if (d.status !== undefined) obj.status = d.status;
+      if (d.foldedIntoLifetime !== undefined) obj.foldedIntoLifetime = d.foldedIntoLifetime;
+      if (d.legacyMigrationApplied !== undefined) obj.legacyMigrationApplied = d.legacyMigrationApplied;
+      if (d.updatedTrackerId !== undefined) obj.updatedTrackerId = d.updatedTrackerId;
       if (d.createdAt !== undefined) obj.createdAt = d.createdAt;
       if (d.updatedAt !== undefined) obj.updatedAt = d.updatedAt;
       if (d.closedAt !== undefined) obj.closedAt = d.closedAt;
@@ -73,6 +77,8 @@ export function buildJson(snapshot, generatedAt = null) {
       if (l.isManual !== undefined) obj.isManual = l.isManual;
       if (l.origin !== undefined) obj.origin = l.origin;
       if (l.aggregateCredit !== undefined) obj.aggregateCredit = l.aggregateCredit;
+      if (l.trackerSnapshots !== undefined) obj.trackerSnapshots = l.trackerSnapshots;
+      if (l.economicStatus !== undefined) obj.economicStatus = l.economicStatus;
       if (l.finalizedAt !== undefined) obj.finalizedAt = l.finalizedAt;
       if (l.clientTimestamp !== undefined) obj.clientTimestamp = l.clientTimestamp;
       return obj;
@@ -84,11 +90,11 @@ export function buildJson(snapshot, generatedAt = null) {
     application: { name: 'Tabakpp' },
     profile: snapshot.profile ? {
       name: snapshot.profile.name || '',
-      unitPrice: snapshot.profile.unitPrice || 0.5,
+      unitPrice: snapshot.profile.unitPrice ?? 0.5,
       unitsPerPack: snapshot.profile.unitsPerPack || 20,
       pouchPrice: snapshot.profile.pouchPrice || 0.0,
       estimatedYield: snapshot.profile.estimatedYield || 0,
-      dayStartHour: snapshot.profile.dayStartHour || 6,
+      dayStartHour: snapshot.profile.dayStartHour ?? 6,
       accent: snapshot.profile.accent || '#FF5F5F',
       widgetSize: snapshot.profile.widgetSize || 'MEDIUM',
       purchaseType: snapshot.profile.purchaseType || 'PACK',
@@ -99,6 +105,9 @@ export function buildJson(snapshot, generatedAt = null) {
       schemaVersion: snapshot.profile.schemaVersion || 0,
       migratingLegacyCounts: snapshot.profile.migratingLegacyCounts || {},
       migratingLegacyDate: snapshot.profile.migratingLegacyDate || null,
+      migratingLegacyId: snapshot.profile.migratingLegacyId ?? null,
+      migratingLegacyVersion: snapshot.profile.migratingLegacyVersion ?? null,
+      migratingLegacyUnitPrice: snapshot.profile.migratingLegacyUnitPrice ?? null,
       createdAt: snapshot.profile.createdAt || null,
       updatedAt: snapshot.profile.updatedAt || null,
     } : null,
@@ -121,10 +130,10 @@ export function buildJson(snapshot, generatedAt = null) {
  * stamped snapshots when available; otherwise numeric fields are blank (null).
  *
  * @param {object} snapshot - CompleteExportSnapshot
- * @param {number} defaultUnitPrice - fallback price for missing config prices
+ * @param {number} _defaultUnitPrice - retained for call compatibility; historical prices never fall back
  * @returns {string} CSV string
  */
-export function buildCsv(snapshot, defaultUnitPrice = 0.5) {
+export function buildCsv(snapshot, _defaultUnitPrice = 0.5) {
   const configs = snapshot.configs || [];
   const configById = {};
   configs.forEach((c) => {
@@ -144,16 +153,16 @@ export function buildCsv(snapshot, defaultUnitPrice = 0.5) {
       const snap = snapshots[trackerId];
       const config = configById[trackerId];
       const countVal = count;
-      const econ = computeDayEconomics(countVal, snap, config, defaultUnitPrice);
+      const econ = computeDayEconomics(countVal, snap);
       rows.push({
         date: day.date,
         source: 'day',
         trackerId: trackerId,
         trackerName: (snap && snap.name) || (config && config.name) || null,
         count: countVal,
-        target: (snap && snap.target) || (config && config.limit) || null,
-        baseline: (snap && snap.baseline) || (config && config.baseline) || null,
-        unitPrice: (snap && snap.unitPrice) || (config && config.pricePerUnit) || null,
+        target: snap?.target ?? null,
+        baseline: snap?.baseline ?? null,
+        unitPrice: snap?.unitPrice ?? null,
         spent: econ.spent,
         saved: econ.saved,
         status: day.status || null,
@@ -171,23 +180,24 @@ export function buildCsv(snapshot, defaultUnitPrice = 0.5) {
   for (const log of sortedLogs) {
     const isArchive =
       log.origin === 'DAY_RESET' || (log.id || '').endsWith('_DAY');
-    const source = isArchive ? 'legacy_day_archive' : 'manual_entry';
+    const source = log.origin === 'LEGACY_RECOVERY' ? 'legacy_recovery_unknown_money' : isArchive ? 'legacy_day_archive' : 'manual_entry';
     const counts = log.counts || {};
     for (const [trackerId, count] of Object.entries(counts)) {
       const config = configById[trackerId];
       const countVal = count;
-      // Logs do not carry stamped economics — null where unavailable (spec item 9)
+      const snap = log.trackerSnapshots?.[trackerId];
+      const econ = log.economicStatus === 'UNKNOWN' ? { spent: null, saved: null } : computeDayEconomics(countVal, snap);
       rows.push({
         date: log.logDate,
         source: source,
         trackerId: trackerId,
-        trackerName: config ? config.name : null,
+        trackerName: snap?.name ?? config?.name ?? null,
         count: countVal,
-        target: null,
-        baseline: null,
-        unitPrice: null,
-        spent: null,
-        saved: null,
+        target: snap?.target ?? null,
+        baseline: snap?.baseline ?? null,
+        unitPrice: log.economicStatus === 'UNKNOWN' ? null : snap?.unitPrice ?? null,
+        spent: econ.spent,
+        saved: econ.saved,
         status: null,
       });
     }
@@ -234,15 +244,12 @@ export function buildCsv(snapshot, defaultUnitPrice = 0.5) {
  * historical economics are unavailable (spec item 9: do not use current
  * config to fill historical values).
  */
-function computeDayEconomics(count, snap, config, defaultUnitPrice) {
-  if (!snap) {
+function computeDayEconomics(count, snap) {
+  if (!snap || snap.unitPrice == null) {
     // No stamped snapshot — cannot compute historical economics without risk
     return { spent: null, saved: null };
   }
-  const price =
-    snap.unitPrice != null
-      ? snap.unitPrice
-      : defaultUnitPrice;
+  const price = snap.unitPrice;
   const target = snap.target;
   const actual = Math.max(0, count || 0);
   const isFinanciallyTracked = snap.isFinanciallyTracked !== undefined ? snap.isFinanciallyTracked : true;

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { TrendingUp, TrendingDown, Minus, Wallet, Edit2, Trash2, Plus, PiggyBank, HeartPulse, Info } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
@@ -105,6 +105,7 @@ const VelocityTooltip = ({ active, payload }) => {
 };
 
 const originMeta = (origin) => {
+  if (origin === 'LEGACY_RECOVERY') return { label: 'Recovered · money unknown', tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
   if (origin === 'DAY_RESET') return { label: 'Archived', tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
   if (origin === 'MANUAL_ENTRY') return { label: 'Manual', tone: 'text-accent bg-accent/10 ring-accent/20' };
   if (origin === 'DAY_RECORD') return { label: 'Tracked', tone: 'text-neutral-400 bg-white/[0.04] ring-white/[0.06]' };
@@ -148,12 +149,14 @@ const dayRecordAsLogLike = (day) => ({
   logDate: day.date,
   counts: day.counts || {},
   origin: 'DAY_RECORD',
+  trackerSnapshots: day.trackerSnapshots || {},
+  aggregateCredit: day.aggregateCredit,
   __dayDoc: true,
 });
 
 export const HistoryScreen = React.memo(({
   logs, dayDocs = [], configs = [], m, onEdit, onAddEntry, userId, today, unitPrice = 0.5,
-  onDeleteLog, onRestoreLog, historyIsTruncated = false
+  onDeleteLog, onRestoreLog, historyIsTruncated = false, historyUpdate = null
 }) => {
   const [undo, setUndo] = useState(null); // { log, key } after successful purge
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -161,12 +164,44 @@ export const HistoryScreen = React.memo(({
   const [actionError, setActionError] = useState(null);
   const [velocityDays, setVelocityDays] = useState(7);
   const [olderLogs, setOlderLogs] = useState([]);
+  const [olderDays, setOlderDays] = useState([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [olderCursor, setOlderCursor] = useState(null);
-  // Deterministic document-snapshot cursor (M-02): a date-only cursor re-enters
-  // the middle of a group of logs sharing one logDate and can duplicate rows.
-  const [olderCursorDocId, setOlderCursorDocId] = useState(null);
+  const [olderCursor, setOlderCursor] = useState(null); // {date, id} — exact document cursor
   const [olderExhausted, setOlderExhausted] = useState(false);
+  const [olderDayCursor, setOlderDayCursor] = useState(null);
+  const [daysExhausted, setDaysExhausted] = useState(false);
+  const activeUser = useRef(userId);
+  const previousHead = useRef({ uid: userId, days: [], logs: [] });
+  activeUser.current = userId;
+  useEffect(() => {
+    setOlderLogs([]); setOlderDays([]); setOlderCursor(null); setOlderDayCursor(null);
+    setOlderExhausted(false); setDaysExhausted(false); setLoadingOlder(false);
+  }, [userId]);
+  useEffect(() => {
+    const previous = previousHead.current;
+    if (previous.uid === userId) {
+      const oldestDay = dayDocs.at(-1)?.date;
+      const oldestLog = logs?.at(-1);
+      if (dayDocs.length >= 400 && oldestDay) {
+        const evicted = previous.days.filter((d) => d.date < oldestDay);
+        if (evicted.length) setOlderDays((prev) => [...new Map([...evicted, ...prev].map((d) => [d.date, d])).values()]);
+      }
+      if (logs?.length >= 1200 && oldestLog) {
+        const evicted = previous.logs.filter((l) => l.logDate < oldestLog.logDate
+          || (l.logDate === oldestLog.logDate && l.id < oldestLog.id));
+        if (evicted.length) setOlderLogs((prev) => [...new Map([...evicted, ...prev].map((l) => [l.id, l])).values()]);
+      }
+    }
+    previousHead.current = { uid: userId, days: dayDocs, logs: logs || [] };
+  }, [userId, dayDocs, logs]);
+  useEffect(() => {
+    if (historyUpdate?.uid !== userId || !historyUpdate.record) return;
+    const record = historyUpdate.record;
+    if (historyUpdate.kind === 'day') setOlderDays((prev) => [...new Map([...prev, record].map((d) => [d.date, d])).values()]);
+    else setOlderLogs((prev) => [...new Map([...prev, record].map((l) => [l.id, l])).values()]);
+  }, [historyUpdate, userId]);
+  const completeDays = useMemo(() => [...new Map([...olderDays, ...dayDocs].map((d) => [d.date, d])).values()], [olderDays, dayDocs]);
+  const completeLogs = useMemo(() => [...new Map([...olderLogs, ...(logs ?? [])].map((l) => [l.id, l])).values()], [olderLogs, logs]);
 
   const velocityPeriod = VELOCITY_PERIODS.find((p) => p.days === velocityDays) || VELOCITY_PERIODS[0];
   const hasAnyBaseline = (configs || []).some((c) => c.baseline != null);
@@ -219,7 +254,7 @@ export const HistoryScreen = React.memo(({
   }, [undo, userId, unitPrice, onRestoreLog]);
 
   const handleLoadOlder = useCallback(async () => {
-    if (!userId || loadingOlder || olderExhausted) return;
+    if (!userId || loadingOlder || (olderExhausted && daysExhausted)) return;
     setLoadingOlder(true);
     setActionError(null);
     try {
@@ -227,44 +262,55 @@ export const HistoryScreen = React.memo(({
       // window (orderBy logDate desc, limit 1200) ends mid-group when the
       // boundary date holds many logs, so the first page must resume from the
       // live window's LAST document id — a date-only cursor re-enters the
-      // middle of that group. The date cursor is passed as a fallback for the
-      // case where the cursor document has since been deleted.
+      // middle of that group. `fetchOlderLogs` falls back to the date cursor
+      // when the cursor document has since been deleted.
       const liveLast = (logs && logs.length) ? logs[logs.length - 1] : null;
-      const cursorDocId = olderCursorDocId || liveLast?.id || undefined;
-      const cursorDate = olderCursor || liveLast?.logDate || undefined;
-      const { items, hasMore, nextCursor, nextCursorDocId } = await RegistryService.fetchOlderLogs(userId, {
-        cursorLogId: cursorDocId,
-        cursorLogDate: cursorDate,
-      });
+      const [logPage, dayPage] = await Promise.all([
+        olderExhausted ? null : RegistryService.fetchOlderLogs(userId, {
+          cursorLogDate: olderCursor?.date ?? liveLast?.logDate,
+          cursorLogId: olderCursor?.id ?? liveLast?.id,
+        }),
+        daysExhausted ? null : RegistryService.fetchOlderDays(userId, {
+          cursorDate: olderDayCursor ?? dayDocs.at(-1)?.date,
+        }),
+      ]);
+      if (activeUser.current !== userId) return;
       let added = 0;
-      setOlderLogs((prev) => {
+      if (logPage) {
+        const { items, hasMore, nextCursor, nextCursorDocId } = logPage;
         // Dedupe against BOTH the paged window and the live subscription —
         // the live limit(1200) boundary can split a same-date group and the
-        // next page re-fetches those rows.
-        const seen = new Set(prev.map((l) => l.id));
+        // next page re-fetches those rows. Computed outside the state updater
+        // so the forward-progress check below sees the real count regardless
+        // of React's updater scheduling.
+        const seen = new Set((olderLogs || []).map((l) => l.id));
         (logs || []).forEach((l) => seen.add(l.id));
         const fresh = items.filter((l) => !seen.has(l.id));
         added = fresh.length;
-        return [...prev, ...fresh];
-      });
-      setOlderCursor(nextCursor);
-      setOlderCursorDocId(nextCursorDocId);
-      // Forward-progress guarantee: a page that adds nothing new (e.g. the
-      // cursor document was deleted and even the fallback returned known rows)
-      // must not leave the button spinning forever.
-      if (!hasMore || added === 0) setOlderExhausted(true);
+        setOlderLogs((prev) => [...new Map([...prev, ...fresh].map((l) => [l.id, l])).values()]);
+        setOlderCursor({ date: nextCursor, id: nextCursorDocId });
+        // Forward-progress guarantee: a page that adds nothing new (e.g. the
+        // cursor document was deleted and even the fallback returned known
+        // rows) must not leave the button spinning forever.
+        if (!hasMore || added === 0) setOlderExhausted(true);
+      }
+      if (dayPage) {
+        setOlderDays((prev) => [...new Map([...prev, ...dayPage.items].map((d) => [d.date, d])).values()]);
+        setOlderDayCursor(dayPage.nextCursor);
+        if (!dayPage.hasMore) setDaysExhausted(true);
+      }
     } catch (err) {
       console.error(err);
-      setActionError(mapFirestoreError(err, 'Could not load older entries.'));
+      if (activeUser.current === userId) setActionError(mapFirestoreError(err, 'Could not load older entries.'));
     } finally {
-      setLoadingOlder(false);
+      if (activeUser.current === userId) setLoadingOlder(false);
     }
-  }, [userId, loadingOlder, olderExhausted, olderCursor, olderCursorDocId, logs]);
+  }, [userId, loadingOlder, olderExhausted, olderCursor, logs, daysExhausted, olderDayCursor, dayDocs]);
 
   // Aggregate by date (dated day docs + legacy archives/manual entries) — Android chart parity.
   const chartData = useMemo(
-    () => buildVelocitySeries(logs, today, velocityPeriod.days, m.activeCounts, dayDocs),
-    [logs, m.activeCounts, today, velocityPeriod.days, dayDocs]
+    () => buildVelocitySeries(completeLogs, today, velocityPeriod.days, m.activeCounts, completeDays),
+    [completeLogs, m.activeCounts, today, velocityPeriod.days, completeDays]
   );
 
   const velocityStats = useMemo(() => {
@@ -281,8 +327,8 @@ export const HistoryScreen = React.memo(({
   // day is intentionally excluded here — it belongs on the Track screen,
   // never as a second, confusing "editable" surface for the same live count.
   const closedDayRows = useMemo(
-    () => (dayDocs || []).filter((d) => d.status === 'closed').map(dayRecordAsLogLike),
-    [dayDocs]
+    () => completeDays.filter((d) => d.status === 'closed').map(dayRecordAsLogLike),
+    [completeDays]
   );
   const allRows = useMemo(() => {
     const combined = [...(logs ?? []), ...olderLogs, ...closedDayRows];
@@ -335,8 +381,8 @@ export const HistoryScreen = React.memo(({
 
       {subView === 'insights' ? (
         <InsightsScreen
-          logs={logs}
-          dayDocs={dayDocs}
+          logs={completeLogs}
+          dayDocs={completeDays}
           configs={configs}
           m={m}
           today={today}
@@ -659,7 +705,7 @@ export const HistoryScreen = React.memo(({
             )}
           </div>
 
-          {userId && !olderExhausted && (
+          {userId && !(olderExhausted && daysExhausted) && (
             <div className="mt-4 flex justify-center">
               <button
                 type="button"

@@ -87,76 +87,75 @@ service cloud.firestore {
     // Dynamic tracker ids — bound size, keys, and each numeric value (matches
     // InputSanitizer.counts). Rules forbid recursion, so lists are unrolled.
     function validCountValue(v) {
-      return isWholeNumber(v) && v >= 0 && v <= 10000;
+      return v >= 0 && v <= 10000 && v % 1 == 0;
     }
 
     function validCountKey(k) {
-      return k is string
-        && k.size() >= 1
-        && k.size() <= 64
-        && k.matches('^[A-Za-z0-9_-]+$');
+      return k.matches('^[A-Za-z0-9_-]{1,64}$');
     }
 
-    function validCountEntries(keys, vals) {
-      let n = vals.size();
-      return n <= 50
-        && keys.size() == n
-        && (n < 1 || (validCountKey(keys[0]) && validCountValue(vals[0])))
-        && (n < 2 || (validCountKey(keys[1]) && validCountValue(vals[1])))
-        && (n < 3 || (validCountKey(keys[2]) && validCountValue(vals[2])))
-        && (n < 4 || (validCountKey(keys[3]) && validCountValue(vals[3])))
-        && (n < 5 || (validCountKey(keys[4]) && validCountValue(vals[4])))
-        && (n < 6 || (validCountKey(keys[5]) && validCountValue(vals[5])))
-        && (n < 7 || (validCountKey(keys[6]) && validCountValue(vals[6])))
-        && (n < 8 || (validCountKey(keys[7]) && validCountValue(vals[7])))
-        && (n < 9 || (validCountKey(keys[8]) && validCountValue(vals[8])))
-        && (n < 10 || (validCountKey(keys[9]) && validCountValue(vals[9])))
-        && (n < 11 || (validCountKey(keys[10]) && validCountValue(vals[10])))
-        && (n < 12 || (validCountKey(keys[11]) && validCountValue(vals[11])))
-        && (n < 13 || (validCountKey(keys[12]) && validCountValue(vals[12])))
-        && (n < 14 || (validCountKey(keys[13]) && validCountValue(vals[13])))
-        && (n < 15 || (validCountKey(keys[14]) && validCountValue(vals[14])))
-        && (n < 16 || (validCountKey(keys[15]) && validCountValue(vals[15])))
-        && (n < 17 || (validCountKey(keys[16]) && validCountValue(vals[16])))
-        && (n < 18 || (validCountKey(keys[17]) && validCountValue(vals[17])))
-        && (n < 19 || (validCountKey(keys[18]) && validCountValue(vals[18])))
-        && (n < 20 || (validCountKey(keys[19]) && validCountValue(vals[19])))
-        && (n < 21 || (validCountKey(keys[20]) && validCountValue(vals[20])))
-        && (n < 22 || (validCountKey(keys[21]) && validCountValue(vals[21])))
-        && (n < 23 || (validCountKey(keys[22]) && validCountValue(vals[22])))
-        && (n < 24 || (validCountKey(keys[23]) && validCountValue(vals[23])))
-        && (n < 25 || (validCountKey(keys[24]) && validCountValue(vals[24])))
-        && (n < 26 || (validCountKey(keys[25]) && validCountValue(vals[25])))
-        && (n < 27 || (validCountKey(keys[26]) && validCountValue(vals[26])))
-        && (n < 28 || (validCountKey(keys[27]) && validCountValue(vals[27])))
-        && (n < 29 || (validCountKey(keys[28]) && validCountValue(vals[28])))
-        && (n < 30 || (validCountKey(keys[29]) && validCountValue(vals[29])))
-        && (n < 31 || (validCountKey(keys[30]) && validCountValue(vals[30])))
-        && (n < 32 || (validCountKey(keys[31]) && validCountValue(vals[31])))
-        && (n < 33 || (validCountKey(keys[32]) && validCountValue(vals[32])))
-        && (n < 34 || (validCountKey(keys[33]) && validCountValue(vals[33])))
-        && (n < 35 || (validCountKey(keys[34]) && validCountValue(vals[34])))
-        && (n < 36 || (validCountKey(keys[35]) && validCountValue(vals[35])))
-        && (n < 37 || (validCountKey(keys[36]) && validCountValue(vals[36])))
-        && (n < 38 || (validCountKey(keys[37]) && validCountValue(vals[37])))
-        && (n < 39 || (validCountKey(keys[38]) && validCountValue(vals[38])))
-        && (n < 40 || (validCountKey(keys[39]) && validCountValue(vals[39])))
-        && (n < 41 || (validCountKey(keys[40]) && validCountValue(vals[40])))
-        && (n < 42 || (validCountKey(keys[41]) && validCountValue(vals[41])))
-        && (n < 43 || (validCountKey(keys[42]) && validCountValue(vals[42])))
-        && (n < 44 || (validCountKey(keys[43]) && validCountValue(vals[43])))
-        && (n < 45 || (validCountKey(keys[44]) && validCountValue(vals[44])))
-        && (n < 46 || (validCountKey(keys[45]) && validCountValue(vals[45])))
-        && (n < 47 || (validCountKey(keys[46]) && validCountValue(vals[46])))
-        && (n < 48 || (validCountKey(keys[47]) && validCountValue(vals[47])))
-        && (n < 49 || (validCountKey(keys[48]) && validCountValue(vals[48])))
-        && (n < 50 || (validCountKey(keys[49]) && validCountValue(vals[49])));
-    }
 
+
+
+
+    function validCountEntry(m, k) {
+      let v = m[k];
+      return k.matches('^[A-Za-z0-9_-]{1,64}$') && v >= 0 && v <= 10000 && v % 1 == 0;
+    }
     function validCountMap(counts) {
-      return counts is map
-        && counts.size() <= 50
-        && validCountEntries(counts.keys(), counts.values());
+      let keys = counts.keys();
+      let n = keys.size();
+      return counts is map && n <= 50
+        && (n <= 0 || validCountEntry(counts, keys[0]))
+        && (n <= 1 || validCountEntry(counts, keys[1]))
+        && (n <= 2 || validCountEntry(counts, keys[2]))
+        && (n <= 3 || validCountEntry(counts, keys[3]))
+        && (n <= 4 || validCountEntry(counts, keys[4]))
+        && (n <= 5 || validCountEntry(counts, keys[5]))
+        && (n <= 6 || validCountEntry(counts, keys[6]))
+        && (n <= 7 || validCountEntry(counts, keys[7]))
+        && (n <= 8 || validCountEntry(counts, keys[8]))
+        && (n <= 9 || validCountEntry(counts, keys[9]))
+        && (n <= 10 || validCountEntry(counts, keys[10]))
+        && (n <= 11 || validCountEntry(counts, keys[11]))
+        && (n <= 12 || validCountEntry(counts, keys[12]))
+        && (n <= 13 || validCountEntry(counts, keys[13]))
+        && (n <= 14 || validCountEntry(counts, keys[14]))
+        && (n <= 15 || validCountEntry(counts, keys[15]))
+        && (n <= 16 || validCountEntry(counts, keys[16]))
+        && (n <= 17 || validCountEntry(counts, keys[17]))
+        && (n <= 18 || validCountEntry(counts, keys[18]))
+        && (n <= 19 || validCountEntry(counts, keys[19]))
+        && (n <= 20 || validCountEntry(counts, keys[20]))
+        && (n <= 21 || validCountEntry(counts, keys[21]))
+        && (n <= 22 || validCountEntry(counts, keys[22]))
+        && (n <= 23 || validCountEntry(counts, keys[23]))
+        && (n <= 24 || validCountEntry(counts, keys[24]))
+        && (n <= 25 || validCountEntry(counts, keys[25]))
+        && (n <= 26 || validCountEntry(counts, keys[26]))
+        && (n <= 27 || validCountEntry(counts, keys[27]))
+        && (n <= 28 || validCountEntry(counts, keys[28]))
+        && (n <= 29 || validCountEntry(counts, keys[29]))
+        && (n <= 30 || validCountEntry(counts, keys[30]))
+        && (n <= 31 || validCountEntry(counts, keys[31]))
+        && (n <= 32 || validCountEntry(counts, keys[32]))
+        && (n <= 33 || validCountEntry(counts, keys[33]))
+        && (n <= 34 || validCountEntry(counts, keys[34]))
+        && (n <= 35 || validCountEntry(counts, keys[35]))
+        && (n <= 36 || validCountEntry(counts, keys[36]))
+        && (n <= 37 || validCountEntry(counts, keys[37]))
+        && (n <= 38 || validCountEntry(counts, keys[38]))
+        && (n <= 39 || validCountEntry(counts, keys[39]))
+        && (n <= 40 || validCountEntry(counts, keys[40]))
+        && (n <= 41 || validCountEntry(counts, keys[41]))
+        && (n <= 42 || validCountEntry(counts, keys[42]))
+        && (n <= 43 || validCountEntry(counts, keys[43]))
+        && (n <= 44 || validCountEntry(counts, keys[44]))
+        && (n <= 45 || validCountEntry(counts, keys[45]))
+        && (n <= 46 || validCountEntry(counts, keys[46]))
+        && (n <= 47 || validCountEntry(counts, keys[47]))
+        && (n <= 48 || validCountEntry(counts, keys[48]))
+        && (n <= 49 || validCountEntry(counts, keys[49]));
     }
 
     // trackerSnapshots (item 2): one stamped historical config per tracker
@@ -179,31 +178,38 @@ service cloud.firestore {
     // `users/{uid}`) validated in the same transaction commit, since the
     // 1000-expression budget is charged per commit, not per document.
     function validSnapshotValue(v) {
-      return v is map
-        && v.size() <= 7
-        && (!('target' in v) || (isWholeNumber(v.target) && v.target >= 0 && v.target <= 10000))
-        && (!('baseline' in v) || v.baseline == null || (isWholeNumber(v.baseline) && v.baseline >= 0 && v.baseline <= 10000))
-        && (!('unitPrice' in v) || v.unitPrice == null || (isNumber(v.unitPrice) && v.unitPrice >= 0 && v.unitPrice <= 1000));
+      let target = v.get('target', 0);
+      let baseline = v.get('baseline', null);
+      let price = v.get('unitPrice', null);
+      return v is map && v.size() <= 7
+        && target >= 0 && target <= 10000 && target % 1 == 0
+        && (baseline == null || (baseline >= 0 && baseline <= 10000 && baseline % 1 == 0))
+        && (price == null || (price >= 0 && price <= 1000));
     }
 
-    function validSnapshotEntries(keys, vals) {
-      let n = vals.size();
-      return n <= 8
-        && keys.size() == n
-        && (n < 1 || (validCountKey(keys[0]) && validSnapshotValue(vals[0])))
-        && (n < 2 || (validCountKey(keys[1]) && validSnapshotValue(vals[1])))
-        && (n < 3 || (validCountKey(keys[2]) && validSnapshotValue(vals[2])))
-        && (n < 4 || (validCountKey(keys[3]) && validSnapshotValue(vals[3])))
-        && (n < 5 || (validCountKey(keys[4]) && validSnapshotValue(vals[4])))
-        && (n < 6 || (validCountKey(keys[5]) && validSnapshotValue(vals[5])))
-        && (n < 7 || (validCountKey(keys[6]) && validSnapshotValue(vals[6])))
-        && (n < 8 || (validCountKey(keys[7]) && validSnapshotValue(vals[7])));
+    function validSnapshotEntry(m, k) {
+      let v = m[k];
+      let target = v.get('target', 0);
+      let baseline = v.get('baseline', null);
+      let price = v.get('unitPrice', null);
+      return k.matches('^[A-Za-z0-9_-]{1,64}$') && v is map && v.size() <= 7
+        && target >= 0 && target <= 10000 && target % 1 == 0
+        && (baseline == null || (baseline >= 0 && baseline <= 10000 && baseline % 1 == 0))
+        && (price == null || (price >= 0 && price <= 1000));
     }
 
     function validSnapshotMap(m) {
-      return m is map
-        && m.size() <= 8
-        && validSnapshotEntries(m.keys(), m.values());
+      let keys = m.keys();
+      let n = m.size();
+      return m is map && n <= 8
+        && (n < 1 || validSnapshotEntry(m, keys[0]))
+        && (n < 2 || validSnapshotEntry(m, keys[1]))
+        && (n < 3 || validSnapshotEntry(m, keys[2]))
+        && (n < 4 || validSnapshotEntry(m, keys[3]))
+        && (n < 5 || validSnapshotEntry(m, keys[4]))
+        && (n < 6 || validSnapshotEntry(m, keys[5]))
+        && (n < 7 || validSnapshotEntry(m, keys[6]))
+        && (n < 8 || validSnapshotEntry(m, keys[7]));
     }
 
     // Day-doc counts get their OWN, smaller-bounded map validator rather than
@@ -211,41 +217,37 @@ service cloud.firestore {
     // keep that bound) — again purely to leave commit-level expression
     // headroom now that a `days` write is often paired with a `users/{uid}`
     // write in the same transaction (endDay/updateHistoricalDay/migration).
-    function validDayCountEntries(keys, vals) {
-      let n = vals.size();
-      return n <= 25
-        && keys.size() == n
-        && (n < 1 || (validCountKey(keys[0]) && validCountValue(vals[0])))
-        && (n < 2 || (validCountKey(keys[1]) && validCountValue(vals[1])))
-        && (n < 3 || (validCountKey(keys[2]) && validCountValue(vals[2])))
-        && (n < 4 || (validCountKey(keys[3]) && validCountValue(vals[3])))
-        && (n < 5 || (validCountKey(keys[4]) && validCountValue(vals[4])))
-        && (n < 6 || (validCountKey(keys[5]) && validCountValue(vals[5])))
-        && (n < 7 || (validCountKey(keys[6]) && validCountValue(vals[6])))
-        && (n < 8 || (validCountKey(keys[7]) && validCountValue(vals[7])))
-        && (n < 9 || (validCountKey(keys[8]) && validCountValue(vals[8])))
-        && (n < 10 || (validCountKey(keys[9]) && validCountValue(vals[9])))
-        && (n < 11 || (validCountKey(keys[10]) && validCountValue(vals[10])))
-        && (n < 12 || (validCountKey(keys[11]) && validCountValue(vals[11])))
-        && (n < 13 || (validCountKey(keys[12]) && validCountValue(vals[12])))
-        && (n < 14 || (validCountKey(keys[13]) && validCountValue(vals[13])))
-        && (n < 15 || (validCountKey(keys[14]) && validCountValue(vals[14])))
-        && (n < 16 || (validCountKey(keys[15]) && validCountValue(vals[15])))
-        && (n < 17 || (validCountKey(keys[16]) && validCountValue(vals[16])))
-        && (n < 18 || (validCountKey(keys[17]) && validCountValue(vals[17])))
-        && (n < 19 || (validCountKey(keys[18]) && validCountValue(vals[18])))
-        && (n < 20 || (validCountKey(keys[19]) && validCountValue(vals[19])))
-        && (n < 21 || (validCountKey(keys[20]) && validCountValue(vals[20])))
-        && (n < 22 || (validCountKey(keys[21]) && validCountValue(vals[21])))
-        && (n < 23 || (validCountKey(keys[22]) && validCountValue(vals[22])))
-        && (n < 24 || (validCountKey(keys[23]) && validCountValue(vals[23])))
-        && (n < 25 || (validCountKey(keys[24]) && validCountValue(vals[24])));
-    }
+
 
     function validDayCountMap(counts) {
-      return counts is map
-        && counts.size() <= 25
-        && validDayCountEntries(counts.keys(), counts.values());
+      let keys = counts.keys();
+      let n = keys.size();
+      return counts is map && n <= 25
+        && (n <= 0 || validCountEntry(counts, keys[0]))
+        && (n <= 1 || validCountEntry(counts, keys[1]))
+        && (n <= 2 || validCountEntry(counts, keys[2]))
+        && (n <= 3 || validCountEntry(counts, keys[3]))
+        && (n <= 4 || validCountEntry(counts, keys[4]))
+        && (n <= 5 || validCountEntry(counts, keys[5]))
+        && (n <= 6 || validCountEntry(counts, keys[6]))
+        && (n <= 7 || validCountEntry(counts, keys[7]))
+        && (n <= 8 || validCountEntry(counts, keys[8]))
+        && (n <= 9 || validCountEntry(counts, keys[9]))
+        && (n <= 10 || validCountEntry(counts, keys[10]))
+        && (n <= 11 || validCountEntry(counts, keys[11]))
+        && (n <= 12 || validCountEntry(counts, keys[12]))
+        && (n <= 13 || validCountEntry(counts, keys[13]))
+        && (n <= 14 || validCountEntry(counts, keys[14]))
+        && (n <= 15 || validCountEntry(counts, keys[15]))
+        && (n <= 16 || validCountEntry(counts, keys[16]))
+        && (n <= 17 || validCountEntry(counts, keys[17]))
+        && (n <= 18 || validCountEntry(counts, keys[18]))
+        && (n <= 19 || validCountEntry(counts, keys[19]))
+        && (n <= 20 || validCountEntry(counts, keys[20]))
+        && (n <= 21 || validCountEntry(counts, keys[21]))
+        && (n <= 22 || validCountEntry(counts, keys[22]))
+        && (n <= 23 || validCountEntry(counts, keys[23]))
+        && (n <= 24 || validCountEntry(counts, keys[24]));
     }
 
     // Canonical UserProfile keys (shared Android/KMP + web).
@@ -259,7 +261,8 @@ service cloud.firestore {
         'pouchPrice', 'estimatedYield', 'dayStartHour', 'activeCounts',
         'lifetimeAggregates', 'smokingUnitsMigrated', 'avatar', 'createdAt', 'updatedAt',
         'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield',
-        'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate'
+        'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
+          'migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice'
       ]);
     }
 
@@ -276,9 +279,15 @@ service cloud.firestore {
         && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
     }
 
+    function validLegacyClaimMetadata(d) {
+      return (d.get('migratingLegacyId', null) == null || validCountKey(d.migratingLegacyId))
+        && (d.get('migratingLegacyVersion', null) == null || d.migratingLegacyVersion == 3)
+        && (d.get('migratingLegacyUnitPrice', null) == null
+          || (isNumber(d.migratingLegacyUnitPrice) && d.migratingLegacyUnitPrice >= 0 && d.migratingLegacyUnitPrice <= 1000));
+    }
     function validUserProfile() {
       let d = request.resource.data;
-      return validUserKeys(d)
+      return validUserKeys(d) && validLegacyClaimMetadata(d)
         && validSettingsShape(d)
         && (!('lifetimeAggregates' in d) || validLifetimeAggregates(d.lifetimeAggregates))
         && (!('activeCounts' in d) || validCountMap(d.activeCounts))
@@ -295,7 +304,7 @@ service cloud.firestore {
       // and migratingLegacyCounts must always be empty on a fresh create.
       // This avoids exceeding Firestore's 1000-expression evaluation budget
       // for the 17-field UserProfile bootstrap document.
-      return validUserKeys(d)
+      return validUserKeys(d) && validLegacyClaimMetadata(d)
         && validSettingsShape(d)
         && (!('lifetimeAggregates' in d) || zeroAggregates(d.lifetimeAggregates))
         && (!('activeCounts' in d) || d.activeCounts.size() == 0)
@@ -326,8 +335,13 @@ service cloud.firestore {
         // migratingLegacyCounts/-Date: only ever set together with a legacy
         // activeCounts clear, or deleted together during cleanup — either
         // direction is a mutation-shaped change, never a settings one.
-        && (!changed.hasAny(['migratingLegacyCounts']) || !('migratingLegacyCounts' in d) || validCountMap(d.migratingLegacyCounts))
-        && (!changed.hasAny(['migratingLegacyDate']) || !('migratingLegacyDate' in d) || isDateString(d.migratingLegacyDate));
+        && (!changed.hasAny(['migratingLegacyCounts']) || !('migratingLegacyCounts' in d) || d.migratingLegacyCounts == resource.data.get('activeCounts', {}) || validCountMap(d.migratingLegacyCounts))
+        && (!changed.hasAny(['migratingLegacyDate']) || !('migratingLegacyDate' in d) || isDateString(d.migratingLegacyDate))
+        && (!changed.hasAny(['migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice']) || validLegacyClaimMetadata(d))
+        // Older clients cannot clear a resumable claim without removing its fence.
+        && (resource.data.get('migratingLegacyVersion', null) != 3
+          || !changed.hasAny(['migratingLegacyCounts', 'migratingLegacyDate'])
+          || !('migratingLegacyVersion' in d));
     }
 
     // Settings path: validate only fields this write changes (parity with
@@ -381,7 +395,8 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys()
         .hasOnly([
           'activeCounts', 'lifetimeAggregates', 'smokingUnitsMigrated', 'updatedAt',
-          'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate'
+          'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
+          'migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice'
         ]);
     }
 
@@ -389,14 +404,18 @@ service cloud.firestore {
       let d = request.resource.data;
       return d.keys().hasOnly([
           'logDate', 'counts', 'origin', 'finalizedAt', 'clientTimestamp', 'id',
-          'isArchive', 'isManual', 'aggregateCredit'
+          'isArchive', 'isManual', 'aggregateCredit', 'trackerSnapshots', 'economicStatus'
         ])
         && d.keys().hasAll(['logDate', 'counts'])
         && isDateString(d.logDate)
         && validCountMap(d.counts)
-        && (!('origin' in d) || d.origin in ['DAY_RESET', 'MANUAL_ENTRY'])
+        && (!('origin' in d) || d.origin in ['DAY_RESET', 'MANUAL_ENTRY', 'LEGACY_RECOVERY'])
         && (!('isArchive' in d) || d.isArchive is bool)
         && (!('isManual' in d) || d.isManual is bool)
+        && (!('economicStatus' in d) || d.economicStatus == null || d.economicStatus == 'UNKNOWN')
+        // Log snapshots are bounded owner-supplied metadata, like the stamped credit.
+        // Domain writers validate economic fields; updates below freeze the stamp.
+        && (!('trackerSnapshots' in d) || (d.trackerSnapshots is map && d.trackerSnapshots.size() <= 8))
         // Same shape and bounds as the profile totals it accumulates into.
         && (!('aggregateCredit' in d) || validLifetimeAggregates(d.aggregateCredit));
     }
@@ -429,7 +448,7 @@ service cloud.firestore {
     function validDayShape(d) {
       return d.keys().hasOnly([
           'date', 'counts', 'trackerSnapshots', 'aggregateCredit', 'status',
-          'foldedIntoLifetime', 'legacyMigrationApplied', 'createdAt', 'updatedAt', 'closedAt'
+          'foldedIntoLifetime', 'legacyMigrationApplied', 'createdAt', 'updatedAt', 'closedAt', 'updatedTrackerId'
         ])
         && d.keys().hasAll(['date', 'counts'])
         && isDateString(d.date)
@@ -441,9 +460,14 @@ service cloud.firestore {
         && (!('legacyMigrationApplied' in d) || d.legacyMigrationApplied is bool);
     }
 
+    function legacyClaimReleased() {
+      return getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('migratingLegacyVersion', null) != 3;
+    }
+
     function validDayCreate(dateParam) {
       let d = request.resource.data;
-      return validDayShape(d) && d.date == dateParam;
+      return validDayShape(d) && d.date == dateParam
+        && (d.get('legacyMigrationApplied', false) != true || legacyClaimReleased());
     }
 
     // Update path validates only fields THIS write actually changes (same
@@ -452,23 +476,39 @@ service cloud.firestore {
     // expression-budget headroom (see validSnapshotValue's comment) and
     // because it is the only way an already-valid field can be left alone by
     // a write that does not touch it.
+    // Single-tracker counter writes validate their actual delta. Unchanged
+    // entries were validated when written; the hint cannot bypass this diff.
+    function validCounterCountDelta(d, before) {
+      let id = d.get('updatedTrackerId', '');
+      return id is string && validCountKey(id) && d.counts is map && d.counts.size() <= 25
+        && d.counts.diff(before.counts).affectedKeys().hasOnly([id])
+        && (!(id in d.counts) || validCountValue(d.counts[id]));
+    }
+
+    function validCounterSnapshotDelta(d, before) {
+      let id = d.get('updatedTrackerId', '');
+      let snapshots = d.trackerSnapshots;
+      return id is string && validCountKey(id) && snapshots is map && snapshots.size() <= 8
+        && snapshots.diff(before.get('trackerSnapshots', {})).affectedKeys().hasOnly([id])
+        && (!(id in snapshots) || validSnapshotValue(snapshots[id]));
+    }
     function validDayUpdate(dateParam) {
       let d = request.resource.data;
       let before = resource.data;
       let changed = d.diff(before).affectedKeys();
       return d.keys().hasOnly([
           'date', 'counts', 'trackerSnapshots', 'aggregateCredit', 'status',
-          'foldedIntoLifetime', 'legacyMigrationApplied', 'createdAt', 'updatedAt', 'closedAt'
+          'foldedIntoLifetime', 'legacyMigrationApplied', 'createdAt', 'updatedAt', 'closedAt', 'updatedTrackerId'
         ])
         && d.date == dateParam
         && d.date == before.date // date is the document identity — immutable
-        && (!changed.hasAny(['counts']) || validDayCountMap(d.counts))
+        && (!changed.hasAny(['counts']) || validCounterCountDelta(d, before) || validDayCountMap(d.counts))
         // Once a day is closed, its historical config stamp is frozen — this is
         // what makes trackerSnapshots actually immutable (item 2), not just a
         // client convention. `counts`/`aggregateCredit` may still change (a
         // deliberate historical correction via updateHistoricalDay), but never
         // what the day *meant* at the time.
-        && (!changed.hasAny(['trackerSnapshots']) || (before.status != 'closed' && validSnapshotMap(d.trackerSnapshots)))
+        && (!changed.hasAny(['trackerSnapshots']) || (before.status != 'closed' && (validCounterSnapshotDelta(d, before) || validSnapshotMap(d.trackerSnapshots))))
         && (!changed.hasAny(['aggregateCredit']) || validLifetimeAggregates(d.aggregateCredit))
         // A day cannot be reopened once closed (one-way transition).
         && (!changed.hasAny(['status']) || (d.status in ['open', 'closed'] && before.status != 'closed'))
@@ -477,7 +517,8 @@ service cloud.firestore {
         && (!changed.hasAny(['foldedIntoLifetime'])
           || (d.foldedIntoLifetime is bool && (!('foldedIntoLifetime' in before) || before.foldedIntoLifetime != true)))
         && (!changed.hasAny(['legacyMigrationApplied'])
-          || (d.legacyMigrationApplied is bool && (!('legacyMigrationApplied' in before) || before.legacyMigrationApplied != true)));
+          || (d.legacyMigrationApplied is bool && (!('legacyMigrationApplied' in before) || before.legacyMigrationApplied != true)
+            && (d.legacyMigrationApplied != true || legacyClaimReleased())));
     }
 
     function validMetaShape() {
@@ -509,7 +550,8 @@ service cloud.firestore {
         // between days while lifetimeAggregates stayed put.
         allow update: if isOwner(userId)
           && validLogEntry()
-          && request.resource.data.logDate == resource.data.logDate;
+          && request.resource.data.logDate == resource.data.logDate
+          && request.resource.data.get('trackerSnapshots', {}) == resource.data.get('trackerSnapshots', {});
         allow delete: if isOwner(userId);
       }
 
@@ -525,7 +567,12 @@ service cloud.firestore {
 
       match /meta/{metaId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && validMetaShape();
+        allow create, update: if isOwner(userId) && (
+          (metaId == 'profile' && validMetaShape()) ||
+          (metaId.matches('^legacy_[0-9-]+_[A-Za-z0-9_-]+_[0-9]+$')
+            && request.resource.data.keys().hasOnly(['date', 'applied'])
+            && isDateString(request.resource.data.date)
+            && request.resource.data.applied == true));
         allow delete: if isOwner(userId);
       }
     }

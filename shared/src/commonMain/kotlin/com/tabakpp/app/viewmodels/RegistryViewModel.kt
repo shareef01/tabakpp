@@ -7,6 +7,7 @@ import com.tabakpp.app.domain.ExportBuilder
 import com.tabakpp.app.domain.ExportFormat
 import com.tabakpp.app.domain.ExportState
 import com.tabakpp.app.domain.SmokingCalculator
+import com.tabakpp.app.domain.HistoryCursor
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -58,14 +59,14 @@ class RegistryViewModel(
 
     val logs: StateFlow<List<LogEntry>> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(emptyList())
-        else registryRepository.subscribeToLogs(uid)
+        else registryRepository.subscribeToLogs(uid).onStart { emit(emptyList()) }
     }.catch { e -> setError(e, "Could not sync your history. Check your connection and try again."); emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Bounded window of `days/{date}` documents (item 1) — chart/streak use. */
     val dayDocs: StateFlow<List<DayDocument>> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(emptyList())
-        else registryRepository.subscribeToDays(uid)
+        else registryRepository.subscribeToDays(uid).onStart { emit(emptyList()) }
     }.catch { e -> setError(e, "Could not sync your history. Check your connection and try again."); emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -82,6 +83,53 @@ class RegistryViewModel(
     val historyIsTruncated: StateFlow<Boolean> = logs
         .map { it.size.toLong() >= LIVE_LOG_QUERY_LIMIT }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    private val olderLogs = MutableStateFlow<List<LogEntry>>(emptyList())
+    private val olderDays = MutableStateFlow<List<DayDocument>>(emptyList())
+    val historyLogs = combine(olderLogs, logs) { older, live -> (older + live).associateBy { it.id }.values.sortedWith(
+        compareByDescending<LogEntry> { it.logDate }.thenByDescending { it.id }) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val historyDays = combine(olderDays, dayDocs) { older, live -> (older + live).associateBy { it.date }.values.sortedByDescending { it.date } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private var logCursor: HistoryCursor? = null
+    private var dayCursor: HistoryCursor? = null
+    private var logsExhausted = false
+    private var daysExhausted = false
+    private var historyGeneration = 0
+    private val _loadingOlderHistory = MutableStateFlow(false)
+    val loadingOlderHistory = _loadingOlderHistory.asStateFlow()
+    private val _hasOlderHistory = MutableStateFlow(true)
+    val hasOlderHistory = _hasOlderHistory.asStateFlow()
+
+    fun loadOlderHistory() {
+        val uid = authUser.value?.uid ?: return
+        if (_loadingOlderHistory.value || !_hasOlderHistory.value) return
+        _loadingOlderHistory.value = true
+        val generation = historyGeneration
+        viewModelScope.launch {
+            try {
+                if (!logsExhausted) {
+                    val page = registryRepository.fetchOlderLogs(uid, logCursor ?: logs.value.lastOrNull()?.let { HistoryCursor(it.logDate, it.id) })
+                    if (generation != historyGeneration || uid != authUser.value?.uid) return@launch
+                    olderLogs.value = (olderLogs.value + page.items).distinctBy { it.id }
+                    logCursor = page.cursor
+                    logsExhausted = !page.hasMore
+                }
+                if (!daysExhausted) {
+                    val page = registryRepository.fetchOlderDays(uid, dayCursor ?: dayDocs.value.lastOrNull()?.let { HistoryCursor(it.date, it.date) })
+                    if (generation != historyGeneration || uid != authUser.value?.uid) return@launch
+                    olderDays.value = (olderDays.value + page.items).distinctBy { it.date }
+                    dayCursor = page.cursor
+                    daysExhausted = !page.hasMore
+                }
+                _hasOlderHistory.value = !(logsExhausted && daysExhausted)
+            } catch (e: Exception) {
+                if (generation == historyGeneration) setError(e, "Could not load older history. Try again.")
+            } finally {
+                if (generation == historyGeneration) _loadingOlderHistory.value = false
+            }
+        }
+    }
 
     private val _loading = MutableStateFlow(true)
     val loading = _loading.asStateFlow()
@@ -239,6 +287,45 @@ class RegistryViewModel(
     val localAccent = _localAccent.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            userUid.distinctUntilChanged().collect {
+                historyGeneration++
+                olderLogs.value = emptyList(); olderDays.value = emptyList()
+                logCursor = null; dayCursor = null
+                logsExhausted = false; daysExhausted = false
+                _hasOlderHistory.value = true; _loadingOlderHistory.value = false
+            }
+        }
+        viewModelScope.launch {
+            userUid.distinctUntilChanged().collectLatest {
+                var previous = emptyList<DayDocument>()
+                var first = true
+                dayDocs.collect { head ->
+                    if (first) { first = false; return@collect }
+                    val oldest = head.lastOrNull()?.date
+                    if (head.size.toLong() >= LIVE_DAYS_QUERY_LIMIT && oldest != null) {
+                        val evicted = previous.filter { it.date < oldest }
+                        if (evicted.isNotEmpty()) olderDays.value = (evicted + olderDays.value).associateBy { it.date }.values.toList()
+                    }
+                    previous = head
+                }
+            }
+        }
+        viewModelScope.launch {
+            userUid.distinctUntilChanged().collectLatest {
+                var previous = emptyList<LogEntry>()
+                var first = true
+                logs.collect { head ->
+                    if (first) { first = false; return@collect }
+                    val oldest = head.lastOrNull()
+                    if (head.size.toLong() >= LIVE_LOG_QUERY_LIMIT && oldest != null) {
+                        val evicted = previous.filter { it.logDate < oldest.logDate || (it.logDate == oldest.logDate && it.id < oldest.id) }
+                        if (evicted.isNotEmpty()) olderLogs.value = (evicted + olderLogs.value).associateBy { it.id }.values.toList()
+                    }
+                    previous = head
+                }
+            }
+        }
         // Refresh tracking day periodically (UI refresher only — mutations
         // derive their date independently via [trackingDateForMutation], so a
         // throttled poll can never mis-date a count).
@@ -591,6 +678,7 @@ class RegistryViewModel(
         viewModelScope.launch {
             try {
                 registryRepository.deleteLog(uid, log.id)
+                if (authUser.value?.uid == uid) olderLogs.value = olderLogs.value.filterNot { it.id == log.id }
                 onSuccess()
             } catch (e: Exception) {
                 setError(e, "Could not delete the history entry. Try again.")
@@ -607,6 +695,7 @@ class RegistryViewModel(
         viewModelScope.launch {
             try {
                 registryRepository.restoreLog(uid, log)
+                if (authUser.value?.uid == uid) olderLogs.value = (olderLogs.value + log).distinctBy { it.id }
             } catch (e: Exception) {
                 setError(e, "Could not restore the history entry. Try again.")
             }
@@ -616,6 +705,10 @@ class RegistryViewModel(
     fun addTracker(config: TrackerConfig) {
         val uid = authUser.value?.uid ?: return
         val currentConfigs = configs.value
+        if (currentConfigs.size >= 8) {
+            setError(Exception("TRACKER_LIMIT"), "Could not add the tracker.")
+            return
+        }
         val nextOrder = if (currentConfigs.isEmpty()) 0 else currentConfigs.maxOf { it.order } + 1
         val sanitized = config.copy(
             name = InputSanitizer.trackerName(config.name),
@@ -707,6 +800,12 @@ class RegistryViewModel(
         viewModelScope.launch {
             try {
                 registryRepository.updateHistoricalLog(uid, logId, counts)
+                if (olderLogs.value.any { it.id == logId }) {
+                    val updated = registryRepository.getHistoricalLog(uid, logId)
+                    if (authUser.value?.uid == uid && updated != null) {
+                        olderLogs.value = olderLogs.value.map { if (it.id == logId) updated else it }
+                    }
+                }
             } catch (e: Exception) {
                 setError(e, "Could not update the history entry. Try again.")
             }
@@ -723,6 +822,12 @@ class RegistryViewModel(
         viewModelScope.launch {
             try {
                 registryRepository.updateHistoricalDay(uid, date, counts)
+                if (olderDays.value.any { it.date == date }) {
+                    val updated = registryRepository.getHistoricalDay(uid, date)
+                    if (authUser.value?.uid == uid && updated != null) {
+                        olderDays.value = olderDays.value.map { if (it.date == date) updated else it }
+                    }
+                }
             } catch (e: Exception) {
                 setError(e, "Could not update the history entry. Try again.")
             }

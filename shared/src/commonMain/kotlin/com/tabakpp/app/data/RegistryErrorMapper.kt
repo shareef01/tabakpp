@@ -70,6 +70,10 @@ object RegistryErrorMapper {
         val normalized = message.lowercase()
 
         return when {
+            normalized.contains("historical_price_unavailable") ->
+                "This older record has no reliable historical price. Its stored totals were preserved; changing its amounts is unavailable."
+            normalized.contains("tracker_limit") ->
+                "A tracking day supports up to 8 trackers. Remove an unused tracker before adding another."
             normalized.contains("permission_denied") ||
                 normalized.contains("permission-denied") ->
                 "Save blocked by security rules. Refresh and try again."
