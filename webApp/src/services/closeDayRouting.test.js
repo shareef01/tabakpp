@@ -114,7 +114,8 @@ describe('closeDay — financial-mode routing (W1B-1)', () => {
     h.getDoc.mockResolvedValue(snapOf({ financialMode: 'OPTION_B' }));
     TrustedFinancial.execute.mockResolvedValue({ applied: true });
 
-    await RegistryService.closeDay('u1', '2026-10-01', 'op-explicit');
+    // Reconciled signature: closeDay(uid, date, allowEmpty, operationId).
+    await RegistryService.closeDay('u1', '2026-10-01', false, 'op-explicit');
 
     expect(TrustedFinancial.execute).toHaveBeenCalledWith('DAY_CLOSE', {
       operationId: 'op-explicit',

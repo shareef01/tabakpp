@@ -778,15 +778,19 @@ describe('account wipe against the real rules', () => {
     await RegistryService.deleteAllUserData(UID);
 
     let leftovers;
+    let profileDoc;
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const adminDb = context.firestore();
+      // PR83 tombstone contract: the profile is NOT deleted — it is fenced
+      // with {deleting: true} so a stale Auth token cannot recreate data.
+      profileDoc = (await getDoc(doc(adminDb, 'users', UID))).data();
       leftovers = [];
-      if ((await getDoc(doc(adminDb, 'users', UID))).exists()) leftovers.push('users/' + UID);
       for (const sub of ['configs', 'logs', 'days', 'meta', 'dailyFinancials', 'financialOperations']) {
         const snap = await getDocs(collection(adminDb, 'users', UID, sub));
         snap.docs.forEach((d) => leftovers.push(`${sub}/${d.id}`));
       }
     });
+    expect(profileDoc).toEqual({ deleting: true });
     expect(leftovers).toEqual([]);
   });
 });

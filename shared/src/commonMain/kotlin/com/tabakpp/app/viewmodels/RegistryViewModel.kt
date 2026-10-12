@@ -679,7 +679,7 @@ class RegistryViewModel(
 
     /** Same rule as [resolveTrackingDate], without its flow side effect. */
     private fun currentTrackingDateNow(): String = SmokingCalculator.getTrackingDate(
-        Clock.System.now(),
+        clock.now(),
         userProfile.value?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR,
     )
 

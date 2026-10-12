@@ -41,114 +41,51 @@ const mergeCounts = (base, extra) => {
 
 // Day archives merged with same-date manual entries — an archive must not
 // shadow manual entries added afterwards. Matches the Kotlin implementation.
-const aggregateLoggedCounts = (logs) => {
-  const archives = {};
-  const others = {};
-  (logs || []).forEach((log) => {
-    if (!log?.logDate) return;
-    if (isDayArchiveLog(log)) {
-      archives[log.logDate] = log.counts || {};
-    } else {
-      const day = others[log.logDate] || (others[log.logDate] = {});
-      Object.entries(log.counts || {}).forEach(([id, v]) => {
-        day[id] = (day[id] || 0) + Math.max(0, v || 0);
-      });
-    }
-  });
-  const out = {};
-  new Set([...Object.keys(archives), ...Object.keys(others)]).forEach((date) => {
-    out[date] = mergeCounts(archives[date], others[date] || {});
-  });
-  return out;
+const mergeEffectiveToday = (legacyTodayCounts, activeCounts, persistedDayDocCounts) => {
+  const overlay = activeCounts || {};
+  const base = Object.keys(overlay).length > 0
+    ? overlay
+    : (persistedDayDocCounts || {});
+  return mergeCounts(legacyTodayCounts, base);
 };
 
-/**
- * Overlay `days/{date}` documents (the dated daily-document model — see
- * registryService.js) onto counts already aggregated from the legacy `logs`
- * collection. A given calendar date is produced by exactly one of the two
- * collections in practice (the day-doc model only starts writing from the
- * date this schema shipped forward), so this is a safe additive merge rather
- * than a precedence question.
- */
-const mergeDayDocsIntoLogged = (logged, dayDocs) => {
-  const out = { ...(logged || {}) };
-  (dayDocs || []).forEach((d) => {
-    if (!d?.date) return;
-    out[d.date] = mergeCounts(out[d.date], d.counts || {});
-  });
-  return out;
-};
-
-const projectLoggedCounts = (logs, dayDocs, trackingDay, activeCounts = {}) => {
-  const out = aggregateLoggedCounts(logs);
-  const hasActive = Object.keys(activeCounts).length > 0;
-  (dayDocs || []).forEach((day) => {
-    const counts = day.date === trackingDay && day.status !== 'closed' && hasActive ? activeCounts : day.counts;
-    out[day.date] = mergeCounts(out[day.date], counts || {});
-  });
-  if (hasActive && !(dayDocs || []).some((day) => day.date === trackingDay)) {
-    out[trackingDay] = mergeCounts(out[trackingDay], activeCounts);
-  }
-  return out;
-};
-
-/** `{ [date]: trackerSnapshots }` for every day-doc that has one. */
-const snapshotsByDate = (dayDocs) => {
+/** `{ [date]: counts }` for every day-doc (its persisted counts, not snapshots). */
+const dayDocCountsByDate = (dayDocs) => {
   const out = {};
   (dayDocs || []).forEach((d) => {
-    if (d?.date && d.trackerSnapshots) out[d.date] = d.trackerSnapshots;
+    if (d?.date) out[d.date] = d.counts || {};
   });
   return out;
 };
 
-/**
- * Effective historical target for a tracker on a given day.
- *
- * Prefers the target stamped in that day's trackerSnapshots (item 2 —
- * historical config, immune to later edits of the live tracker). Falls back
- * to the tracker's current live limit ONLY when no snapshot exists for that
- * day/tracker — i.e. legacy data written before this schema, or a tracker
- * that was never touched that day. This fallback is a documented, explicit
- * choice and is never silently different
- * from what the UI shows: legacy days are the only ones affected, and they
- * carry no other historical-config record either.
- */
-const effectiveTarget = (snapshotsForDate, config) => {
-  const snap = snapshotsForDate?.[config.id];
-  if (snap && Number.isFinite(snap.target)) return Math.max(0, snap.target);
-  return Math.max(0, config.limit || 0);
-};
+/** A legacy day archive log (pre-days-model record of a whole day). */
+const isArchiveLog = (log) => log?.origin === 'DAY_RESET' || (log?.id || '').endsWith('_DAY');
 
 /**
- * Financial/unit contribution of a `days/{date}` document computed ENTIRELY
- * from its own stamped `trackerSnapshots` — never from live tracker configs.
- * This is what makes a day doc historically self-contained (item 2): once
- * written, its meaning cannot be changed by editing, repricing, renaming, or
- * deleting the live tracker afterward. Used to (re)stamp `aggregateCredit`
- * whenever a day's counts change, on both the live (open, today) path and
- * historical edits.
+ * Reconstruct a tracker's historical config ({target, baseline, unitPrice}) from
+ * a manual log's stamped `aggregateCredit` (Option B, §8 of
+ * docs/financial-semantics.md). From `wasted = count*price` we recover the
+ * price; `target = count + saved/price`; `baseline = count + baselineSaved/price`.
+ * Returns null when the stamp is too incomplete to reconstruct (never invents).
  */
-const computeDayCredit = (counts, trackerSnapshots, defaultUnitPrice = 0.5) => {
-  let wasted = 0;
-  let saved = 0;
-  let smokingUnits = 0;
-  let baselineSaved = 0;
-  Object.entries(trackerSnapshots || {}).forEach(([id, snap]) => {
-    const count = Math.max(0, (counts || {})[id] || 0);
-    const target = Math.max(0, snap?.target || 0);
-    const price = snap?.unitPrice == null ? defaultUnitPrice : snap.unitPrice;
-    if (snap?.isFinanciallyTracked !== false) {
-      wasted += count * price;
-      saved += Math.max(0, target - count) * price;
-      if (snap?.baseline != null) {
-        baselineSaved += Math.max(0, snap.baseline - count) * price;
-      }
-    }
-    if (SMOKING_TYPES.includes(snap?.type)) smokingUnits += count;
-  });
-  return { wasted, saved, smokingUnits, baselineSaved };
+const deriveSnapshotFromLog = (log, trackerId, fallbackType) => {
+  const count = (log?.counts || {})[trackerId] || 0;
+  const c = log?.aggregateCredit;
+  if (!c || count <= 0) return null;
+  const price = Number.isFinite(c.wasted) ? c.wasted / count : null;
+  if (price == null || !(price > 0)) return null;
+  const target = Number.isFinite(c.saved) ? Math.max(0, Math.round(count + c.saved / price)) : null;
+  const baseline = Number.isFinite(c.baselineSaved) ? Math.max(0, Math.round(count + c.baselineSaved / price)) : null;
+  return {
+    type: fallbackType || 'CIGARETTE',
+    target: target ?? 0,
+    baseline,
+    unitPrice: price,
+    isFinanciallyTracked: true,
+    isPrimaryTracked: true,
+    __derived: true,
+  };
 };
-
 
 /**
  * OPTION B — canonical per-date day-level financial aggregator (see
@@ -260,6 +197,137 @@ const optionBDailyDryRun = (dayDocs = [], logs = [], defaultUnitPrice = 0.5) => 
   });
   return result;
 };
+
+/**
+ * Authoritative totals from stamped history (read-only integrity / repair
+ * primitive). Only FOLDED day docs + stamped legacy logs count (a malicious or
+ * client could edit/delete a log without decrementing `baselineSaved`; see
+ * docs/financial-semantics.md). A repair would set the stored aggregates to
+ * this value, which is idempotent because it is derived, not a delta.
+ */
+const expectedLifetimeAggregates = (dayDocs = [], logs = []) => {
+  const out = { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 };
+  const add = (c) => {
+    if (!c) return;
+    out.saved += Number.isFinite(c.saved) ? c.saved : 0;
+    out.wasted += Number.isFinite(c.wasted) ? c.wasted : 0;
+    out.smokingUnits += Number.isFinite(c.smokingUnits) ? c.smokingUnits : 0;
+    out.baselineSaved += Number.isFinite(c.baselineSaved) ? c.baselineSaved : 0;
+  };
+  (dayDocs || []).forEach((d) => { if (d?.foldedIntoLifetime) add(d.aggregateCredit); });
+  (logs || []).forEach((l) => add(l?.aggregateCredit));
+  return out;
+};
+
+// Day archives merged with same-date manual entries — an archive must not
+const aggregateLoggedCounts = (logs) => {
+  const archives = {};
+  const others = {};
+  (logs || []).forEach((log) => {
+    if (!log?.logDate) return;
+    if (isDayArchiveLog(log)) {
+      archives[log.logDate] = log.counts || {};
+    } else {
+      const day = others[log.logDate] || (others[log.logDate] = {});
+      Object.entries(log.counts || {}).forEach(([id, v]) => {
+        day[id] = (day[id] || 0) + Math.max(0, v || 0);
+      });
+    }
+  });
+  const out = {};
+  new Set([...Object.keys(archives), ...Object.keys(others)]).forEach((date) => {
+    out[date] = mergeCounts(archives[date], others[date] || {});
+  });
+  return out;
+};
+
+/**
+ * Overlay `days/{date}` documents (the dated daily-document model — see
+ * registryService.js) onto counts already aggregated from the legacy `logs`
+ * collection. A given calendar date is produced by exactly one of the two
+ * collections in practice (the day-doc model only starts writing from the
+ * date this schema shipped forward), so this is a safe additive merge rather
+ * than a precedence question.
+ */
+const mergeDayDocsIntoLogged = (logged, dayDocs) => {
+  const out = { ...(logged || {}) };
+  (dayDocs || []).forEach((d) => {
+    if (!d?.date) return;
+    out[d.date] = mergeCounts(out[d.date], d.counts || {});
+  });
+  return out;
+};
+
+const projectLoggedCounts = (logs, dayDocs, trackingDay, activeCounts = {}) => {
+  const out = aggregateLoggedCounts(logs);
+  const hasActive = Object.keys(activeCounts).length > 0;
+  (dayDocs || []).forEach((day) => {
+    const counts = day.date === trackingDay && day.status !== 'closed' && hasActive ? activeCounts : day.counts;
+    out[day.date] = mergeCounts(out[day.date], counts || {});
+  });
+  if (hasActive && !(dayDocs || []).some((day) => day.date === trackingDay)) {
+    out[trackingDay] = mergeCounts(out[trackingDay], activeCounts);
+  }
+  return out;
+};
+
+/** `{ [date]: trackerSnapshots }` for every day-doc that has one. */
+const snapshotsByDate = (dayDocs) => {
+  const out = {};
+  (dayDocs || []).forEach((d) => {
+    if (d?.date && d.trackerSnapshots) out[d.date] = d.trackerSnapshots;
+  });
+  return out;
+};
+
+/**
+ * Effective historical target for a tracker on a given day.
+ *
+ * Prefers the target stamped in that day's trackerSnapshots (item 2 —
+ * historical config, immune to later edits of the live tracker). Falls back
+ * to the tracker's current live limit ONLY when no snapshot exists for that
+ * day/tracker — i.e. legacy data written before this schema, or a tracker
+ * that was never touched that day. This fallback is a documented, explicit
+ * choice and is never silently different
+ * from what the UI shows: legacy days are the only ones affected, and they
+ * carry no other historical-config record either.
+ */
+const effectiveTarget = (snapshotsForDate, config) => {
+  const snap = snapshotsForDate?.[config.id];
+  if (snap && Number.isFinite(snap.target)) return Math.max(0, snap.target);
+  return Math.max(0, config.limit || 0);
+};
+
+/**
+ * Financial/unit contribution of a `days/{date}` document computed ENTIRELY
+ * from its own stamped `trackerSnapshots` — never from live tracker configs.
+ * This is what makes a day doc historically self-contained (item 2): once
+ * written, its meaning cannot be changed by editing, repricing, renaming, or
+ * deleting the live tracker afterward. Used to (re)stamp `aggregateCredit`
+ * whenever a day's counts change, on both the live (open, today) path and
+ * historical edits.
+ */
+const computeDayCredit = (counts, trackerSnapshots, defaultUnitPrice = 0.5) => {
+  let wasted = 0;
+  let saved = 0;
+  let smokingUnits = 0;
+  let baselineSaved = 0;
+  Object.entries(trackerSnapshots || {}).forEach(([id, snap]) => {
+    const count = Math.max(0, (counts || {})[id] || 0);
+    const target = Math.max(0, snap?.target || 0);
+    const price = snap?.unitPrice == null ? defaultUnitPrice : snap.unitPrice;
+    if (snap?.isFinanciallyTracked !== false) {
+      wasted += count * price;
+      saved += Math.max(0, target - count) * price;
+      if (snap?.baseline != null) {
+        baselineSaved += Math.max(0, snap.baseline - count) * price;
+      }
+    }
+    if (SMOKING_TYPES.includes(snap?.type)) smokingUnits += count;
+  });
+  return { wasted, saved, smokingUnits, baselineSaved };
+};
+
 export const SmokingCalculator = {
   mergeCounts,
   aggregateLoggedCounts,
@@ -267,6 +335,10 @@ export const SmokingCalculator = {
   projectLoggedCounts,
   snapshotsByDate,
   computeDayCredit,
+  mergeEffectiveToday,
+  dayDocCountsByDate,
+  expectedLifetimeAggregates,
+  calculateDailyFinancials,
   optionBDailyDryRun,
   LIFE_MINUTES_PER_UNIT,
 
@@ -619,20 +691,26 @@ export const SmokingCalculator = {
     const smokingIds = new Set(
       (configs || []).filter((c) => SMOKING_TYPES.includes(c.type)).map((c) => c.id)
     );
-    if (smokingIds.size === 0) return 0;
 
-    let total = lifetimeSmokingUnits != null
-      ? Math.max(0, lifetimeSmokingUnits)
-      : (() => {
-          let fromLogs = 0;
-          const logged = aggregateLoggedCounts(logs);
-          Object.values(logged).forEach((dayCounts) => {
-            smokingIds.forEach((id) => {
-              fromLogs += Math.max(0, dayCounts[id] || 0);
-            });
-          });
-          return fromLogs;
-        })();
+    // The archived smoking-unit total is an authoritative, config-independent
+    // stamp (AUD-008): deleting/renaming/retyping a tracker must NOT erase the
+    // historical health estimate. Only the legacy fallback (no stored total)
+    // needs the live configs to classify units, so its empty-config bail-out is
+    // confined to that branch.
+    let total;
+    if (lifetimeSmokingUnits != null) {
+      total = Math.max(0, lifetimeSmokingUnits);
+    } else {
+      if (smokingIds.size === 0) return 0;
+      let fromLogs = 0;
+      const logged = aggregateLoggedCounts(logs);
+      Object.values(logged).forEach((dayCounts) => {
+        smokingIds.forEach((id) => {
+          fromLogs += Math.max(0, dayCounts[id] || 0);
+        });
+      });
+      total = fromLogs;
+    }
 
     Object.entries(activeCounts || {}).forEach(([id, v]) => {
       if (smokingIds.has(id)) total += Math.max(0, v || 0);

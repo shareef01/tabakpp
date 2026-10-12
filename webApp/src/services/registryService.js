@@ -154,7 +154,6 @@ const contributionFrom = (counts, configs, price) => {
     // drift apart for every manual-entry / legacy-log write.
     baselineSaved: baseline.moneySaved,
     smokingUnits: SmokingCalculator.sumSmokingUnits(counts || {}, configs),
-    baselineSaved: 0,
   };
 };
 

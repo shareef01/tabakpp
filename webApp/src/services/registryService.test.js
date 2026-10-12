@@ -271,7 +271,10 @@ describe('RegistryService.closeDay', () => {
       status: 'open',
     });
 
-    await RegistryService.closeDay(UID, DATE);
+    // PR83 contract: an explicit user "End day" with nothing open throws;
+    // the reconcile pass (allowEmpty=true) is what closes zero-count days.
+    await expect(RegistryService.closeDay(UID, DATE)).rejects.toThrow('NOTHING_TO_ARCHIVE');
+    await RegistryService.closeDay(UID, DATE, true);
 
     const d = dayDoc(DATE);
     expect(d.status).toBe('closed');
@@ -879,6 +882,10 @@ describe('AUD-007 — baselineSaved moves with saved on the manual/log write pat
       id: 'L1',
       logDate: '2026-07-05',
       counts: { cig: 2 },
+      // Stamped snapshots are required for a re-computed credit (PR83's
+      // HISTORICAL_PRICE_UNAVAILABLE guard: a snapshot-less edit cannot
+      // reconstruct historical prices safely).
+      trackerSnapshots: { cig: { type: 'CIGARETTE', target: 10, unitPrice: 1, baseline: 20, isFinanciallyTracked: true } },
       aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 18 },
     });
     seedUser({ lifetimeAggregates: baseAggB(), unitPrice: 0.5 });

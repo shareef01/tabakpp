@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   getDoc: vi.fn(),
   getDocs: vi.fn(),
   deleteDoc: vi.fn(),
+  setDoc: vi.fn(),
+  runTransaction: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({ db: { app: {} } }));
@@ -23,7 +25,7 @@ vi.mock('../firebase', () => ({ db: { app: {} } }));
 vi.mock('firebase/firestore', () => ({
   collection: vi.fn(),
   doc: vi.fn((_db, ...path) => ({ path: path.join('/') })),
-  setDoc: vi.fn(),
+  setDoc: h.setDoc,
   updateDoc: vi.fn(),
   deleteDoc: h.deleteDoc,
   getDoc: h.getDoc,
@@ -35,7 +37,7 @@ vi.mock('firebase/firestore', () => ({
   writeBatch: vi.fn(() => ({ delete: vi.fn(), commit: vi.fn() })),
   limit: vi.fn(),
   serverTimestamp: vi.fn(),
-  runTransaction: vi.fn(),
+  runTransaction: h.runTransaction,
   deleteField: vi.fn(),
   startAfter: vi.fn(),
 }));
@@ -80,11 +82,21 @@ describe('deleteAllUserData — financial-mode routing', () => {
 
   it('LEGACY: keeps the client-side wipe and never calls the function', async () => {
     h.getDoc.mockResolvedValue(snapOf({ financialMode: 'LEGACY' }));
+    // PR83 tombstone: the fence transaction writes {deleting: true}, sub-
+    // collections drain, and a final setDoc leaves the minimal tombstone.
+    h.runTransaction.mockImplementation(async (_db, fn) => fn({
+      get: vi.fn().mockResolvedValue(snapOf({ financialMode: 'LEGACY' })),
+      update: vi.fn(),
+      set: vi.fn(),
+    }));
 
     await RegistryService.deleteAllUserData('u1');
 
     expect(TrustedFinancial.deleteAccountData).not.toHaveBeenCalled();
-    expect(h.deleteDoc).toHaveBeenCalledWith({ path: 'users/u1' });
+    // Tombstone contract: the profile is fenced with {deleting: true}
+    // (setDoc, not deleteDoc) so a stale Auth token cannot recreate data.
+    expect(h.deleteDoc).not.toHaveBeenCalled();
+    expect(h.setDoc).toHaveBeenCalledWith(expect.objectContaining({ path: 'users/u1' }), { deleting: true });
   });
 
   it('a callable failure propagates, so the caller does not go on to delete the Auth user', async () => {
