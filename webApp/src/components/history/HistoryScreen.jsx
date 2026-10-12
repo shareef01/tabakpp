@@ -64,9 +64,7 @@ const sumCounts = (counts = {}) =>
  * additively alongside legacy `logs`; the two never cover the same date.
  */
 export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = []) => {
-  const legacyLogged = SmokingCalculator.aggregateLoggedCounts(logs);
-  const logged = SmokingCalculator.mergeDayDocsIntoLogged(legacyLogged, dayDocs);
-  const dayDocCounts = SmokingCalculator.dayDocCountsByDate(dayDocs);
+  const logged = SmokingCalculator.projectLoggedCounts(logs, dayDocs, today, activeCounts);
   const series = [];
   for (let i = days - 1; i >= 1; i -= 1) {
     const date = shiftDateStr(today, -i);
@@ -82,11 +80,9 @@ export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = [
     name: 'NOW',
     date: today,
     dateLabel: 'Today',
-    // The live overlay already contains today's persisted day-doc counts;
-    // starting from the legacy-only base prevents doubling today's units
-    // (AUD-001). Falls back to the day doc when the overlay is empty so today
-    // never disappears.
-    val: sumCounts(SmokingCalculator.mergeEffectiveToday(legacyLogged[today], activeCounts, dayDocCounts[today])),
+    // projectLoggedCounts already projected the live session over today's
+    // persisted day doc (replace, not merge) — no double-counting (AUD-001).
+    val: sumCounts(logged[today]),
     isNow: true,
   });
   return series;

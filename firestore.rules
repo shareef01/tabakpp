@@ -280,9 +280,8 @@ service cloud.firestore {
         'pouchPrice', 'estimatedYield', 'dayStartHour', 'activeCounts',
         'lifetimeAggregates', 'smokingUnitsMigrated', 'avatar', 'createdAt', 'updatedAt',
         'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield',
-        'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
+        'deleting', 'smokingMigrationLeaseId', 'smokingMigrationLeaseUntil', 'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
           'migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice',
-        'deleting', 'smokingMigrationLeaseId', 'smokingMigrationLeaseUntil',
         // OPTION B — account financial write mode ('LEGACY' | 'OPTION_B').
         'financialMode'
       ]);
@@ -712,8 +711,6 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isOwner(userId);
-      // A tombstone-only create ({deleting: true}) is how deleteAllUserData
-      // fences the account before draining collections when no profile exists.
       allow create: if isOwner(userId) && (validCreateProfile() || request.resource.data.keys().hasOnly(['deleting']) && request.resource.data.deleting == true);
       // The client may never rewrite its own financial mode (the trusted
       // migration function owns LEGACY→MIGRATING→OPTION_B via the Admin SDK),
@@ -770,6 +767,9 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow create: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validDayCreate(date);
         allow update: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validDayUpdate(date);
+        // Deletion is intentionally still permitted (Spark account wipe, and
+        // an owner's general right to erase their own data) — it does not
+        // rewrite a day's meaning, only remove the record entirely.
         allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
       }
 

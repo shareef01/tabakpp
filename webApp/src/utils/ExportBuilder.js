@@ -133,7 +133,9 @@ export function buildJson(snapshot, generatedAt = null) {
     application: { name: 'Tabakpp' },
     profile: snapshot.profile ? {
       name: snapshot.profile.name || '',
-      // `??`, not `||`: 0 is a valid (free) price, not "unset".
+      deleting: snapshot.profile.deleting ?? false,
+      smokingMigrationLeaseId: snapshot.profile.smokingMigrationLeaseId ?? null,
+      smokingMigrationLeaseUntil: snapshot.profile.smokingMigrationLeaseUntil ?? null,
       unitPrice: snapshot.profile.unitPrice ?? 0.5,
       unitsPerPack: snapshot.profile.unitsPerPack || 20,
       pouchPrice: snapshot.profile.pouchPrice || 0.0,
