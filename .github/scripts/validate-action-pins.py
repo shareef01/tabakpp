@@ -194,7 +194,8 @@ def check_release_notes_consistency(workflow_dir):
         text = f.read()
 
     # Any `.../release-notes/<name>.md` referenced anywhere (the gate use).
-    referenced = re.findall(r"release-notes/([A-Za-z0-9_.$\{\}]+\.md)", text)
+    # The hyphen must be in the class so `needs.require-ci` expressions survive.
+    referenced = re.findall(r"release-notes/([A-Za-z0-9_.$\{\}-]+\.md)", text)
     # body_path values can contain spaces (`${{ github.event.inputs.version }}`),
     # so capture the whole remainder of the line.
     body_paths = [m.strip() for m in re.findall(r"^\s*body_path:\s*(.+?)\s*$", text, re.MULTILINE)]
@@ -202,7 +203,10 @@ def check_release_notes_consistency(workflow_dir):
         return violations
 
     def normalize(value):
+        # All expression forms the release workflow uses for the version:
+        # workflow_dispatch input, shell variable, and the require-ci output.
         value = value.replace("${{ github.event.inputs.version }}", "<V>")
+        value = value.replace("${{ needs.require-ci.outputs.release_version }}", "<V>")
         value = value.replace("${VERSION}", "<V>")
         return value
 
