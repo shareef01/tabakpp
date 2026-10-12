@@ -64,9 +64,7 @@ const sumCounts = (counts = {}) =>
  * additively alongside legacy `logs`; the two never cover the same date.
  */
 export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = []) => {
-  const logged = SmokingCalculator.mergeDayDocsIntoLogged(
-    SmokingCalculator.aggregateLoggedCounts(logs), dayDocs
-  );
+  const logged = SmokingCalculator.projectLoggedCounts(logs, dayDocs, today, activeCounts);
   const series = [];
   for (let i = days - 1; i >= 1; i -= 1) {
     const date = shiftDateStr(today, -i);
@@ -82,7 +80,7 @@ export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = [
     name: 'NOW',
     date: today,
     dateLabel: 'Today',
-    val: sumCounts(logged[today]) + sumCounts(activeCounts),
+    val: sumCounts(logged[today]),
     isNow: true,
   });
   return series;

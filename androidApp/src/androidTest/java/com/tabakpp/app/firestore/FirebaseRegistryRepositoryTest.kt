@@ -24,6 +24,8 @@ import kotlinx.coroutines.runBlocking
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.TimeUnit
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
@@ -241,12 +243,9 @@ class FirebaseRegistryRepositoryTest {
             testUid = uid
             Log.d(TAG, "test.uid set to: $uid")
 
-            // Optional cleanup — a missing stale document is legitimate.
-            try {
-                repository.deleteAllUserData(uid)
-            } catch (e: Exception) {
-                Log.d(TAG, "deleteAllUserData (non-fatal): ${e.message}")
-            }
+            // Reset only the disposable emulator database. Production deletion
+            // permanently fences a UID and must never serve as fixture cleanup.
+            resetEmulatorDocuments()
 
             // REQUIRED fixture construction (owner-only paths, L490 / L500).
             try {
@@ -281,6 +280,27 @@ class FirebaseRegistryRepositoryTest {
                 )
             }
             Log.d(TAG, "Config existence verified: users/$uid/configs/$TEST_TRACKER_ID")
+        }
+    }
+
+    private fun resetEmulatorDocuments() {
+        val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
+        check(projectId == "demo-tabakpp-test") { "Fixture reset requires the demo test project" }
+        check(FIRESTORE_HOST == "127.0.0.1") { "Fixture reset requires the loopback emulator" }
+        // This class runs sequentially against a dedicated CI emulator. Clearing
+        // Firestore keeps the class-scoped Auth session and loaded rules intact.
+        val connection = URL(
+            "http://$FIRESTORE_HOST:$FIRESTORE_PORT/emulator/v1/projects/$projectId/databases/(default)/documents"
+        ).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "DELETE"
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            val status = connection.responseCode
+            check(status in 200..299) { "Emulator fixture reset failed: HTTP $status" }
+            connection.inputStream.use { it.readBytes() }
+        } finally {
+            connection.disconnect()
         }
     }
 
@@ -692,6 +712,25 @@ class FirebaseRegistryRepositoryTest {
             assertEquals(1.5, profileFlow!!.lifetimeAggregates.wasted, 0.001)
             assertEquals(8.5, profileFlow!!.lifetimeAggregates.saved, 0.001)
             assertEquals(3.0, profileFlow.lifetimeAggregates.smokingUnits, 0.001)
+
+            // Separate lifecycle proof using the unchanged production operation.
+            // A fresh repository represents a stale client holding the same UID.
+            repository.deleteAllUserData(testUid)
+            val userRef = firestore.collection("users").document(testUid)
+            assertTrue(userRef.get().data<UserProfile>().deleting)
+            assertTrue(userRef.collection("configs").get().documents.isEmpty())
+            assertTrue(userRef.collection("days").get().documents.isEmpty())
+            val staleWrite = assertFailsWith<Exception> {
+                freshRepo.addConfig(testUid, TrackerConfig(
+                    id = TEST_TRACKER_ID, name = "Stale client", limit = 20, order = 0,
+                    type = TrackerType.CIGARETTE, pricePerUnit = 0.5,
+                    createdAt = Timestamp(0, 0), updatedAt = Timestamp(0, 0)
+                ))
+            }
+            assertEquals(FirestoreExceptionCode.PERMISSION_DENIED, extractFirestoreCode(staleWrite))
+            val removeFence = assertFailsWith<Exception> { userRef.delete() }
+            assertEquals(FirestoreExceptionCode.PERMISSION_DENIED, extractFirestoreCode(removeFence))
+            assertFalse(userRef.collection("configs").document(TEST_TRACKER_ID).get().exists)
         }
     }
 
