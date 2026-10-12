@@ -19,6 +19,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -82,7 +83,14 @@ private class FakeRegistryRepository : RegistryRepository {
     override fun subscribeToUserProfile(uid: String): Flow<UserProfile?> = profileFlow
     override fun subscribeToConfigs(uid: String): Flow<List<TrackerConfig>> = configsFlow
     override fun subscribeToLogs(uid: String): Flow<List<LogEntry>> = logsFlow
-    override fun subscribeToDay(uid: String, date: String): Flow<DayDocument?> = dayFlow
+    val subscribeDayCalls = mutableListOf<Pair<String, String>>()
+    override fun subscribeToDay(uid: String, date: String): Flow<DayDocument?> {
+        subscribeDayCalls.add(uid to date)
+        // Date fidelity: a real subscription to days/{date} never replays a
+        // DIFFERENT day's document. Dateless docs (legacy test helper shape)
+        // stay date-agnostic so existing tests keep their meaning.
+        return dayFlow.map { doc -> doc?.takeIf { it.date.isEmpty() || it.date == date } }
+    }
     override fun subscribeToDays(uid: String): Flow<List<DayDocument>> = daysFlow
     override fun subscribeToProfileExtra(uid: String): Flow<ProfileExtra?> = avatarFlow
 
@@ -137,6 +145,11 @@ private class FakeNetworkObserver(var online: Boolean = true) : NetworkObserver 
     fun goOffline() { online = false; (isOnline as MutableStateFlow).value = false }
 }
 
+/** Deterministic clock for tracking-day tests — advance [now] to cross boundaries. */
+private class FakeClock(var now: kotlinx.datetime.Instant) : kotlinx.datetime.Clock {
+    override fun now(): kotlinx.datetime.Instant = now
+}
+
 // --- tests ----------------------------------------------------------------
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -155,9 +168,18 @@ class RegistryViewModelTest {
         auth: FakeAuthRepository = FakeAuthRepository(user),
         reg: FakeRegistryRepository = FakeRegistryRepository(),
         networkObserver: FakeNetworkObserver = FakeNetworkObserver(),
+        clock: FakeClock = FakeClock(kotlinx.datetime.Instant.parse("2026-06-01T12:00:00Z")),
+        timeZoneProvider: () -> kotlinx.datetime.TimeZone = { kotlinx.datetime.TimeZone.UTC },
     ): Triple<RegistryViewModel, FakeRegistryRepository, FakeNetworkObserver> {
-        val vm = RegistryViewModel(auth, reg, FakeLocalSettings(), networkObserver)
+        val vm = RegistryViewModel(auth, reg, FakeLocalSettings(), networkObserver, clock, timeZoneProvider)
         scheduler.runCurrent() // let Eagerly authUser + init collectors settle (loop stays parked)
+        // Settle the initial profile-sync window deterministically: with no
+        // profile in the fake, the 12s sync timeout expires on virtual time and
+        // loading clears — matching production, where taps are only gated
+        // while the day-start setting is genuinely unknown.
+        scheduler.advanceTimeBy(12_500)
+        scheduler.runCurrent()
+        vm.clearError() // drop the one-shot "Profile sync timed out" state for isolation
         return Triple(vm, reg, networkObserver)
     }
 
@@ -834,5 +856,167 @@ class RegistryViewModelTest {
         scheduler.runCurrent()
         assertEquals(4.0, vm.activeCounts.value["cig"])
         assertNull(vm.error.value)
+    }
+
+    // --- tracking-day determinism (injected clock/zone) -----------------------
+
+    @Test
+    fun increment_atMidnight_datesCountToTheNewDay_withoutWaitingForPoll() {
+        // dayStartHour = 0 -> the day rolls at 00:00 local. The poll (30s) has
+        // NOT fired and the profile has NOT changed: only the tap itself knows
+        // the boundary was crossed.
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-03-07T23:59:59Z"))
+        val (vm, reg, _) = build(clock = clock)
+        reg.profileFlow.value = UserProfile(dayStartHour = 0)
+        reg.dayFlow.value = DayDocument(date = "2026-03-07", counts = mapOf("cig" to 2.0))
+        scheduler.runCurrent()
+        assertEquals("2026-03-07", vm.trackingDay.value)
+        assertEquals(2.0, vm.activeCounts.value["cig"])
+
+        clock.now = kotlinx.datetime.Instant.parse("2026-03-08T00:00:01Z")
+        vm.increment("cig")
+        scheduler.runCurrent()
+
+        assertEquals("2026-03-08", vm.trackingDay.value) // UI day advanced
+        assertEquals(1, reg.liveCounterCalls.size)
+        assertEquals("2026-03-08", reg.liveCounterCalls.first().trackingDate) // written to the NEW day
+        assertEquals("2026-03-08", reg.subscribeDayCalls.last().second) // live listener re-keyed
+
+        // Optimistic state transitions to the new day, then reconciles with
+        // the server snapshot for that day without double-counting.
+        reg.dayFlow.value = DayDocument(date = "2026-03-08", counts = mapOf("cig" to 1.0))
+        scheduler.runCurrent()
+        assertEquals(1.0, vm.activeCounts.value["cig"])
+        assertNull(vm.error.value)
+    }
+
+    @Test
+    fun increment_atCustomDayStart_datesCountToTheNextDay() {
+        // dayStartHour = 23 -> 22:59 belongs to "yesterday" (the running day
+        // started at 23:00 the calendar day before).
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-06-01T22:59:59Z"))
+        val (vm, reg, _) = build(clock = clock)
+        reg.profileFlow.value = UserProfile(dayStartHour = 23)
+        scheduler.runCurrent()
+        assertEquals("2026-05-31", vm.trackingDay.value)
+
+        clock.now = kotlinx.datetime.Instant.parse("2026-06-01T23:00:01Z")
+        vm.increment("cig")
+        scheduler.runCurrent()
+
+        assertEquals("2026-06-01", vm.trackingDay.value)
+        assertEquals("2026-06-01", reg.liveCounterCalls.first().trackingDate)
+    }
+
+    @Test
+    fun increment_acrossDstSpringForward_datesCountToLocalDay() {
+        // Europe/London 2026-03-29: local times 01:00-01:59 do not exist
+        // (clocks jump 01:00 GMT -> 02:00 BST). The date must follow LOCAL
+        // wall-clock hours, not fixed offsets.
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-03-29T00:30:00Z")) // local 00:30 GMT
+        val (vm, reg, _) = build(clock = clock, timeZoneProvider = { kotlinx.datetime.TimeZone.of("Europe/London") })
+        reg.profileFlow.value = UserProfile(dayStartHour = 6)
+        scheduler.runCurrent()
+        assertEquals("2026-03-28", vm.trackingDay.value) // 00:30 < 06:00 -> running day = 28th
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals("2026-03-28", reg.liveCounterCalls[0].trackingDate)
+
+        clock.now = kotlinx.datetime.Instant.parse("2026-03-29T05:30:00Z") // local 06:30 BST
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals("2026-03-29", reg.liveCounterCalls[1].trackingDate) // 06:30 >= 06:00 -> new day
+    }
+
+    @Test
+    fun increment_acrossDstFallBack_datesCountToLocalDay() {
+        // Europe/London 2026-10-25: 02:00 BST -> 01:00 GMT (local hour repeats).
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-10-25T00:30:00Z")) // local 01:30 BST
+        val (vm, reg, _) = build(clock = clock, timeZoneProvider = { kotlinx.datetime.TimeZone.of("Europe/London") })
+        reg.profileFlow.value = UserProfile(dayStartHour = 6)
+        scheduler.runCurrent()
+        assertEquals("2026-10-24", vm.trackingDay.value)
+
+        clock.now = kotlinx.datetime.Instant.parse("2026-10-25T05:30:00Z") // local 05:30 GMT
+        vm.increment("cig")
+        scheduler.runCurrent()
+        // Still before 06:00 local despite being 05:30Z — no spurious rollover.
+        assertEquals("2026-10-24", reg.liveCounterCalls[0].trackingDate)
+
+        clock.now = kotlinx.datetime.Instant.parse("2026-10-25T06:30:00Z") // local 06:30 GMT
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals("2026-10-25", reg.liveCounterCalls[1].trackingDate)
+    }
+
+    @Test
+    fun increment_afterTimezoneChange_usesTheNewZoneForDateDerivation() {
+        // Simulates a device zone change (e.g. user flies UTC -> Auckland):
+        // the injected provider is re-evaluated at every mutation, so the date
+        // follows the zone in effect at tap time.
+        var tz: kotlinx.datetime.TimeZone = kotlinx.datetime.TimeZone.UTC
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-06-01T20:00:00Z"))
+        val (vm, reg, _) = build(clock = clock, timeZoneProvider = { tz })
+        assertEquals("2026-06-01", vm.trackingDay.value) // 20:00 local UTC
+
+        tz = kotlinx.datetime.TimeZone.of("Pacific/Auckland") // local 08:00 on 2026-06-02
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals("2026-06-02", vm.trackingDay.value)
+        assertEquals("2026-06-02", reg.liveCounterCalls.first().trackingDate)
+    }
+
+    @Test
+    fun increment_whileProfileSyncPending_isBlockedUntilDayStartHourIsKnown() {
+        // Before the profile arrives, dayStartHour is unknown: a tap at a
+        // custom boundary would be dated with the default hour and land on the
+        // wrong days/{date} document. Taps must be blocked, then dated with
+        // the real setting once the profile lands.
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-06-01T22:30:00Z"))
+        val reg = FakeRegistryRepository()
+        val vm = RegistryViewModel(
+            FakeAuthRepository(user), reg, FakeLocalSettings(), FakeNetworkObserver(), clock
+        ) { kotlinx.datetime.TimeZone.UTC }
+        scheduler.runCurrent() // auth session started; profile sync in flight (loading=true)
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertTrue(reg.liveCounterCalls.isEmpty(), "writes must be blocked while dayStartHour is unknown")
+        assertNotNull(vm.error.value)
+
+        reg.profileFlow.value = UserProfile(dayStartHour = 23)
+        scheduler.runCurrent() // profile arrives -> loading clears, day known
+        assertEquals("2026-05-31", vm.trackingDay.value) // 22 < 23 -> running day = 31st
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1, reg.liveCounterCalls.size)
+        assertEquals("2026-05-31", reg.liveCounterCalls.first().trackingDate)
+    }
+
+    @Test
+    fun endDay_afterRollover_closesTheFreshlyDerivedDay() {
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-03-07T23:59:59Z"))
+        val (vm, reg, _) = build(clock = clock)
+        reg.profileFlow.value = UserProfile(dayStartHour = 0)
+        scheduler.runCurrent()
+        assertEquals("2026-03-07", vm.trackingDay.value)
+
+        clock.now = kotlinx.datetime.Instant.parse("2026-03-08T00:00:01Z")
+        vm.endDay()
+        scheduler.runCurrent()
+        assertEquals(1, reg.closeDayCalls.size)
+        assertEquals("2026-03-08", reg.closeDayCalls.first().second)
+    }
+
+    @Test
+    fun profileEmission_recomputesTrackingDayImmediately_withProfileDayStartHour() {
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-06-01T22:30:00Z"))
+        val (vm, reg, _) = build(clock = clock)
+        assertEquals("2026-06-01", vm.trackingDay.value) // default hour 6: 22 >= 6 -> today
+
+        reg.profileFlow.value = UserProfile(dayStartHour = 23)
+        scheduler.runCurrent() // collector must recompute WITHOUT the 30s poll advancing
+        assertEquals("2026-05-31", vm.trackingDay.value) // 22 < 23 -> running day = 31st
     }
 }

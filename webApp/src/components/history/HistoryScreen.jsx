@@ -163,6 +163,9 @@ export const HistoryScreen = React.memo(({
   const [olderLogs, setOlderLogs] = useState([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [olderCursor, setOlderCursor] = useState(null);
+  // Deterministic document-snapshot cursor (M-02): a date-only cursor re-enters
+  // the middle of a group of logs sharing one logDate and can duplicate rows.
+  const [olderCursorDocId, setOlderCursorDocId] = useState(null);
   const [olderExhausted, setOlderExhausted] = useState(false);
 
   const velocityPeriod = VELOCITY_PERIODS.find((p) => p.days === velocityDays) || VELOCITY_PERIODS[0];
@@ -220,22 +223,43 @@ export const HistoryScreen = React.memo(({
     setLoadingOlder(true);
     setActionError(null);
     try {
-      const { items, hasMore, nextCursor } = await RegistryService.fetchOlderLogs(userId, {
-        cursorLogDate: olderCursor || (logs[logs.length - 1]?.logDate ?? undefined),
+      // Exact document cursor on EVERY page, including the first: the live
+      // window (orderBy logDate desc, limit 1200) ends mid-group when the
+      // boundary date holds many logs, so the first page must resume from the
+      // live window's LAST document id — a date-only cursor re-enters the
+      // middle of that group. The date cursor is passed as a fallback for the
+      // case where the cursor document has since been deleted.
+      const liveLast = (logs && logs.length) ? logs[logs.length - 1] : null;
+      const cursorDocId = olderCursorDocId || liveLast?.id || undefined;
+      const cursorDate = olderCursor || liveLast?.logDate || undefined;
+      const { items, hasMore, nextCursor, nextCursorDocId } = await RegistryService.fetchOlderLogs(userId, {
+        cursorLogId: cursorDocId,
+        cursorLogDate: cursorDate,
       });
+      let added = 0;
       setOlderLogs((prev) => {
+        // Dedupe against BOTH the paged window and the live subscription —
+        // the live limit(1200) boundary can split a same-date group and the
+        // next page re-fetches those rows.
         const seen = new Set(prev.map((l) => l.id));
-        return [...prev, ...items.filter((l) => !seen.has(l.id))];
+        (logs || []).forEach((l) => seen.add(l.id));
+        const fresh = items.filter((l) => !seen.has(l.id));
+        added = fresh.length;
+        return [...prev, ...fresh];
       });
       setOlderCursor(nextCursor);
-      if (!hasMore) setOlderExhausted(true);
+      setOlderCursorDocId(nextCursorDocId);
+      // Forward-progress guarantee: a page that adds nothing new (e.g. the
+      // cursor document was deleted and even the fallback returned known rows)
+      // must not leave the button spinning forever.
+      if (!hasMore || added === 0) setOlderExhausted(true);
     } catch (err) {
       console.error(err);
       setActionError(mapFirestoreError(err, 'Could not load older entries.'));
     } finally {
       setLoadingOlder(false);
     }
-  }, [userId, loadingOlder, olderExhausted, olderCursor, logs]);
+  }, [userId, loadingOlder, olderExhausted, olderCursor, olderCursorDocId, logs]);
 
   // Aggregate by date (dated day docs + legacy archives/manual entries) — Android chart parity.
   const chartData = useMemo(
