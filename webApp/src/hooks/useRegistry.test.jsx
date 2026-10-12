@@ -80,7 +80,10 @@ const dayData = (counts = {}, over = {}) => ({ date: TODAY, counts, trackerSnaps
 
 // Mount the hook and push an initial profile/configs/logs/day snapshot through.
 const mountHydrated = ({ user = USER, profile = defaultProfile(), configs = [CIG], logs = [], day = dayData() } = {}) => {
-  const view = renderHook((props) => useRegistry(props.user, TODAY, 0.5), { initialProps: { user } });
+  // Pinned clock aligned with the fixed TODAY prop (Android test-seam parity):
+  // mutation-time date derivation must resolve to TODAY, not the real clock.
+  const pinnedNow = () => new Date('2026-07-20T12:00:00');
+  const view = renderHook((props) => useRegistry(props.user, TODAY, 0.5, null, pinnedNow), { initialProps: { user } });
   if (user) {
     act(() => cap.profileCb.current(profileSnap(profile)));
     act(() => cap.configsCb.current(configs));
@@ -468,8 +471,11 @@ describe('H-01 Concurrency & Day Rollover Invariants', () => {
       () => new Promise((resolve) => { releaseYesterday = resolve; })
     );
     const TOMORROW = '2026-07-21';
+    // Injectable clock: pinned just before midnight, advanced when the test
+    // simulates midnight (mutation-time date derivation reads THIS clock).
+    let pinned = new Date('2026-07-20T23:59:59');
     const { result, rerender } = renderHook(
-      (props) => useRegistry(props.user, props.today, 0.5),
+      (props) => useRegistry(props.user, props.today, 0.5, null, () => pinned),
       { initialProps: { user: USER, today: TODAY } }
     );
     act(() => cap.profileCb.current(profileSnap(defaultProfile())));
@@ -488,6 +494,7 @@ describe('H-01 Concurrency & Day Rollover Invariants', () => {
 
     // Wall-clock midnight arrives -> today changes to TOMORROW
     act(() => {
+      pinned = new Date('2026-07-21T00:00:01');
       rerender({ user: USER, today: TOMORROW });
     });
     // Attach listener for TOMORROW (starts empty / 0)

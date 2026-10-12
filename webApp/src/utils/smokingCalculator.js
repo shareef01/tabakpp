@@ -10,7 +10,7 @@
  * DomainContractFixturesTest — see shared-tests/README.md.
  */
 
-const DAY_START_HOUR_DEFAULT = 6;
+export const DAY_START_HOUR_DEFAULT = 6;
 const SMOKING_TYPES = ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING'];
 
 /**
