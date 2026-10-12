@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Undo2, Loader2 } from 'lucide-react';
 import { cn } from '../../utils/utils';
@@ -22,14 +22,25 @@ export const UndoToast = ({
 }) => {
   const [busy, setBusy] = useState(false);
 
+  // Hold onDismiss in a ref: callers pass a fresh inline arrow each render, so
+  // including it in the effect deps restarted the auto-dismiss timer on EVERY
+  // parent re-render (e.g. the matching day-doc snapshot arriving right after
+  // an increment) — the advertised UNDO_TOAST_MS window silently stretched.
+  // The countdown bar below is keyed on toastKey, so only toastKey/duration
+  // may restart the timer to keep bar and timer in lock-step.
+  const onDismissRef = useRef(onDismiss);
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  });
+
   useEffect(() => {
     if (!open) {
       setBusy(false);
       return undefined;
     }
-    const id = setTimeout(() => onDismiss?.(), duration);
+    const id = setTimeout(() => onDismissRef.current?.(), duration);
     return () => clearTimeout(id);
-  }, [open, toastKey, duration, onDismiss]);
+  }, [open, toastKey, duration]);
 
   const handleUndo = useCallback(async () => {
     if (busy || !onUndo) return;

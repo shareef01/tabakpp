@@ -608,6 +608,11 @@ jobs:
           key: android-sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.sdk-cache.outputs.image }}-api35-default-x86_64-${{ hashFiles('.github/workflows/android-integration.yml') }}
 
       - name: Set up emulator and run instrumentation tests
+        # Historical normal duration is ~10 min; a successful full run is
+        # ~16 min. Without a per-step cap an emulator boot hang (observed:
+        # 50+ min of no progress on PR #85) silently burns the 60-min job
+        # budget — auto-fail instead so the run can simply be re-run.
+        timeout-minutes: 25
         run: |
           set -euo pipefail
 
@@ -813,7 +818,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: instrumentation-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           retention-days: 30
