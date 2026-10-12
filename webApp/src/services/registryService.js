@@ -723,14 +723,11 @@ export const RegistryService = {
       if (cursorSnap.exists()) {
         q = query(base, startAfter(cursorSnap));
       } else if (cursorLogDate) {
-        // Deleted cursor document: fall back to the newest document that
-        // shares its date, positioning strictly after it.
-        const cursorDocs = await getDocs(
-          query(ref, orderBy('logDate', 'desc'), where('logDate', '==', cursorLogDate), limit(1))
-        );
-        if (!cursorDocs.empty) {
-          q = query(base, startAfter(cursorDocs.docs[0]));
-        }
+        // Deleted cursor document: position after its exact index location
+        // (date + document id). The SDK accepts a raw document-ID string for
+        // the __name__ cursor value — the document does not need to exist —
+        // so no already-paged row sharing the cursor's date is re-delivered.
+        q = query(base, startAfter(cursorLogDate, cursorLogId));
       }
       if (!q) {
         // Unresolvable cursor (deleted doc, no date fallback): report

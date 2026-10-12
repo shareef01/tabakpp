@@ -278,16 +278,16 @@ export const HistoryScreen = React.memo(({
       let added = 0;
       if (logPage) {
         const { items, hasMore, nextCursor, nextCursorDocId } = logPage;
-        setOlderLogs((prev) => {
-          // Dedupe against BOTH the paged window and the live subscription —
-          // the live limit(1200) boundary can split a same-date group and the
-          // next page re-fetches those rows.
-          const seen = new Set(prev.map((l) => l.id));
-          (logs || []).forEach((l) => seen.add(l.id));
-          const fresh = items.filter((l) => !seen.has(l.id));
-          added = fresh.length;
-          return [...prev, ...fresh];
-        });
+        // Dedupe against BOTH the paged window and the live subscription —
+        // the live limit(1200) boundary can split a same-date group and the
+        // next page re-fetches those rows. Computed outside the state updater
+        // so the forward-progress check below sees the real count regardless
+        // of React's updater scheduling.
+        const seen = new Set((olderLogs || []).map((l) => l.id));
+        (logs || []).forEach((l) => seen.add(l.id));
+        const fresh = items.filter((l) => !seen.has(l.id));
+        added = fresh.length;
+        setOlderLogs((prev) => [...new Map([...prev, ...fresh].map((l) => [l.id, l])).values()]);
         setOlderCursor({ date: nextCursor, id: nextCursorDocId });
         // Forward-progress guarantee: a page that adds nothing new (e.g. the
         // cursor document was deleted and even the fallback returned known
