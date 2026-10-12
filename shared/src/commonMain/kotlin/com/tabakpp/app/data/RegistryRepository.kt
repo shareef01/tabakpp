@@ -19,6 +19,8 @@ const val LIVE_DAYS_QUERY_LIMIT = 400L
 const val MAX_TRACKERS = 8
 
 interface RegistryRepository {
+    suspend fun getHistoricalDay(uid: String, date: String): DayDocument? = null
+    suspend fun getHistoricalLog(uid: String, id: String): LogEntry? = null
     fun subscribeToUserProfile(uid: String): Flow<UserProfile?>
     fun subscribeToConfigs(uid: String): Flow<List<TrackerConfig>>
     fun subscribeToLogs(uid: String): Flow<List<LogEntry>>
@@ -33,6 +35,8 @@ interface RegistryRepository {
      * subscription is NOT complete account history — see [getFinancialMode].
      */
     fun subscribeToLedgers(uid: String): Flow<List<DailyFinancialRecord>> = flowOf(emptyList())
+    suspend fun fetchOlderDays(uid: String, cursor: com.tabakpp.app.domain.HistoryCursor? = null, pageSize: Int = 200): com.tabakpp.app.domain.HistoryPage<DayDocument> = com.tabakpp.app.domain.HistoryPage()
+    suspend fun fetchOlderLogs(uid: String, cursor: com.tabakpp.app.domain.HistoryCursor? = null, pageSize: Int = 200): com.tabakpp.app.domain.HistoryPage<LogEntry> = com.tabakpp.app.domain.HistoryPage()
     /** `users/{uid}/meta/profile` (item 12 — hot/profile split): avatar only. */
     fun subscribeToProfileExtra(uid: String): Flow<ProfileExtra?>
 

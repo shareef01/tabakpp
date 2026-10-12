@@ -462,15 +462,25 @@ object SmokingCalculator {
      * historical day interprets its own counts using this stamp, never the
      * tracker's CURRENT settings.
      */
-    fun buildTrackerSnapshot(config: TrackerConfig): TrackerSnapshot = TrackerSnapshot(
+    fun buildTrackerSnapshot(config: TrackerConfig, defaultUnitPrice: Double = 0.5): TrackerSnapshot = TrackerSnapshot(
         name = config.name,
         type = config.type,
         target = max(0, config.limit),
         baseline = config.baseline?.let { max(0, it) },
-        unitPrice = config.pricePerUnit,
+        unitPrice = config.pricePerUnit ?: defaultUnitPrice,
         isFinanciallyTracked = config.isFinanciallyTracked,
         isPrimaryTracked = config.isPrimaryTracked
     )
+
+    fun countsEqual(a: Map<String, Double>, b: Map<String, Double>): Boolean =
+        (a.keys + b.keys).all { (a[it] ?: 0.0) == (b[it] ?: 0.0) }
+
+    fun requireHistoricalPrices(counts: Map<String, Double>, snapshots: Map<String, TrackerSnapshot>) {
+        if (snapshots.isEmpty() || counts.keys.any { it !in snapshots } ||
+            snapshots.values.any { it.isFinanciallyTracked && it.unitPrice == null }) {
+            throw IllegalStateException("HISTORICAL_PRICE_UNAVAILABLE")
+        }
+    }
 
     /**
      * Financial/unit contribution of a `days/{date}` document computed
@@ -1088,10 +1098,16 @@ object SmokingCalculator {
             val pct = ((current - previous) / previous) * 100
             val direction = if (pct < 0) "down" else if (pct > 0) "up" else "unchanged"
             val absPct = kotlin.math.abs(pct)
+            // Half-up rounding (floor(x + 0.5)), NOT toInt() truncation —
+            // matches the web's absPct.toFixed(0) exactly. Truncation made the
+            // two clients print "67% fewer units" vs "66% fewer units" for the
+            // same stored data (e.g. calculateTrend(1.0, 3.0)); the repo's
+            // formatCurrency comment documents half-up as the parity convention.
+            val roundedPct = kotlin.math.floor(absPct + 0.5).toInt()
             val text = if (pct < 0) {
-                "${absPct.toInt()}% fewer units"
+                "${roundedPct}% fewer units"
             } else if (pct > 0) {
-                "${absPct.toInt()}% more units"
+                "${roundedPct}% more units"
             } else {
                 "unchanged"
             }

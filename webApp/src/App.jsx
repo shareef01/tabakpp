@@ -109,7 +109,7 @@ class GlobalErrorBoundary extends React.Component {
           <div className="p-8 mb-8 bg-red-600/10 rounded-[32px] text-red-500 border border-red-600/20 shadow-2xl"><AlertCircle size={48} /></div>
           <h2 className="mb-4 text-3xl font-black uppercase tracking-tighter leading-none">Something went wrong</h2>
           <p className="max-w-md mb-10 text-sm font-bold leading-relaxed text-white/60">{this.state.error?.toString() || "Sync error."}</p>
-          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } localStorage.clear(); window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reset app</button>
+          <button onClick={async () => { try { await auth.signOut(); } catch { /* ignore */ } try { localStorage.clear(); } catch { /* storage blocked */ } window.location.reload(); }} className="px-10 transition-all shadow-2xl h-18 rounded-full bg-white text-black font-black uppercase tracking-widest active:scale-95">Reset app</button>
         </div>
       );
     }
@@ -124,15 +124,19 @@ const AppContent = () => {
 
   // 1. BUILD ID — force a one-shot reload when a new deploy is detected.
   // Service worker autoUpdate (virtual:pwa-register) handles subsequent SW swaps.
+  // localStorage can throw (Safari "block all cookies", embedded webviews) —
+  // an unguarded throw here would crash the whole app behind the error
+  // boundary, whose own Reset path then throws again before reloading.
   useEffect(() => {
-    const localBuildId = localStorage.getItem('tabak_build_id');
     const serverBuildId = String(typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : 'initial');
+    let localBuildId = null;
+    try { localBuildId = localStorage.getItem('tabak_build_id'); } catch { /* storage blocked */ }
 
     if (localBuildId && localBuildId !== serverBuildId && localBuildId !== 'initial') {
-      localStorage.setItem('tabak_build_id', serverBuildId);
+      try { localStorage.setItem('tabak_build_id', serverBuildId); } catch { /* storage blocked */ }
       window.location.reload();
     } else {
-      localStorage.setItem('tabak_build_id', serverBuildId);
+      try { localStorage.setItem('tabak_build_id', serverBuildId); } catch { /* storage blocked */ }
     }
   }, []);
 
@@ -181,6 +185,7 @@ const AppContent = () => {
   // Modal States
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
+  const [historyUpdate, setHistoryUpdate] = useState(null);
   const [editProtocol, setEditProtocol] = useState(null);
   const [isLogoutOpen, setIsLogoutOpen] = useState(false);
   const [isManualEntryOpen, setIsManualEntryOpen] = useState(false);
@@ -189,15 +194,28 @@ const AppContent = () => {
 
   // Tracking day in LOCAL time with the user's day-start hour (Android
   // parity) — recomputed live so a tab left open rolls over correctly.
+  // Mutations additionally re-derive the date at tap time (useRegistry
+  // resolveTrackingDateForMutation) — this state is the UI reflection.
   const [today, setToday] = useState(() => SmokingCalculator.getTrackingDate());
   useEffect(() => {
     const tick = () => setToday(SmokingCalculator.getTrackingDate(new Date(), settings.dayStartHour));
     tick();
     const id = setInterval(tick, 30000);
-    return () => clearInterval(id);
+    // Background tabs throttle setInterval (Chrome intensive throttling: one
+    // run per minute or worse), so a tab resumed across a day boundary would
+    // keep the stale date until the next throttled tick. Recompute the moment
+    // the tab becomes visible again.
+    const onVisible = () => { if (document.visibilityState === 'visible') tick(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', tick);
+    };
   }, [settings.dayStartHour]);
 
-  const registry = useRegistry(user, today, settings.unitPrice, settings.dayStartHour, setToday);
+  const registry = useRegistry(user, today, settings.unitPrice, setToday);
 
   const {
     configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings,
@@ -421,6 +439,7 @@ const AppContent = () => {
                       {!isHydrated || isRegistryLoading ? <DashboardSkeleton widgetSize={settings.widgetSize} /> : <HistoryScreen
                         logs={logs}
                         dayDocs={dayDocs}
+                        historyUpdate={historyUpdate}
                         configs={configs}
                         m={metrics}
                         onEdit={setEditTarget}
@@ -486,9 +505,18 @@ const AppContent = () => {
                 log={editTarget}
                 configs={configs}
                 onClose={() => setEditTarget(null)}
-                onSave={editTarget.__dayDoc
-                  ? (_id, counts) => updateHistoricalDay(editTarget.logDate, counts)
-                  : updateHistoricalLog}
+                onSave={async (id, counts) => {
+                  const uid = user.uid;
+                  if (editTarget.__dayDoc) {
+                    await updateHistoricalDay(editTarget.logDate, counts);
+                    const record = await RegistryService.getHistoricalDay(uid, editTarget.logDate);
+                    setHistoryUpdate({ uid, kind: 'day', record });
+                  } else {
+                    await updateHistoricalLog(id, counts);
+                    const record = await RegistryService.getHistoricalLog(uid, id);
+                    setHistoryUpdate({ uid, kind: 'log', record });
+                  }
+                }}
               />
             )}
             {isManualEntryOpen && (

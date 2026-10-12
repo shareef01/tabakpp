@@ -261,8 +261,9 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: v${{ github.event.inputs.version }}
-          # Must match the file the "Verify release notes file exists" gate
-          # checks above (`.github/release-notes/v${VERSION}.md`).
+          # Release notes files are versioned WITH the v prefix (see the
+          # existence check above) — a missing v here made the release step
+          # look for the wrong file and publish with an empty body.
           body_path: .github/release-notes/v${{ github.event.inputs.version }}.md
           files: |
             dist/tabakpp-${{ github.event.inputs.version }}.apk

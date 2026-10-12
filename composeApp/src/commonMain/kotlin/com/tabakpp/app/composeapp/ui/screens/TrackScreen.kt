@@ -116,7 +116,14 @@ fun TrackScreen(
                 endingDay = endingDay,
                 onEndDayClick = { showEndDayConfirm = true },
                 bottomPadding = innerPadding.calculateBottomPadding(),
-                onAddClick = { showAddTrackerSheet = true }
+                onAddClick = {
+                    // Reset the save latch: onSave closes the sheet immediately
+                    // (fire-and-forget write), so a leftover `saving = true`
+                    // would otherwise disable the SAVE button of every future
+                    // sheet session on this screen.
+                    saving = false
+                    showAddTrackerSheet = true
+                }
             )
         }
 

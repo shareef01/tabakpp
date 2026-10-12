@@ -390,9 +390,9 @@ describe('RegistryService.updateHistoricalDay', () => {
       status: 'closed',
       foldedIntoLifetime: true,
     });
-    await RegistryService.updateHistoricalDay(UID, '2026-07-10', { cig: 5 });
+    await expect(RegistryService.updateHistoricalDay(UID, '2026-07-10', { cig: 5 })).rejects.toThrow('HISTORICAL_PRICE_UNAVAILABLE');
     const d = dayDoc('2026-07-10');
-    expect(d.counts).toEqual({ cig: 5 });
+    expect(d.counts).toEqual({});
     expect(d.trackerSnapshots).toEqual({}); // no snapshot -> $0 contribution, not fabricated
     expect(d.aggregateCredit).toEqual({ wasted: 0, saved: 0, smokingUnits: 0, baselineSaved: 0 });
   });
@@ -416,7 +416,10 @@ describe('RegistryService.migrateLegacyActiveCounts (item 1 — activeCounts mig
   it('is idempotent — a second run is a no-op', async () => {
     seedUser({ schemaVersion: 2, activeCounts: { cig: 3 } });
     await RegistryService.migrateLegacyActiveCounts(UID);
-    expect(userDoc().activeCounts).toEqual({ cig: 3 }); // untouched — already current schema
+    const date = SmokingCalculator.getTrackingDate(new Date(), 6);
+    await RegistryService.migrateLegacyActiveCounts(UID);
+    expect(userDoc().activeCounts).toBeUndefined();
+    expect(dayDoc(date).counts.cig).toBe(3);
   });
 
   it('marks the account current without creating a day doc when there is nothing to migrate', async () => {
@@ -590,7 +593,7 @@ describe('RegistryService.updateHistoricalLog', () => {
   beforeEach(() => { seedConfig(CIG); });
 
   it('adjusts aggregates by the financial delta', async () => {
-    seedLog({ id: '2026-07-10_DAY', logDate: '2026-07-10', counts: { cig: 4 }, origin: 'DAY_RESET' });
+    seedLog({ trackerSnapshots: { cig: SmokingCalculator.buildTrackerSnapshot(CIG, 0.5) }, id: '2026-07-10_DAY', logDate: '2026-07-10', counts: { cig: 4 }, origin: 'DAY_RESET' });
     seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });
 
     await RegistryService.updateHistoricalLog(UID, '2026-07-10_DAY', { cig: 9 });
@@ -609,7 +612,7 @@ describe('RegistryService.updateHistoricalLog', () => {
   });
 
   it('drops non-finite, negative, and excessive counts', async () => {
-    seedLog({ id: 'L1', logDate: '2026-07-10', counts: { cig: 1 }, origin: 'DAY_RESET' });
+    seedLog({ trackerSnapshots: { cig: SmokingCalculator.buildTrackerSnapshot(CIG, 0.5) }, id: 'L1', logDate: '2026-07-10', counts: { cig: 1 }, origin: 'DAY_RESET' });
     seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });
 
     await RegistryService.updateHistoricalLog(UID, 'L1', {
@@ -626,6 +629,7 @@ describe('RegistryService.updateHistoricalLog', () => {
       id: '2026-07-10_DAY',
       logDate: '2026-07-10',
       counts: { cig: 4, retired: 7 },
+      trackerSnapshots: { cig: SmokingCalculator.buildTrackerSnapshot(CIG, 0.5), retired: { target: 0, unitPrice: 0, type: 'SIMPLE', isFinanciallyTracked: false } },
       origin: 'DAY_RESET',
     });
     seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });

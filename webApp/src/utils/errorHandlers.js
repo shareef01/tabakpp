@@ -62,6 +62,8 @@ export const mapFirestoreError = (err, fallback = 'Could not save. Try again.') 
     return 'Network error. Check your connection.';
   }
   if (msg === 'NOTHING_TO_ARCHIVE') return 'Nothing to archive yet.';
+  if (msg === 'HISTORICAL_PRICE_UNAVAILABLE') return 'This older record has no reliable historical price. Its stored totals were preserved; changing its amounts is unavailable.';
+  if (msg === 'TRACKER_LIMIT') return 'A tracking day supports up to 8 trackers. Remove an unused tracker before adding another.';
   if (msg === 'FUTURE_DATE') return 'Pick today or an earlier date.';
   if (msg === 'INVALID_DATE') return 'That date does not exist. Check the day and month.';
   if (msg === 'CONFIG_NOT_FOUND') return 'That tracker no longer exists. Refresh and try again.';

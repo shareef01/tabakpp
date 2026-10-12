@@ -10,7 +10,7 @@
  * DomainContractFixturesTest — see shared-tests/README.md.
  */
 
-const DAY_START_HOUR_DEFAULT = 6;
+export const DAY_START_HOUR_DEFAULT = 6;
 const SMOKING_TYPES = ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING'];
 
 /**
@@ -428,14 +428,15 @@ export const SmokingCalculator = {
    * tracker's *current* settings — so editing today's price/target can never
    * rewrite whether an old day was a success or what it cost.
    */
-  buildTrackerSnapshot: (config) => ({
+  buildTrackerSnapshot: (config, defaultUnitPrice = 0.5) => ({
     name: config?.name || '',
     type: config?.type || 'CIGARETTE',
     target: Math.max(0, Math.floor(config?.limit || 0)),
     baseline: config?.baseline == null || !Number.isFinite(Number(config.baseline))
       ? null
       : Math.max(0, Number(config.baseline)),
-    unitPrice: config?.pricePerUnit == null ? null : Number(config.pricePerUnit),
+    // Inheritance is resolved when recorded, never when history is edited.
+    unitPrice: Number(config?.pricePerUnit ?? defaultUnitPrice),
     isFinanciallyTracked: config?.isFinanciallyTracked !== false,
     isPrimaryTracked: config?.isPrimaryTracked !== false,
   }),
