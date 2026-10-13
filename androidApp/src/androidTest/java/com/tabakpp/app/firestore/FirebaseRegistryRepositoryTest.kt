@@ -1058,8 +1058,23 @@ class FirebaseRegistryRepositoryTest {
             kotlin.test.assertTrue(daySnap.exists, "the source day document must exist")
             val ledgerSnap = firestore.collection("users").document(testUid).collection("dailyFinancials").document(date).get()
             kotlin.test.assertTrue(ledgerSnap.exists, "the canonical ledger must exist")
-            val receiptSnap = firestore.collection("users").document(testUid).collection("financialOperations").document(opId).get()
-            kotlin.test.assertTrue(receiptSnap.exists, "the operation receipt must exist")
+            // AUD-016: trusted receipts live in the server-only
+            // trustedOperations namespace. A client-SDK read must be denied…
+            val clientRead = runCatching {
+                firestore.collection("users").document(testUid)
+                    .collection("trustedOperations").document(opId).get()
+            }
+            kotlin.test.assertTrue(clientRead.isFailure, "client SDK reads of trustedOperations must be denied")
+            kotlin.test.assertEquals(
+                FirestoreExceptionCode.PERMISSION_DENIED,
+                (clientRead.exceptionOrNull() as? FirebaseFirestoreException)?.code,
+                "trustedOperations denial must be PERMISSION_DENIED",
+            )
+            // …while the emulator owner bypass confirms the callable wrote it.
+            kotlin.test.assertTrue(
+                ownerGet("users/$testUid/trustedOperations/$opId"),
+                "the trusted operation receipt must exist server-side",
+            )
 
             // Duplicate: same id + payload ⇒ applied once.
             val r2 = gateway.execute("COUNTER_INCREMENT", payload)
@@ -1140,6 +1155,24 @@ class FirebaseRegistryRepositoryTest {
         conn.disconnect()
         Log.d(TAG, "ownerPatch($path) -> $code")
         check(code in 200..299) { "ownerPatch($path) failed: HTTP $code" }
+    }
+
+    /**
+     * Emulator-only owner-bypass GET (same superuser channel as [ownerPatch]):
+     * returns true when the document exists. Needed to observe server-only
+     * documents (trustedOperations) that the client SDK is — correctly —
+     * forbidden from reading under the shipped rules.
+     */
+    private fun ownerGet(path: String): Boolean {
+        val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
+        val url = java.net.URL("http://127.0.0.1:8080/v1/projects/$projectId/databases/(default)/documents/$path")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.setRequestProperty("Authorization", "Bearer owner")
+        val code = conn.responseCode
+        conn.disconnect()
+        Log.d(TAG, "ownerGet($path) -> $code")
+        return code in 200..299
     }
 
     private data class ContentionResult(
