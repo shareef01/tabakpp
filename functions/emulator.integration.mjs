@@ -91,7 +91,7 @@ const main = async () => {
   let led = await readDoc(`users/${uid}/dailyFinancials/${TODAY}`);
   assert.equal(led.countsByTracker.cig, 2);
   assert.equal(led.canonicalCredit.saved, 8);
-  assert.ok(await readDoc(`users/${uid}/financialOperations/op1`), 'receipt not written');
+  assert.ok(await readDoc(`users/${uid}/trustedOperations/op1`), 'receipt not written');
 
   // 2) MANUAL_CREATE 1 unit → ledger counts 3, saved €7
   r = await call(token, { operationId: 'op2', type: 'MANUAL_CREATE', date: TODAY, logId: 'L2', counts: { cig: 1 }, defaultUnitPrice: 1 });
@@ -126,6 +126,52 @@ const main = async () => {
   await writeDoc(`users/${b.localId}`, { name: '', lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 } });
   r = await call(b.idToken, { operationId: 'x1', type: 'MANUAL_CREATE', date: TODAY, logId: 'L1', counts: { cig: 1 } });
   assert.ok(!r.ok, 'non-OPTION_B account must be rejected by the writer');
+
+  // 6b) AUD-016: a FORGED LEGACY-gateway receipt must not buy a trusted response.
+  // The receipt lives in the client-writable `financialOperations` namespace and
+  // carries a fingerprint that exactly matches the request below — pre-fix, the
+  // dedupe path returned the forged `result` without any mode check.
+  const { fingerprintOf } = await import('./financial.js');
+  const forgedFp = fingerprintOf({ type: 'MANUAL_CREATE', date: TODAY, trackerId: undefined, logId: 'L1', counts: { cig: 1 }, delta: undefined });
+  await writeDoc(`users/${b.localId}/financialOperations/x1`, {
+    operationId: 'x1', operationType: 'createManualLog', sourceDocumentPath: `users/${b.localId}/logs/L1`,
+    trackingDate: TODAY, payloadFingerprint: forgedFp, resultStatus: 'OK',
+    result: { canonicalCredit: { saved: 999999, wasted: 0, smokingUnits: 0, baselineSaved: 0 }, counts: {} },
+    createdAt: new Date().toISOString(),
+  });
+  r = await call(b.idToken, { operationId: 'x1', type: 'MANUAL_CREATE', date: TODAY, logId: 'L1', counts: { cig: 1 } });
+  assert.ok(!r.ok, `forged legacy receipt must not produce a trusted response: ${JSON.stringify(r.body)}`);
+  // A rejected call must mutate NOTHING: no source document, no ledger/day doc,
+  // no lifetime aggregates, and no trusted receipt in either namespace.
+  assert.equal(await readDoc(`users/${b.localId}/logs/L1`), null, 'no source mutation may occur for a rejected call');
+  assert.equal(await readDoc(`users/${b.localId}/days/${TODAY}`), null, 'no ledger/day mutation may occur for a rejected call');
+  assert.equal(await readDoc(`users/${b.localId}/dailyFinancials/${TODAY}`), null, 'no trusted-ledger mutation may occur for a rejected call');
+  assert.equal((await readDoc(`users/${b.localId}`)).lifetimeAggregates.saved, 0, 'lifetime aggregates must be untouched by a rejected call');
+  assert.equal(await readDoc(`users/${b.localId}/trustedOperations/x1`), null, 'no trusted receipt may be created from a forged one');
+
+  // 6c) AUD-016: MIGRATING accounts are equally locked out — replay included.
+  const mg = await (await fetch(AUTH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnSecureToken: true }) })).json();
+  await writeDoc(`users/${mg.localId}`, { name: '', financialMode: 'MIGRATING', lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 } });
+  await writeDoc(`users/${mg.localId}/financialOperations/mg1`, {
+    operationId: 'mg1', operationType: 'adjustCounter', trackingDate: TODAY,
+    payloadFingerprint: forgedFp, resultStatus: 'OK', createdAt: new Date().toISOString(),
+  });
+  r = await call(mg.idToken, { operationId: 'mg1', type: 'MANUAL_CREATE', date: TODAY, logId: 'L1', counts: { cig: 1 } });
+  assert.ok(!r.ok, 'MIGRATING account must be rejected even with a planted receipt');
+  assert.equal((await readDoc(`users/${mg.localId}`)).lifetimeAggregates.saved, 0, 'MIGRATING rejection must not touch lifetime aggregates');
+  assert.equal(await readDoc(`users/${mg.localId}/trustedOperations/mg1`), null, 'MIGRATING rejection must not create a trusted receipt');
+
+  // 6d) AUD-016: concurrent requests with the same operationId apply exactly once.
+  const cc = await signIn();
+  await seedOptionB(cc.localId);
+  const [c1, c2] = await Promise.all([
+    call(cc.idToken, { operationId: 'cc1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 }),
+    call(cc.idToken, { operationId: 'cc1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 }),
+  ]);
+  assert.ok(c1.ok && c2.ok, `concurrent same-id calls must both succeed: ${JSON.stringify([c1.body, c2.body])}`);
+  const appliedCount = [c1, c2].filter((x) => x.body.result?.applied === true).length;
+  assert.equal(appliedCount, 1, 'exactly one of two concurrent same-id requests may apply');
+  assert.equal((await readDoc(`users/${cc.localId}/days/${TODAY}`)).counts.cig, 1, 'counter applied exactly once');
 
   // 8) PHANTOM SAVINGS: deleting the only manual log must remove the day's credit.
   // A fresh OPTION_B account with no day document, so the date's only evidence
@@ -167,6 +213,16 @@ const main = async () => {
     trackerSnapshots: { cig: { target: 10, baseline: 15, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true } },
     aggregateCredit: { saved: 15, wasted: 5, smokingUnits: 5, baselineSaved: 0 },
   });
+  // AUD-016: plant a forged LEGACY-gateway receipt BEFORE migration. Post-fix
+  // the callable consults only `trustedOperations`, so this receipt must be
+  // ignored after cutover — the operation it names must still APPLY.
+  const ignFp = fingerprintOf({ type: 'MANUAL_CREATE', date: '2026-01-09', trackerId: undefined, logId: 'IGN1', counts: { cig: 3 }, delta: undefined });
+  await writeDoc(`users/${muid}/financialOperations/ign1`, {
+    operationId: 'ign1', operationType: 'createManualLog', sourceDocumentPath: `users/${muid}/logs/IGN1`,
+    trackingDate: '2026-01-09', payloadFingerprint: ignFp, resultStatus: 'OK',
+    result: { canonicalCredit: { saved: 777, wasted: 0, smokingUnits: 0, baselineSaved: 0 }, counts: {} },
+    createdAt: new Date().toISOString(),
+  });
 
   let m = await call(adminToken, { targetUid: muid, dryRun: true }, 'migrateAccount');
   assert.ok(m.ok, `migrate dry-run failed: ${JSON.stringify(m.body)}`);
@@ -181,6 +237,16 @@ const main = async () => {
   m = await call(adminToken, { targetUid: muid, dryRun: false }, 'migrateAccount');
   assert.ok(m.ok);
   assert.equal((await readDoc(`users/${muid}`)).lifetimeAggregates.saved, 5, 'repeat migration must not re-apply the delta');
+
+  // AUD-016: the pre-migration forged legacy receipt is IGNORED — the same
+  // operationId now applies fresh and writes a trusted receipt; the legacy
+  // receipt keeps its forged content and is never consulted again.
+  r = await call(adminToken, { operationId: 'ign1', type: 'MANUAL_CREATE', date: '2026-01-09', logId: 'IGN1', counts: { cig: 3 } });
+  assert.ok(r.ok && r.body.result.applied === true, `post-migration op must apply despite the planted legacy receipt: ${JSON.stringify(r.body)}`);
+  assert.notEqual(r.body.result.result?.canonicalCredit?.saved, 777, 'the forged result must never be replayed');
+  assert.ok(await readDoc(`users/${muid}/trustedOperations/ign1`), 'a trusted receipt must be written in the trusted namespace');
+  const legacyIgn = await readDoc(`users/${muid}/financialOperations/ign1`);
+  assert.equal(legacyIgn.result.canonicalCredit.saved, 777, 'the legacy receipt is left untouched (never rewritten by the callable)');
 
   // a non-admin cannot migrate
   const na = await call(token, { targetUid: muid, dryRun: true }, 'migrateAccount');
@@ -376,7 +442,7 @@ const main = async () => {
   const goneDocs = [
     `users/${guid}`, `users/${guid}/configs/cig`, `users/${guid}/days/${TODAY}`, `users/${guid}/logs/GL1`,
     `users/${guid}/meta/profile`, `users/${guid}/dailyFinancials/${TODAY}`,
-    `users/${guid}/financialOperations/g1`, `users/${guid}/financialOperations/g2`,
+    `users/${guid}/trustedOperations/g1`, `users/${guid}/trustedOperations/g2`,
   ];
   for (const p of goneDocs) assert.ok(await readDoc(p), `seed missing ${p}`);
 
