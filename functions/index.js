@@ -100,27 +100,38 @@ export const executeFinancialOperation = onCall(async (request) => {
   if (!SUPPORTED.has(type)) throw new HttpsError('invalid-argument', 'Unsupported operation type.');
 
   const userRef = db.collection('users').doc(uid);
-  const receiptRef = userRef.collection('financialOperations').doc(operationId);
+  // AUD-016: trusted receipts live in their OWN namespace. The client-writable
+  // `financialOperations` collection holds the LEGACY client-gateway receipts
+  // (rules allowlist: createManualLog/…/adjustCounter) — a forged document there
+  // must never be able to satisfy the callable's idempotency check or smuggle a
+  // client-authored `result` back as a trusted response. Only the Admin SDK can
+  // write `trustedOperations` (rules deny clients unconditionally).
+  const receiptRef = userRef.collection('trustedOperations').doc(operationId);
   const fp = fingerprintOf({ type, date: data.date, trackerId: data.trackerId, logId: data.logId, counts: data.counts, delta: data.delta });
 
   return db.runTransaction(async (t) => {
+    // The profile is read INSIDE the transaction: lifetimeAggregates are
+    // written back as absolute values below, so a read outside it let two
+    // concurrent folded-date operations overwrite each other's delta.
+    // financialMode is authoritative from the server; NEVER from the payload.
+    //
+    // AUD-016: the mode guard runs BEFORE the receipt lookup, so ONLY an
+    // OPTION_B account can ever receive a successful trusted response —
+    // including an idempotent replay. A receipt that does not exist yet for a
+    // LEGACY/MIGRATING account can never make the callable return early.
+    const profileSnap = await t.get(userRef);
+    if (!profileSnap.exists) throw new HttpsError('failed-precondition', 'NO_PROFILE');
+    const mode = profileSnap.get('financialMode') || 'LEGACY';
+    if (mode !== 'OPTION_B') {
+      throw new HttpsError('failed-precondition', `Account is not OPTION_B (financialMode=${mode}).`);
+    }
+
     const receiptSnap = await t.get(receiptRef);
     if (receiptSnap.exists) {
       if (receiptSnap.get('payloadFingerprint') !== fp) {
         throw new HttpsError('already-exists', 'OPERATION_CONFLICT');
       }
       return { applied: false, result: receiptSnap.get('result') || null };
-    }
-
-    // The profile is read INSIDE the transaction: lifetimeAggregates are
-    // written back as absolute values below, so a read outside it let two
-    // concurrent folded-date operations overwrite each other's delta.
-    // financialMode is authoritative from the server; NEVER from the payload.
-    const profileSnap = await t.get(userRef);
-    if (!profileSnap.exists) throw new HttpsError('failed-precondition', 'NO_PROFILE');
-    const mode = profileSnap.get('financialMode') || 'LEGACY';
-    if (mode !== 'OPTION_B') {
-      throw new HttpsError('failed-precondition', `Account is not OPTION_B (financialMode=${mode}).`);
     }
 
     const date = requireTrackingDate(data.date);

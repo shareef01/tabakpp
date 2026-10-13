@@ -802,6 +802,17 @@ service cloud.firestore {
         allow update: if false; // immutable once written
         allow delete: if isOwner(userId) && !financialLocked(database, userId);
       }
+
+      // AUD-016: receipts written by the trusted `executeFinancialOperation`
+      // callable live in a SEPARATE namespace that no client can ever read or
+      // write, in any financial mode. A forged LEGACY-gateway receipt in
+      // `financialOperations` therefore can never satisfy the callable's
+      // idempotency check or replay a client-authored `result`. The Admin SDK
+      // bypasses rules, so only the callable writes here. Explicit deny for
+      // documentation — the catch-all below would deny these anyway.
+      match /trustedOperations/{operationId} {
+        allow read, write: if false;
+      }
     }
 
     // Everything else is denied.

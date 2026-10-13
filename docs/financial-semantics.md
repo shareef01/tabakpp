@@ -672,3 +672,53 @@ Both are unit-tested (`functions/financial.test.js`) and emulator-verified
 `RegistryViewModel.optionBGateway` route OPTION_B counter/manual ops through the
 `executeFinancialOperation` callable (GitLive `firebase-functions`). ViewModel
 routing is unit-tested; on-device callable instrumentation is not yet run.
+
+---
+
+## 26. Receipt namespaces — two producers, two trust domains (AUD-016)
+
+Idempotency receipts exist in **two separate collections**, one per producer,
+with strictly different trust levels:
+
+| | `financialOperations/{operationId}` | `trustedOperations/{operationId}` |
+|---|---|---|
+| **Writer** | The client (LEGACY gateway: `dailyLedger.js`, `FirebaseRegistryRepository.kt`) | Only `executeFinancialOperation` (Admin SDK) |
+| **Vocabulary** | `createManualLog`, `updateManualLog`, `deleteManualLog`, `restoreManualLog`, `adjustCounter` | The callable's `SUPPORTED` set (`COUNTER_INCREMENT`, `DAY_CLOSE`, …) |
+| **Client rules** | Owner-create allowed while not `financialLocked`; immutable once written; owner-delete while not locked | **`allow read, write: if false` — denied in every mode** |
+| **Trust** | Client-authored; adequate for client-side retry dedupe only | Server-computed `result`; the only receipts the callable replays |
+
+**Why separation is mandatory.** `payloadFingerprint` is a deterministic,
+unsecret canonicalization of the request payload — any client can compute a
+matching fingerprint, and before AUD-016 the client-writable
+`financialOperations` namespace shared the callable's dedupe path. A LEGACY
+account owner could plant a receipt (`resultStatus: 'OK'`, arbitrary `result`
+map, fingerprint of their choosing); it survived `migrateAccount` untouched; and
+`executeFinancialOperation` then returned `{applied: false, result: <forged>}`
+**before** the financialMode guard — a client-authored payload certified by the
+trusted boundary, plus a permanent per-operationId squat (locked accounts cannot
+client-delete receipts).
+
+**The fix (two halves, both required):**
+1. **Namespace separation** — the callable reads/writes only
+   `users/{uid}/trustedOperations/{operationId}`. Forged LEGACY-gateway receipts
+   can never satisfy its idempotency check; pre-migration planted receipts are
+   ignored after cutover (the named operation applies fresh).
+2. **Mode guard before replay** — the authoritative `financialMode` is read
+   inside the transaction and checked BEFORE the receipt lookup, so only an
+   OPTION_B account can receive a successful trusted response, including an
+   idempotent replay. LEGACY/MIGRATING always get `failed-precondition`.
+
+**Not changed:** the client-gateway receipt vocabulary and rules allowlist for
+`financialOperations` (the previously suggested "align with SUPPORTED" expansion
+would have been harmful — it would legitimize client writes in the trusted
+vocabulary). LEGACY client behavior, historical receipts, migration, and
+legitimate retries are unaffected. Account deletion needs no client changes:
+`trustedOperations` can only exist for accounts that were OPTION_B, and those
+route to `deleteAccountData` (Admin `recursiveDelete` covers the whole
+`users/{uid}` subtree); LEGACY client wipes never encounter it.
+
+**Regression coverage:** `functions/emulator.integration.mjs` (forged-receipt
+rejection in LEGACY and MIGRATING, receipt-ignored-after-migration,
+same-operationId concurrency, deletion sweep) and
+`webApp/src/firestore.rules.test.js` (client read/create/update/delete denied
+across all modes, cross-user denial).
