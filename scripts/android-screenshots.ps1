@@ -117,21 +117,21 @@ if ($focus -notmatch "com\.tabakpp\.app") {
 # Closest true red in the Android palette
 $accentDesc = "Signal red accent"
 
-Tap-Target -Text "Settings"
+Tap-Target -ContentDesc "Settings" -Text "Settings"
 Start-Sleep -Milliseconds 500
 Ensure-AccentVisible $accentDesc | Out-Null
 Tap-Target -ContentDesc $accentDesc
 Start-Sleep -Milliseconds 1400
 
-Tap-Target -Text "Track"
+Tap-Target -ContentDesc "Track" -Text "Track"
 Start-Sleep -Milliseconds 900
 Capture-Shot (Join-Path $OutRoot "track.png")
 
-Tap-Target -Text "History"
+Tap-Target -ContentDesc "History" -Text "History"
 Start-Sleep -Milliseconds 1100
 Capture-Shot (Join-Path $OutRoot "history.png")
 
-Tap-Target -Text "Settings"
+Tap-Target -ContentDesc "Settings" -Text "Settings"
 Start-Sleep -Milliseconds 900
 Capture-Shot (Join-Path $OutRoot "settings.png")
 
