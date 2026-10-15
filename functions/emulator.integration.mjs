@@ -634,7 +634,109 @@ const main = async () => {
   });
   assert.ok(settingsDirect.ok, `Option B settings update must be allowed by rules: ${settingsDirect.status}`);
 
-  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete, current-tracking-date, delete-account-data, 2->3->2-idempotency, undo-restore-snapshot-preservation, category-D-4-metric-reconciliation, option-b-rules-compatibility ALL 16 TEST SUITES PASSED');
+  // 17) Release Gate Item 1: Day document tracker limits (25 allowed, 26 rejected, 50 rejected)
+  const limitUser = await signIn();
+  const luid = limitUser.localId;
+  await seedOptionB(luid);
+  const lToken = limitUser.idToken;
+
+  // Create 26 configs (t1 to t26)
+  for (let i = 1; i <= 26; i++) {
+    await writeDoc(`users/${luid}/configs/t${i}`, {
+      name: `T${i}`, limit: 10, order: i, type: 'CIGARETTE', pricePerUnit: 1, isFinanciallyTracked: true,
+    }, true);
+  }
+
+  // Pre-seed day document with 24 trackers (t1 to t24)
+  const counts24 = {};
+  for (let i = 1; i <= 24; i++) counts24[`t${i}`] = 1;
+  await writeDoc(`users/${luid}/days/${TODAY}`, {
+    date: TODAY, counts: counts24, status: 'open', foldedIntoLifetime: false,
+    trackerSnapshots: Object.fromEntries(Object.keys(counts24).map((k) => [k, { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true }])),
+  }, true);
+
+  // Increment tracker 25: 24 + 1 = 25 entries -> SUCCEEDS
+  let limRes = await call(lToken, {
+    operationId: 'lim_25', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 't25',
+    delta: 1, defaultUnitPrice: 1,
+  });
+  assert.ok(limRes.ok, `Incrementing to 25 entries must succeed: ${JSON.stringify(limRes.body)}`);
+  let dayDoc25 = await readDoc(`users/${luid}/days/${TODAY}`);
+  assert.equal(Object.keys(dayDoc25.counts).length, 25, 'Day doc must contain exactly 25 entries');
+
+  // Increment tracker 26: 25 + 1 = 26 entries -> REJECTED by server validation
+  limRes = await call(lToken, {
+    operationId: 'lim_26', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 't26',
+    delta: 1, defaultUnitPrice: 1,
+  });
+  assert.equal(limRes.ok, false, 'Incrementing to 26 entries must be rejected by server validation');
+  assert.match(JSON.stringify(limRes.body), /TOO_MANY_TRACKERS|failed-precondition/i);
+
+  // Attempting 50 entries in a single day document payload -> REJECTED
+  const counts50 = {};
+  for (let i = 1; i <= 50; i++) counts50[`t${i}`] = 1;
+  limRes = await call(lToken, {
+    operationId: 'lim_50', type: 'MANUAL_CREATE', date: TODAY, logId: 'L_50',
+    counts: counts50, defaultUnitPrice: 1,
+  });
+  assert.equal(limRes.ok, false, 'Submitting 50 day-trackers in a single day doc must be rejected');
+
+  // 18) Release Gate Item 2: Trusted snapshot provenance and adversarial restore
+  const advUser = await signIn();
+  const advUid = advUser.localId;
+  const advToken = advUser.idToken;
+  await seedOptionB(advUid);
+
+  // Step 1: Create a manual log L_ADV on TODAY with 2 units (€1/unit)
+  let advRes = await call(advToken, {
+    operationId: 'adv_create', type: 'MANUAL_CREATE', date: TODAY, logId: 'L_ADV',
+    counts: { cig: 2 }, defaultUnitPrice: 1,
+  });
+  assert.ok(advRes.ok, `adv create failed: ${JSON.stringify(advRes.body)}`);
+
+  // Step 2: Delete L_ADV -> writes server tombstone to trustedDeletedLogs/L_ADV
+  advRes = await call(advToken, {
+    operationId: 'adv_del', type: 'MANUAL_DELETE', date: TODAY, logId: 'L_ADV',
+  });
+  assert.ok(advRes.ok, `adv delete failed: ${JSON.stringify(advRes.body)}`);
+  assert.equal(await readDoc(`users/${advUid}/logs/L_ADV`), null);
+
+  // Step 3: Adversarial restore attempt with forged economic values
+  // Client attempts to claim unitPrice = €9999 and huge target/saved numbers
+  advRes = await call(advToken, {
+    operationId: 'adv_restore_forged', type: 'MANUAL_RESTORE', date: TODAY, logId: 'L_ADV',
+    counts: { cig: 2 },
+    trackerSnapshots: { cig: { unitPrice: 9999, target: 50000, baseline: 50000, type: 'CIGARETTE' } },
+    aggregateCredit: { saved: 49998, wasted: 19998, baselineSaved: 49998, smokingUnits: 2 },
+  });
+  assert.ok(advRes.ok, `adv restore must succeed using server tombstone: ${JSON.stringify(advRes.body)}`);
+
+  // Step 4: Verify server IGNORED the forged values and used server tombstone evidence (€1)
+  const restoredAdvLog = await readDoc(`users/${advUid}/logs/L_ADV`);
+  assert.ok(restoredAdvLog, 'restored log must exist');
+  assert.equal(restoredAdvLog.trackerSnapshots.cig.unitPrice, 1, 'server must ignore client-forged unit price');
+
+  const advLedger = await readDoc(`users/${advUid}/dailyFinancials/${TODAY}`);
+  assert.equal(advLedger.canonicalCredit.saved, 8, 'canonical saved must be 8 (from €1 price), NEVER client-forged 49998');
+  assert.equal(advLedger.canonicalCredit.wasted, 2, 'canonical wasted must be 2, NEVER client-forged 19998');
+
+  // Step 5: Adversarial restore without restoration evidence (fabricated ghost log ID)
+  advRes = await call(advToken, {
+    operationId: 'adv_restore_no_evidence', type: 'MANUAL_RESTORE', date: TODAY, logId: 'FABRICATED_GHOST_LOG',
+    counts: { cig: 2 },
+  });
+  assert.equal(advRes.ok, false, 'Restore without server tombstone evidence must fail');
+  assert.match(JSON.stringify(advRes.body), /NO_RESTORATION_EVIDENCE|not-found/i);
+
+  // 19) Direct client write to trustedDeletedLogs blocked by rules
+  const tombstoneDirect = await fetch(`${FS}/users/${advUid}/trustedDeletedLogs/FAKE_TOMBSTONE`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${advToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { logId: { stringValue: 'FAKE' } } }),
+  });
+  assert.equal(tombstoneDirect.status, 403, 'Direct client write to trustedDeletedLogs must be denied 403 by Firestore rules');
+
+  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete, current-tracking-date, delete-account-data, 2->3->2-idempotency, undo-restore-snapshot-preservation, category-D-4-metric-reconciliation, option-b-rules-compatibility, map-tracker-limits-25-26-50, adversarial-restore-snapshot-provenance, trusted-deleted-logs-security-rules ALL 19 TEST SUITES PASSED');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });

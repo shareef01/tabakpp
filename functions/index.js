@@ -172,6 +172,7 @@ export const executeFinancialOperation = onCall(async (request) => {
       if (!cfg) throw new HttpsError('failed-precondition', 'CONFIG_NOT_FOUND');
       const newCounts = applyDelta(day?.counts || {}, { [trackerId]: delta });
       if ((newCounts[trackerId] || 0) > MAX_COUNT) throw new HttpsError('failed-precondition', 'COUNT_LIMIT');
+      if (Object.keys(newCounts).length > MAX_DAY_TRACKERS) throw new HttpsError('invalid-argument', 'TOO_MANY_TRACKERS');
       const trackerSnapshots = {
         ...(day?.trackerSnapshots || {}),
         [trackerId]: snapshotFromConfig(cfg),
@@ -252,35 +253,64 @@ export const executeFinancialOperation = onCall(async (request) => {
     } else if (type === 'MANUAL_DELETE') {
       const logId = requireId(data.logId, 'logId required');
       const target = logs.find((l) => l.id === logId);
-      if (target) t.delete(userRef.collection('logs').doc(logId));
+      if (target) {
+        // Item 2: Server-controlled immutable restoration evidence.
+        // Save the full verified server record before deletion so undo/restore
+        // cannot be hijacked with client-forged snapshots or economics.
+        t.set(userRef.collection('trustedDeletedLogs').doc(logId), {
+          ...target,
+          deletedAt: new Date(),
+          deletedOperationId: operationId,
+        });
+        t.delete(userRef.collection('logs').doc(logId));
+      }
       effectiveLogs = logs.filter((l) => l.id !== logId);
     } else if (type === 'MANUAL_RESTORE') {
       const logId = requireId(data.logId, 'logId required');
       if (!logs.some((l) => l.id === logId)) {
-        const counts = sanitizeCounts(data.counts);
-        // FIX 5: Preserve original economics during undo/restore; do NOT recalculate from changed configs
-        const incomingSnapshots = data.trackerSnapshots || data.log?.trackerSnapshots;
-        const logSnapshots = incomingSnapshots && typeof incomingSnapshots === 'object'
-          ? incomingSnapshots
-          : (isCurrent ? snapshotsForCounts(counts, configs, defaultUnitPrice) : {});
-        const own = data.aggregateCredit || (isCurrent ? computeDayCredit(counts, logSnapshots, defaultUnitPrice) : { wasted: 0, saved: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 });
+        // Item 2: Trusted snapshot provenance.
+        // Validate server-controlled immutable restoration evidence.
+        const evidenceRef = userRef.collection('trustedDeletedLogs').doc(logId);
+        const evidenceSnap = await t.get(evidenceRef);
+        if (!evidenceSnap.exists) {
+          throw new HttpsError('not-found', 'NO_RESTORATION_EVIDENCE');
+        }
+        const serverEvidence = evidenceSnap.data();
+        if (serverEvidence.logDate !== date) {
+          throw new HttpsError('failed-precondition', 'RESTORATION_DATE_MISMATCH');
+        }
+        // Verify client-submitted counts (if supplied) match server evidence; reject tampering
+        if (data.counts && typeof data.counts === 'object') {
+          const clientCounts = sanitizeCounts(data.counts);
+          const evidenceCounts = serverEvidence.counts || {};
+          const sameCountKeys = Object.keys(clientCounts).length === Object.keys(evidenceCounts).length &&
+            Object.keys(clientCounts).every((k) => clientCounts[k] === evidenceCounts[k]);
+          if (!sameCountKeys) {
+            throw new HttpsError('invalid-argument', 'RESTORATION_TAMPERED');
+          }
+        }
+        const counts = serverEvidence.counts || {};
+        // Provenance guarantee: economic values come strictly from serverEvidence, NEVER payload data
+        const logSnapshots = serverEvidence.trackerSnapshots || {};
+        const own = serverEvidence.aggregateCredit || (isCurrent ? computeDayCredit(counts, logSnapshots, defaultUnitPrice) : { wasted: 0, saved: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 });
+
         const restoredLogData = {
           id: logId,
           logDate: date,
           counts,
           trackerSnapshots: logSnapshots,
           isManual: true,
-          origin: 'MANUAL_ENTRY',
-          aggregateCredit: {
+          aggregateCredit: serverEvidence.aggregateCredit || (own ? {
             saved: 0,
             wasted: own.wasted,
             smokingUnits: own.smokingUnits,
             baselineSaved: 0,
-          },
-          createdAt: new Date(),
+          } : null),
+          createdAt: serverEvidence.createdAt || new Date(),
           updatedAt: new Date(),
         };
         t.set(userRef.collection('logs').doc(logId), restoredLogData);
+        t.delete(evidenceRef);
         effectiveLogs = [...logs, restoredLogData];
       }
     } else if (type === 'HISTORICAL_DAY_UPDATE') {

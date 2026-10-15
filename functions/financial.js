@@ -23,7 +23,16 @@ export const isArchiveLog = (log) => log?.origin === 'DAY_RESET' || (log?.id || 
 
 export const roundMoney = (v) => {
   const n = Number(v);
-  return Number.isFinite(n) ? Math.round((n + Number.EPSILON) * 100) / 100 : 0;
+  if (!Number.isFinite(n) || n === 0) return 0;
+  const sign = n < 0 ? -1 : 1;
+  const abs = Math.abs(n);
+  const parts = String(abs).split('e');
+  const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
+  const rounded = Math.round(shifted);
+  if (rounded === 0) return 0;
+  const roundedParts = String(rounded).split('e');
+  const result = Number(roundedParts[0] + 'e' + (roundedParts[1] ? Number(roundedParts[1]) - 2 : '-2'));
+  return sign * result;
 };
 
 /**

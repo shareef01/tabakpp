@@ -10,6 +10,7 @@ import com.tabakpp.app.data.NetworkObserver
 import com.tabakpp.app.data.ProfileExtra
 import com.tabakpp.app.data.RegistryRepository
 import com.tabakpp.app.data.TrackerConfig
+import com.tabakpp.app.data.TrackerType
 import com.tabakpp.app.data.TrustedFinancial
 import com.tabakpp.app.data.TrustedOperationResult
 import com.tabakpp.app.data.User
@@ -1367,5 +1368,77 @@ class RegistryViewModelTest {
         reg.profileFlow.value = UserProfile(dayStartHour = 23)
         scheduler.runCurrent() // collector must recompute WITHOUT the 30s poll advancing
         assertEquals("2026-05-31", vm.trackingDay.value) // 22 < 23 -> running day = 31st
+    }
+
+    @Test
+    fun canonical_overridesLegacyAggregateCredit_whenOptionB() {
+        val (vm, reg, _) = build()
+        reg.financialMode = "OPTION_B"
+        reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(saved = 100.0, wasted = 50.0))
+        reg.configsFlow.value = listOf(
+            TrackerConfig(id = "cig", name = "Cigarettes", limit = 10, order = 0, pricePerUnit = 1.0, type = TrackerType.CIGARETTE)
+        )
+        // Conflicting legacy aggregateCredit on the day doc (e.g. 99.0 vs canonical 6.0)
+        val legacyCredit = LifetimeAggregates(saved = 99.0, wasted = 99.0, baselineSaved = 99.0, smokingUnits = 99.0)
+        val dayDoc = DayDocument(
+            date = "2026-06-01",
+            counts = mapOf("cig" to 6.0),
+            status = "open",
+            aggregateCredit = legacyCredit
+        )
+        reg.dayFlow.value = dayDoc
+        reg.daysFlow.value = listOf(dayDoc)
+
+        val canonicalRecord = DailyFinancialRecord(
+            date = "2026-06-01",
+            canonicalCredit = LifetimeAggregates(saved = 4.0, wasted = 6.0, baselineSaved = 9.0, smokingUnits = 6.0),
+            eligible = true
+        )
+        reg.ledgersFlow.value = listOf(canonicalRecord)
+
+        bg.launch { vm.canonical.collect {} }
+        bg.launch { vm.metrics.collect {} }
+        scheduler.runCurrent()
+
+        // Canonical credit must win over legacy credit
+        assertNotNull(vm.canonical.value)
+        assertEquals(FinancialSource.OPTION_B_CANONICAL, vm.canonical.value?.today?.source)
+        val metrics = vm.metrics.value!!
+        assertTrue(metrics.todayAvailable)
+        assertEquals(6.0, metrics.spentToday)
+        assertEquals(4.0, metrics.saved)
+        assertEquals(4.0, metrics.budgetLeftToday)
+        assertEquals(9.0, metrics.baselineSavedToday)
+    }
+
+    @Test
+    fun canonical_zeroRetrievedLedgers_flagsUnavailable_neverFabricatesZeroOrLegacy() {
+        val (vm, reg, _) = build()
+        reg.financialMode = "OPTION_B"
+        reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(saved = 100.0, wasted = 50.0))
+        reg.configsFlow.value = listOf(
+            TrackerConfig(id = "cig", name = "Cigarettes", limit = 10, order = 0, pricePerUnit = 1.0, type = TrackerType.CIGARETTE)
+        )
+        // Today has activity, with a legacy credit of 50.0
+        val dayDoc = DayDocument(
+            date = "2026-06-01",
+            counts = mapOf("cig" to 5.0),
+            status = "open",
+            aggregateCredit = LifetimeAggregates(saved = 50.0, wasted = 50.0)
+        )
+        reg.dayFlow.value = dayDoc
+        reg.daysFlow.value = listOf(dayDoc)
+        // Zero retrieved ledgers for Option B account with activity
+        reg.ledgersFlow.value = emptyList()
+
+        bg.launch { vm.canonical.collect {} }
+        bg.launch { vm.metrics.collect {} }
+        scheduler.runCurrent()
+
+        // Missing canonical ledger must be marked as UNAVAILABLE, never silently falling back to legacy or fabricating zero
+        assertNotNull(vm.canonical.value)
+        assertEquals(FinancialSource.MISSING_CANONICAL_LEDGER, vm.canonical.value?.today?.source)
+        val metrics = vm.metrics.value!!
+        assertFalse(metrics.todayAvailable, "todayAvailable must be false when canonical ledger is missing")
     }
 }

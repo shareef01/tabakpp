@@ -382,3 +382,46 @@ test('FIX 15: Consistent monetary precision (2 decimal places without floating p
   assert.equal(fin.baselineSaved, 3.96);
   assert.equal(roundMoney(0.1 + 0.2), 0.3);
 });
+
+test('Financial rounding: symmetric commercial half-away-from-zero precision policy', () => {
+  // Required boundary cases from release gate
+  assert.equal(roundMoney(1.005), 1.01, '1.005 rounds up to 1.01');
+  assert.equal(roundMoney(10.075), 10.08, '10.075 overcomes IEEE 754 float representation and rounds to 10.08');
+  assert.equal(roundMoney(-1.005), -1.01, '-1.005 rounds symmetrically away from zero to -1.01');
+  assert.equal(roundMoney(-10.075), -10.08, '-10.075 rounds symmetrically away from zero to -10.08');
+  assert.equal(roundMoney(0), 0);
+  assert.equal(roundMoney(1.004), 1.00);
+  assert.equal(roundMoney(-1.004), -1.00);
+
+  // Repeated positive and negative lifetime corrections (no asymmetric drift)
+  let lifetimeCorrection = 0;
+  for (let i = 0; i < 1000; i++) {
+    lifetimeCorrection = roundMoney(lifetimeCorrection + roundMoney(1.005));
+    lifetimeCorrection = roundMoney(lifetimeCorrection + roundMoney(-1.005));
+  }
+  assert.equal(lifetimeCorrection, 0, 'Symmetric corrections over 1000 iterations must yield 0 net drift');
+
+  // Per-item vs per-day rounding policy:
+  // Items accumulate at exact fractional rates; rounding occurs at the day aggregate boundary.
+  // For a roll-your-own tracker at €0.125 per unit:
+  // 1 unit = €0.125 -> rounds to €0.13 at day boundary
+  // 2 units = €0.25 -> rounds to €0.25 at day boundary
+  // 3 units = €0.375 -> rounds to €0.38 at day boundary
+  // If rounded per-item, 3 units might erroneously be 3 * 0.13 = €0.39 or 3 * 0.12 = €0.36.
+  const ryoSnap = { unitPrice: 0.125, target: 10, isFinanciallyTracked: true };
+  const day1 = computeDayCredit({ ryo: 1 }, { ryo: ryoSnap });
+  const day2 = computeDayCredit({ ryo: 2 }, { ryo: ryoSnap });
+  const day3 = computeDayCredit({ ryo: 3 }, { ryo: ryoSnap });
+  assert.equal(day1.wasted, 0.13, '1 unit of 0.125 rounds to 0.13');
+  assert.equal(day2.wasted, 0.25, '2 units of 0.125 is 0.25');
+  assert.equal(day3.wasted, 0.38, '3 units of 0.125 is 0.375 -> rounds to 0.38, not per-item 0.39');
+
+  // Large transaction sequence (10,000 operations)
+  let balance = 1000.00;
+  for (let i = 0; i < 10000; i++) {
+    // Add 10.075 rounded to 10.08, subtract 10.075 rounded to 10.08
+    balance = roundMoney(balance + roundMoney(10.075));
+    balance = roundMoney(balance - roundMoney(10.075));
+  }
+  assert.equal(balance, 1000.00, 'Balance must remain exactly 1000.00 without floating point drift after 10000 ops');
+});

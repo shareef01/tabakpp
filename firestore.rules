@@ -813,6 +813,12 @@ service cloud.firestore {
       match /trustedOperations/{operationId} {
         allow read, write: if false;
       }
+
+      // Item 2: Server-controlled restoration evidence tombstones.
+      // Explicit deny — only trusted executeFinancialOperation callable manages this.
+      match /trustedDeletedLogs/{logId} {
+        allow read, write: if false;
+      }
     }
 
     // Everything else is denied.

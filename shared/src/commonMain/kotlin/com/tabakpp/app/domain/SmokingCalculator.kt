@@ -956,18 +956,20 @@ object SmokingCalculator {
         val todayUnresolved: UnresolvedComponents? = null
     )
 
+    fun roundMoney(amount: Double): Double {
+        if (!amount.isFinite() || amount == 0.0) return 0.0
+        val sign = if (amount < 0.0) -1.0 else 1.0
+        val absVal = abs(amount)
+        val cents = floor(absVal * 100.0 + 0.5000000001)
+        val result = sign * (cents / 100.0)
+        return if (result == -0.0) 0.0 else result
+    }
+
     fun formatCurrency(amount: Double): String {
-        // Round in cent space: naive (amount - intPart) * 100 truncation
-        // turns 8.03 into "8,02 €" and breaks entirely for negatives.
-        //
-        // floor(x + 0.5), not round(x): kotlin.math.round is Math.rint, which
-        // breaks ties to even, while the web's Math.round breaks them upward. On
-        // an exact half-cent — reachable from a unit price like 0.125 — the two
-        // clients printed amounts a cent apart for the same stored data. This is
-        // both JS-identical and the conventional currency rounding.
-        val totalCents = floor(amount * 100 + 0.5).toLong()
-        val sign = if (totalCents < 0) "-" else ""
-        val cents = abs(totalCents)
+        if (!amount.isFinite()) return "0,00 €"
+        val sign = if (amount < 0.0) "-" else ""
+        val absVal = abs(amount)
+        val cents = floor(absVal * 100.0 + 0.5000000001).toLong()
         return "$sign${cents / 100},${(cents % 100).toString().padStart(2, '0')} €"
     }
 
