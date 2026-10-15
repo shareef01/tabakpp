@@ -76,15 +76,15 @@ const TrendBadge = ({ trend }) => {
  * Domain logic: SmokingCalculator.aggregateMonthlyData / calculateTrend (shared JS/Kotlin).
  */
 export const InsightsScreen = React.memo(({
-  logs = [], dayDocs = [], m, today, unitPrice = 0.5
+  logs = [], dayDocs = [], m, today, unitPrice = 0.5, _canonical = null, ledgers = []
 }) => {
   const [subView, setSubView] = useState('insights');
 
   const insightData = useMemo(
     () => SmokingCalculator.aggregateMonthlyData(
-      logs, dayDocs, today, m.activeCounts || {}, unitPrice, 6
+      logs, dayDocs, today, m.activeCounts || {}, unitPrice, 6, ledgers
     ),
-    [logs, dayDocs, today, m.activeCounts, unitPrice]
+    [logs, dayDocs, today, m.activeCounts, unitPrice, ledgers]
   );
 
   // Recent trend: last 7 tracked days vs previous 7

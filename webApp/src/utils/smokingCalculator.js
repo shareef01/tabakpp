@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SmokingCalculator — domain math ported 1:1 from the Kotlin
  * SmokingCalculator (shared/src/commonMain/kotlin/com/tabakpp/app/domain/).
  * Both clients read and write the same Firestore documents, so any change
@@ -12,6 +12,20 @@
 
 export const DAY_START_HOUR_DEFAULT = 6;
 const SMOKING_TYPES = ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING'];
+
+export const roundMoney = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n === 0) return 0;
+  const sign = n < 0 ? -1 : 1;
+  const abs = Math.abs(n);
+  const parts = String(abs).split('e');
+  const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
+  const rounded = Math.round(shifted);
+  if (rounded === 0) return 0;
+  const roundedParts = String(rounded).split('e');
+  const result = Number(roundedParts[0] + 'e' + (roundedParts[1] ? Number(roundedParts[1]) - 2 : '-2'));
+  return sign * result;
+};
 
 /**
  * Population-level minutes-of-life-expectancy estimate per smoking unit.
@@ -325,7 +339,12 @@ const computeDayCredit = (counts, trackerSnapshots, defaultUnitPrice = 0.5) => {
     }
     if (SMOKING_TYPES.includes(snap?.type)) smokingUnits += count;
   });
-  return { wasted, saved, smokingUnits, baselineSaved };
+  return {
+    wasted: roundMoney(wasted),
+    saved: roundMoney(saved),
+    smokingUnits: Math.round(smokingUnits),
+    baselineSaved: roundMoney(baselineSaved),
+  };
 };
 
 export const SmokingCalculator = {
@@ -347,7 +366,36 @@ export const SmokingCalculator = {
    * hour, matching mobile's getTrackingDate + TimeZone.currentSystemDefault().
    * A 2 AM session belongs to yesterday's tracking day (night-owl mode).
    */
-  getTrackingDate: (now = new Date(), dayStartHour = DAY_START_HOUR_DEFAULT) => {
+  getTrackingDate: (now = new Date(), dayStartHour = DAY_START_HOUR_DEFAULT, timeZone = null) => {
+    if (timeZone) {
+      try {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone,
+          hourCycle: 'h23',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+        });
+        const parts = formatter.formatToParts(now);
+        const map = {};
+        for (const { type, value } of parts) map[type] = value;
+        let year = parseInt(map.year, 10);
+        let month = parseInt(map.month, 10);
+        let day = parseInt(map.day, 10);
+        const hour = parseInt(map.hour, 10) % 24;
+        if (hour < dayStartHour) {
+          const d = new Date(Date.UTC(year, month - 1, day));
+          d.setUTCDate(d.getUTCDate() - 1);
+          year = d.getUTCFullYear();
+          month = d.getUTCMonth() + 1;
+          day = d.getUTCDate();
+        }
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      } catch {
+        // Fall back to local clock if timezone is invalid
+      }
+    }
     const d = new Date(now);
     if (d.getHours() < dayStartHour) d.setDate(d.getDate() - 1);
     const y = d.getFullYear();
@@ -632,11 +680,17 @@ export const SmokingCalculator = {
     return dateStr <= trackingDay;
   },
 
-  /** Round in cent space — Kotlin formatCurrency parity (de-DE style). */
+  roundMoney,
+
+  /** Round in cent space — symmetric commercial rounding parity with Kotlin and Functions. */
   formatCurrency: (amount) => {
-    const totalCents = Math.round((amount || 0) * 100);
-    const sign = totalCents < 0 ? '-' : '';
-    const cents = Math.abs(totalCents);
+    const n = Number(amount || 0);
+    if (!Number.isFinite(n) || n === 0) return '0,00 €';
+    const sign = n < 0 ? '-' : '';
+    const abs = Math.abs(n);
+    const parts = String(abs).split('e');
+    const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
+    const cents = Math.round(shifted);
     return `${sign}${Math.floor(cents / 100)},${String(cents % 100).padStart(2, '0')} €`;
   },
 
@@ -859,9 +913,11 @@ export const SmokingCalculator = {
    * @param {number} monthsToInclude - how many complete recent months + current MTD to include
    * @returns {{ months: Array<{ month: string, label: string, units: number, trackedDays: number, avgUnitsPerTrackedDay: number, spent: number, saved: number, baselineSaved: number, hasBaseline: boolean, isCurrentMonth: boolean }>, currentMonthMtd: object }}
    */
-  aggregateMonthlyData: (logs, dayDocs = [], trackingDay, activeCounts = {}, defaultUnitPrice = 0.5, monthsToInclude = 6) => {
+  aggregateMonthlyData: (logs, dayDocs = [], trackingDay, activeCounts = {}, defaultUnitPrice = 0.5, monthsToInclude = 6, ledgers = []) => {
     const merged = projectLoggedCounts(logs, dayDocs, trackingDay, activeCounts);
     const economics = {};
+    const ledgersByDate = Object.fromEntries((ledgers || []).map((l) => [l.date, l]));
+    const hasAnyLedgers = (ledgers || []).length > 0;
     const add = (date, credit, unknown = false, baseline = false) => {
       const item = economics[date] ||= { spent: 0, saved: 0, baselineSaved: 0, hasBaseline: false, unknownEconomics: false };
       item.spent += credit?.wasted ?? 0;
@@ -870,10 +926,14 @@ export const SmokingCalculator = {
       item.hasBaseline ||= baseline || (credit?.baselineSaved ?? 0) !== 0;
       item.unknownEconomics ||= unknown;
     };
-    (logs || []).forEach((log) => add(log.logDate, log.aggregateCredit,
-      !log.aggregateCredit || log.economicStatus === 'UNKNOWN',
-      Object.values(log.trackerSnapshots || {}).some((snap) => snap.baseline != null)));
+    (logs || []).forEach((log) => {
+      if (ledgersByDate[log.logDate]) return;
+      add(log.logDate, log.aggregateCredit,
+        !log.aggregateCredit || log.economicStatus === 'UNKNOWN',
+        Object.values(log.trackerSnapshots || {}).some((snap) => snap.baseline != null));
+    });
     (dayDocs || []).forEach((day) => {
+      if (ledgersByDate[day.date]) return;
       const snapshots = day.trackerSnapshots || {};
       const knownSnapshots = Object.keys(snapshots).length > 0 && Object.values(snapshots)
         .every((snap) => snap.isFinanciallyTracked === false || snap.unitPrice != null);
@@ -883,6 +943,23 @@ export const SmokingCalculator = {
         : day.aggregateCredit || (knownSnapshots ? SmokingCalculator.computeDayCredit(counts, snapshots, defaultUnitPrice) : null);
       add(day.date, credit, !credit, Object.values(snapshots).some((snap) => snap.baseline != null));
     });
+    Object.entries(ledgersByDate).forEach(([date, l]) => {
+      if (!l || !l.canonicalCredit) {
+        add(date, null, true, false);
+        return;
+      }
+      const c = l.canonicalCredit;
+      const unres = l.unresolvedComponents || {};
+      const isUnresolved = !!l.ambiguous || Object.values(unres).some(Boolean);
+      add(date, c, isUnresolved, (c.baselineSaved ?? 0) !== 0);
+    });
+    if (hasAnyLedgers) {
+      Object.keys(merged).forEach((date) => {
+        if (!ledgersByDate[date]) {
+          economics[date] = { spent: 0, saved: 0, baselineSaved: 0, hasBaseline: false, unknownEconomics: true };
+        }
+      });
+    }
     const dayRecords = {};
     Object.entries(merged).forEach(([date, counts]) => {
       const units = Object.values(counts || {}).reduce((sum, value) => sum + Math.max(0, value || 0), 0);

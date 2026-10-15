@@ -156,7 +156,7 @@ const dayRecordAsLogLike = (day) => ({
 
 export const HistoryScreen = React.memo(({
   logs, dayDocs = [], configs = [], m, onEdit, onAddEntry, userId, today, unitPrice = 0.5,
-  onDeleteLog, onRestoreLog, historyIsTruncated = false, historyUpdate = null
+  onDeleteLog, onRestoreLog, historyIsTruncated = false, historyUpdate = null, canonical = null, ledgers = []
 }) => {
   const [undo, setUndo] = useState(null); // { log, key } after successful purge
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -247,6 +247,10 @@ export const HistoryScreen = React.memo(({
       });
     } catch (err) {
       console.error(err);
+      if (err?.message?.includes('NO_RESTORATION_EVIDENCE') || err?.code === 'not-found') {
+        setActionError('Cannot restore entry: no server deletion record exists to verify provenance. Please add it as a new historical entry if desired.');
+        return;
+      }
       setActionError(mapFirestoreError(err, 'Could not restore entry.'));
       setUndo({ log, key: key || `${log.id}-retry` });
       throw err;
@@ -387,6 +391,8 @@ export const HistoryScreen = React.memo(({
           m={m}
           today={today}
           unitPrice={unitPrice}
+          canonical={canonical}
+          ledgers={ledgers}
         />
       ) : (
         <React.Fragment>
@@ -562,9 +568,9 @@ export const HistoryScreen = React.memo(({
             />
             <StatTile
               icon={Wallet}
-              value={SmokingCalculator.formatCurrency(m.spentToday ?? 0)}
+              value={m.todayAvailable === false || m.todayUnresolved?.spent ? '—' : SmokingCalculator.formatCurrency(m.spentToday ?? 0)}
               label="Spent"
-              hint="Today"
+              hint={m.todayAvailable === false ? 'Unavailable' : m.todayUnresolved?.spent ? 'Unresolved' : 'Today'}
               tone="rose"
             />
             {hasAnyBaseline || m.hasBaseline ? (
@@ -572,7 +578,7 @@ export const HistoryScreen = React.memo(({
                 icon={PiggyBank}
                 value={SmokingCalculator.formatCurrency(m.baselineSavedLifetime ?? 0)}
                 label="Saved"
-                hint="vs. baseline"
+                hint={m.financialComplete === false ? 'Partial · vs. baseline' : 'vs. baseline'}
                 tone="accent"
               />
             ) : (

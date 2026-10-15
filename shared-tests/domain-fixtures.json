@@ -96,9 +96,47 @@
       },
       "expected": { "wasted": 5.0, "saved": 5.0, "smokingUnits": 5.0, "baselineSaved": 0.0 } },
 
+    { "case": "day_credit_per_unit_0125", "op": "dayCredit",
+      "input": {
+        "counts": { "c1": 1 },
+        "trackerSnapshots": { "c1": { "target": 2, "baseline": 3, "unitPrice": 0.125, "type": "CIGARETTE", "isFinanciallyTracked": true } },
+        "defaultUnitPrice": 0.5
+      },
+      "expected": { "wasted": 0.13, "saved": 0.13, "smokingUnits": 1.0, "baselineSaved": 0.25 } },
+    { "case": "day_credit_per_unit_1005", "op": "dayCredit",
+      "input": {
+        "counts": { "c1": 1 },
+        "trackerSnapshots": { "c1": { "target": 2, "baseline": 3, "unitPrice": 1.005, "type": "CIGARETTE", "isFinanciallyTracked": true } },
+        "defaultUnitPrice": 0.5
+      },
+      "expected": { "wasted": 1.01, "saved": 1.01, "smokingUnits": 1.0, "baselineSaved": 2.01 } },
+    { "case": "day_credit_per_unit_10075", "op": "dayCredit",
+      "input": {
+        "counts": { "c1": 1 },
+        "trackerSnapshots": { "c1": { "target": 2, "baseline": 3, "unitPrice": 10.075, "type": "CIGARETTE", "isFinanciallyTracked": true } },
+        "defaultUnitPrice": 0.5
+      },
+      "expected": { "wasted": 10.08, "saved": 10.08, "smokingUnits": 1.0, "baselineSaved": 20.15 } },
+    { "case": "day_credit_large_and_small_values", "op": "dayCredit",
+      "input": {
+        "counts": { "c1": 10, "c2": 2 },
+        "trackerSnapshots": {
+          "c1": { "target": 20, "baseline": 30, "unitPrice": 1e-4, "type": "CIGARETTE", "isFinanciallyTracked": true },
+          "c2": { "target": 5, "baseline": 10, "unitPrice": 2.5e3, "type": "CIGARETTE", "isFinanciallyTracked": true }
+        },
+        "defaultUnitPrice": 0.5
+      },
+      "expected": { "wasted": 5000.0, "saved": 7500.0, "smokingUnits": 12.0, "baselineSaved": 20000.0 } },
+
     { "case": "format_currency_simple", "op": "formatCurrency", "input": { "amount": 8.03 }, "expected": "8,03 €" },
     { "case": "format_currency_half_cent_ties_up", "op": "formatCurrency", "input": { "amount": 0.125 }, "expected": "0,13 €" },
     { "case": "format_currency_negative", "op": "formatCurrency", "input": { "amount": -1.5 }, "expected": "-1,50 €" },
+    { "case": "format_currency_tie_break_1005", "op": "formatCurrency", "input": { "amount": 1.005 }, "expected": "1,01 €" },
+    { "case": "format_currency_tie_break_10075", "op": "formatCurrency", "input": { "amount": 10.075 }, "expected": "10,08 €" },
+    { "case": "format_currency_tie_break_neg_1005", "op": "formatCurrency", "input": { "amount": -1.005 }, "expected": "-1,01 €" },
+    { "case": "format_currency_tie_break_neg_10075", "op": "formatCurrency", "input": { "amount": -10.075 }, "expected": "-10,08 €" },
+    { "case": "format_currency_small_scientific", "op": "formatCurrency", "input": { "amount": 1e-5 }, "expected": "0,00 €" },
+    { "case": "format_currency_large_scientific", "op": "formatCurrency", "input": { "amount": 1.25e4 }, "expected": "12500,00 €" },
 
     { "case": "backfill_same_day_allowed", "op": "backfillAllowed",
       "input": { "date": "2024-05-20", "trackingDay": "2024-05-20" }, "expected": true },

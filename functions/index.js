@@ -16,11 +16,11 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
-  calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, migrationPlan,
+  calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, migrationPlan, roundMoney,
 } from './financial.js';
 import {
-  MAX_COUNT, requireId, requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate, sanitizeCounts,
-  sanitizeHistoricalCounts,
+  MAX_COUNT, MAX_DAY_TRACKERS, requireId, requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate,
+  resolveUserTrackingDate, isValidIanaTimeZone, sanitizeCounts, sanitizeHistoricalCounts,
 } from './validation.js';
 
 initializeApp();
@@ -40,6 +40,10 @@ const EXPLICITLY_BLOCKED = new Set(['STALE_DAY_RECONCILE']);
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
+const resolveUnitPrice = (profileSnap, fallback = 0.5) => {
+  const p = profileSnap?.get ? profileSnap.get('unitPrice') : profileSnap?.unitPrice;
+  return Number.isFinite(Number(p)) && Number(p) >= 0 ? Number(p) : fallback;
+};
 
 /** Read the authoritative per-date state inside a transaction. */
 async function readDateState(t, userRef, date) {
@@ -78,10 +82,10 @@ function writeLedgerAndLifetime(t, userRef, ledgerRef, ledgerExisted, existing, 
     const cur = existing?.__profileAgg || ZERO;
     t.set(userRef, {
       lifetimeAggregates: {
-        saved: num(cur.saved) - num(oldCredit.saved) + num(newCredit.saved),
-        wasted: num(cur.wasted) - num(oldCredit.wasted) + num(newCredit.wasted),
-        smokingUnits: num(cur.smokingUnits) - num(oldCredit.smokingUnits) + num(newCredit.smokingUnits),
-        baselineSaved: num(cur.baselineSaved) - num(oldCredit.baselineSaved) + num(newCredit.baselineSaved),
+        saved: roundMoney(num(cur.saved) - num(oldCredit.saved) + num(newCredit.saved)),
+        wasted: roundMoney(num(cur.wasted) - num(oldCredit.wasted) + num(newCredit.wasted)),
+        smokingUnits: Math.round(num(cur.smokingUnits) - num(oldCredit.smokingUnits) + num(newCredit.smokingUnits)),
+        baselineSaved: roundMoney(num(cur.baselineSaved) - num(oldCredit.baselineSaved) + num(newCredit.baselineSaved)),
       },
     }, { merge: true });
   }
@@ -100,10 +104,40 @@ export const executeFinancialOperation = onCall(async (request) => {
   if (!SUPPORTED.has(type)) throw new HttpsError('invalid-argument', 'Unsupported operation type.');
 
   const userRef = db.collection('users').doc(uid);
-  const receiptRef = userRef.collection('financialOperations').doc(operationId);
-  const fp = fingerprintOf({ type, date: data.date, trackerId: data.trackerId, logId: data.logId, counts: data.counts, delta: data.delta });
+  // AUD-016: trusted receipts live in their OWN namespace. The client-writable
+  // `financialOperations` collection holds the LEGACY client-gateway receipts
+  // (rules allowlist: createManualLog/…/adjustCounter) — a forged document there
+  // must never be able to satisfy the callable's idempotency check or smuggle a
+  // client-authored `result` back as a trusted response. Only the Admin SDK can
+  // write `trustedOperations` (rules deny clients unconditionally).
+  const receiptRef = userRef.collection('trustedOperations').doc(operationId);
+  const fp = fingerprintOf({
+    type,
+    date: data.date,
+    trackerId: data.trackerId,
+    logId: data.logId,
+    counts: data.counts,
+    delta: data.delta,
+    allowUnresolved: data.allowUnresolved === true,
+  });
 
   return db.runTransaction(async (t) => {
+    // The profile is read INSIDE the transaction: lifetimeAggregates are
+    // written back as absolute values below, so a read outside it let two
+    // concurrent folded-date operations overwrite each other's delta.
+    // financialMode is authoritative from the server; NEVER from the payload.
+    //
+    // AUD-016: the mode guard runs BEFORE the receipt lookup, so ONLY an
+    // OPTION_B account can ever receive a successful trusted response —
+    // including an idempotent replay. A receipt that does not exist yet for a
+    // LEGACY/MIGRATING account can never make the callable return early.
+    const profileSnap = await t.get(userRef);
+    if (!profileSnap.exists) throw new HttpsError('failed-precondition', 'NO_PROFILE');
+    const mode = profileSnap.get('financialMode') || 'LEGACY';
+    if (mode !== 'OPTION_B') {
+      throw new HttpsError('failed-precondition', `Account is not OPTION_B (financialMode=${mode}).`);
+    }
+
     const receiptSnap = await t.get(receiptRef);
     if (receiptSnap.exists) {
       if (receiptSnap.get('payloadFingerprint') !== fp) {
@@ -112,28 +146,44 @@ export const executeFinancialOperation = onCall(async (request) => {
       return { applied: false, result: receiptSnap.get('result') || null };
     }
 
-    // The profile is read INSIDE the transaction: lifetimeAggregates are
-    // written back as absolute values below, so a read outside it let two
-    // concurrent folded-date operations overwrite each other's delta.
-    // financialMode is authoritative from the server; NEVER from the payload.
-    const profileSnap = await t.get(userRef);
-    if (!profileSnap.exists) throw new HttpsError('failed-precondition', 'NO_PROFILE');
-    const mode = profileSnap.get('financialMode') || 'LEGACY';
-    if (mode !== 'OPTION_B') {
-      throw new HttpsError('failed-precondition', `Account is not OPTION_B (financialMode=${mode}).`);
+    // Resolve user's tracking date and timezone authoritatively from server time + account/request timezone
+    const { trackingDate: currentTrackingDate, timeZone: resolvedZone, shouldPersist } = resolveUserTrackingDate({
+      now: new Date(),
+      profileTimeZone: profileSnap.get('timeZone'),
+      requestTimeZone: data.timeZone,
+      claimedDate: data.currentTrackingDate,
+      dayStartHour: profileSnap.get('dayStartHour'),
+    });
+
+
+    let date;
+    if (type === 'TRACKER_DELETE') {
+      // TRACKER_DELETE deletes the config and drops counts from the CURRENT open tracking day.
+      // Callers cannot supply an old historical date to mutate past records or leave today dangling.
+      if (data.date) {
+        date = requireTrackingDate(data.date);
+        if (date !== currentTrackingDate) {
+          throw new HttpsError('failed-precondition', 'TRACKER_DELETE_MUST_TARGET_CURRENT_DATE');
+        }
+      } else {
+        date = currentTrackingDate;
+      }
+    } else {
+      date = requireTrackingDate(data.date);
     }
 
-    const date = requireTrackingDate(data.date);
     const { daySnap, day, logs, ledger, configs, ledgerSnap } = await readDateState(t, userRef, date);
     const ledgerRef = userRef.collection('dailyFinancials').doc(date);
     const folded = ledger?.foldedIntoLifetime === true;
 
-    // Fallback price comes from the profile, never the payload.
-    const defaultUnitPrice = num(profileSnap.get('unitPrice')) || 0.5;
+    // Fallback price comes from the profile, never the payload (FIX 14: handle 0 correctly).
+    const defaultUnitPrice = resolveUnitPrice(profileSnap);
 
     // Attach the current profile aggregates for folded lifetime adjustments.
     const curAgg = profileSnap.get('lifetimeAggregates') || ZERO;
     const ledgerWithAgg = ledger ? { ...ledger, __profileAgg: curAgg } : null;
+
+    const isCurrent = (date === currentTrackingDate);
 
     // The day state AFTER the staged source mutation. Eligibility and the
     // canonical credit must be derived from this, never from the pre-write
@@ -152,6 +202,7 @@ export const executeFinancialOperation = onCall(async (request) => {
       if (!cfg) throw new HttpsError('failed-precondition', 'CONFIG_NOT_FOUND');
       const newCounts = applyDelta(day?.counts || {}, { [trackerId]: delta });
       if ((newCounts[trackerId] || 0) > MAX_COUNT) throw new HttpsError('failed-precondition', 'COUNT_LIMIT');
+      if (Object.keys(newCounts).length > MAX_DAY_TRACKERS) throw new HttpsError('invalid-argument', 'TOO_MANY_TRACKERS');
       const trackerSnapshots = {
         ...(day?.trackerSnapshots || {}),
         [trackerId]: snapshotFromConfig(cfg),
@@ -169,35 +220,149 @@ export const executeFinancialOperation = onCall(async (request) => {
     } else if (type === 'MANUAL_CREATE') {
       const logId = requireId(data.logId, 'logId required');
       const counts = sanitizeCounts(data.counts);
-      if (logs.some((l) => l.id === logId)) throw new HttpsError('already-exists', 'LOG_EXISTS');
       const logRef = userRef.collection('logs').doc(logId);
-      const own = computeDayCredit(counts, snapshotsForCounts(counts, configs), defaultUnitPrice);
-      t.set(logRef, { id: logId, logDate: date, counts, isManual: true, origin: 'MANUAL_ENTRY',
-        aggregateCredit: { saved: 0, wasted: own.wasted, smokingUnits: own.smokingUnits, baselineSaved: 0 } });
-      effectiveLogs = [...logs, { id: logId, logDate: date, counts, origin: 'MANUAL_ENTRY' }];
+      // Item 1: Prevent cross-date collisions and concurrent duplicate creations atomically.
+      // Reading logRef directly in transaction guarantees optimistic concurrency locking.
+      const existingLogSnap = await t.get(logRef);
+      if (existingLogSnap.exists || logs.some((l) => l.id === logId)) {
+        throw new HttpsError('already-exists', 'LOG_EXISTS');
+      }
+      // FIX 2 & FIX 3: Store immutable per-tracker snapshots on the log for the current tracking date.
+      // Historical backfills (date !== currentTrackingDate) do NOT stamp live configs as historical facts (Task A).
+      const logSnapshots = isCurrent ? snapshotsForCounts(counts, configs, defaultUnitPrice) : {};
+      const own = isCurrent
+        ? computeDayCredit(counts, logSnapshots, defaultUnitPrice)
+        : { wasted: 0, saved: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 };
+      const logData = {
+        id: logId,
+        logDate: date,
+        counts,
+        trackerSnapshots: logSnapshots,
+        isManual: true,
+        origin: 'MANUAL_ENTRY',
+        ...(isCurrent ? {} : { unresolvedEconomics: true }),
+        aggregateCredit: {
+          saved: 0,
+          wasted: own.wasted,
+          smokingUnits: own.smokingUnits,
+          baselineSaved: 0,
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      t.set(logRef, logData);
+      effectiveLogs = [...logs, logData];
     } else if (type === 'MANUAL_UPDATE') {
       const logId = requireId(data.logId, 'logId required');
       const counts = sanitizeCounts(data.counts);
-      const target = logs.find((l) => l.id === logId);
-      if (!target) throw new HttpsError('not-found', 'LOG_NOT_FOUND');
       const logRef = userRef.collection('logs').doc(logId);
-      const own = computeDayCredit(counts, snapshotsForCounts(counts, configs), defaultUnitPrice);
-      t.set(logRef, { counts, aggregateCredit: { saved: 0, wasted: own.wasted, smokingUnits: own.smokingUnits, baselineSaved: 0 } }, { merge: true });
-      effectiveLogs = logs.map((l) => (l.id === logId ? { ...l, counts } : l));
+      const existingLogSnap = await t.get(logRef);
+      if (!existingLogSnap.exists) throw new HttpsError('not-found', 'LOG_NOT_FOUND');
+      const target = existingLogSnap.data();
+      if (target.logDate !== date) throw new HttpsError('failed-precondition', 'LOG_DATE_MISMATCH');
+      // FIX 2 & FIX 3: Preserve original snapshots where known; update effectiveLogs with latest credit
+      const existingSnapshots = target.trackerSnapshots || {};
+      const newSnapshots = isCurrent ? snapshotsForCounts(counts, configs, defaultUnitPrice) : {};
+      const logSnapshots = {};
+      Object.keys(counts).forEach((id) => {
+        if (existingSnapshots[id]) {
+          logSnapshots[id] = existingSnapshots[id];
+        } else if (isCurrent && newSnapshots[id]) {
+          logSnapshots[id] = newSnapshots[id];
+        }
+      });
+      const own = isCurrent
+        ? computeDayCredit(counts, logSnapshots, defaultUnitPrice)
+        : (target.aggregateCredit || { wasted: 0, saved: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 });
+      const updatedLogData = {
+        ...target,
+        counts,
+        trackerSnapshots: logSnapshots,
+        aggregateCredit: {
+          saved: 0,
+          wasted: own.wasted,
+          smokingUnits: own.smokingUnits,
+          baselineSaved: 0,
+        },
+        updatedAt: new Date(),
+      };
+      t.set(logRef, updatedLogData, { merge: true });
+      effectiveLogs = logs.map((l) => (l.id === logId ? updatedLogData : l));
     } else if (type === 'MANUAL_DELETE') {
       const logId = requireId(data.logId, 'logId required');
-      const target = logs.find((l) => l.id === logId);
-      if (target) t.delete(userRef.collection('logs').doc(logId));
+      const logRef = userRef.collection('logs').doc(logId);
+      const existingLogSnap = await t.get(logRef);
+      if (!existingLogSnap.exists) throw new HttpsError('not-found', 'LOG_NOT_FOUND');
+      const target = existingLogSnap.data();
+      if (target.logDate !== date) throw new HttpsError('failed-precondition', 'LOG_DATE_MISMATCH');
+      // Item 2: Server-controlled immutable restoration evidence.
+      // Save the full verified server record before deletion so undo/restore
+      // cannot be hijacked with client-forged snapshots or economics.
+      t.set(userRef.collection('trustedDeletedLogs').doc(logId), {
+        ...target,
+        deletedAt: new Date(),
+        deletedOperationId: operationId,
+      });
+      t.delete(logRef);
       effectiveLogs = logs.filter((l) => l.id !== logId);
     } else if (type === 'MANUAL_RESTORE') {
       const logId = requireId(data.logId, 'logId required');
-      if (!logs.some((l) => l.id === logId)) {
-        const counts = sanitizeCounts(data.counts);
-        const own = computeDayCredit(counts, snapshotsForCounts(counts, configs), defaultUnitPrice);
-        t.set(userRef.collection('logs').doc(logId), { id: logId, logDate: date, counts, isManual: true, origin: 'MANUAL_ENTRY',
-          aggregateCredit: { saved: 0, wasted: own.wasted, smokingUnits: own.smokingUnits, baselineSaved: 0 } });
-        effectiveLogs = [...logs, { id: logId, logDate: date, counts, origin: 'MANUAL_ENTRY' }];
+      const logRef = userRef.collection('logs').doc(logId);
+      const existingLogSnap = await t.get(logRef);
+      if (existingLogSnap.exists) {
+        throw new HttpsError('already-exists', 'LOG_ALREADY_ACTIVE');
       }
+
+      // Review Item 2: Separate verified server-authoritative restore from unsupported restore.
+      // Server-controlled immutable restoration evidence is strictly REQUIRED.
+      const evidenceRef = userRef.collection('trustedDeletedLogs').doc(logId);
+      const evidenceSnap = await t.get(evidenceRef);
+      if (!evidenceSnap.exists) {
+        // Records without server tombstones lack trustworthy server-side provenance.
+        // They CANNOT be restored as verified historical records.
+        // Explicit new historical entries must be created via MANUAL_CREATE.
+        throw new HttpsError('not-found', 'NO_RESTORATION_EVIDENCE');
+      }
+
+      // Scenario A: Verified server-authoritative restore
+      const serverEvidence = evidenceSnap.data();
+      if (serverEvidence.logDate !== date) {
+        throw new HttpsError('failed-precondition', 'RESTORATION_DATE_MISMATCH');
+      }
+      // Verify client-submitted counts (if supplied) match server evidence; reject tampering
+      if (data.counts && typeof data.counts === 'object') {
+        const clientCounts = sanitizeCounts(data.counts);
+        const evidenceCounts = serverEvidence.counts || {};
+        const sameCountKeys = Object.keys(clientCounts).length === Object.keys(evidenceCounts).length &&
+          Object.keys(clientCounts).every((k) => clientCounts[k] === evidenceCounts[k]);
+        if (!sameCountKeys) {
+          throw new HttpsError('invalid-argument', 'RESTORATION_TAMPERED');
+        }
+      }
+      const counts = serverEvidence.counts || {};
+      const logSnapshots = serverEvidence.trackerSnapshots || {};
+      const own = serverEvidence.aggregateCredit || (isCurrent ? computeDayCredit(counts, logSnapshots, defaultUnitPrice) : { wasted: 0, saved: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 });
+
+      const restoredLogData = {
+        id: logId,
+        logDate: date,
+        counts,
+        trackerSnapshots: logSnapshots,
+        isManual: true,
+        origin: 'MANUAL_ENTRY',
+        aggregateCredit: serverEvidence.aggregateCredit || (own ? {
+          saved: 0,
+          wasted: own.wasted,
+          smokingUnits: own.smokingUnits,
+          baselineSaved: 0,
+        } : null),
+        createdAt: serverEvidence.createdAt || new Date(),
+        updatedAt: new Date(),
+        restorationMode: 'VERIFIED',
+      };
+      t.delete(evidenceRef);
+      t.set(logRef, restoredLogData);
+      effectiveLogs = [...logs.filter((l) => l.id !== logId), restoredLogData];
     } else if (type === 'HISTORICAL_DAY_UPDATE') {
       // Edit a historical day's counter counts. `trackerSnapshots` are immutable
       // (item 2): the canonical credit is recomputed from the FROZEN stamped
@@ -205,7 +370,18 @@ export const executeFinancialOperation = onCall(async (request) => {
       // `updateHistoricalDay` — merge counts, recompute credit, and (below) apply
       // the ledger's old→new canonicalCredit delta to lifetime.
       if (!day) throw new HttpsError('not-found', 'DAY_NOT_FOUND');
-      const merged = { ...(day.counts || {}), ...sanitizeHistoricalCounts(data.counts) };
+      const incoming = sanitizeHistoricalCounts(data.counts);
+      const merged = { ...(day.counts || {}), ...incoming };
+      // FIX 12: Harmonize with Firestore rules constraints (validDayCountMap / MAX_DAY_TRACKERS)
+      for (const [k, v] of Object.entries(merged)) {
+        if (v === 0) delete merged[k];
+        else if (!Number.isInteger(v) || v < 0 || v > MAX_COUNT) {
+          throw new HttpsError('invalid-argument', 'INVALID_COUNT');
+        }
+      }
+      if (Object.keys(merged).length > MAX_DAY_TRACKERS) {
+        throw new HttpsError('invalid-argument', 'TOO_MANY_TRACKERS');
+      }
       t.set(userRef.collection('days').doc(date), { counts: merged, updatedAt: new Date() }, { merge: true });
       effectiveDay = { ...day, counts: merged };
     } else if (type === 'TRACKER_DELETE') {
@@ -229,37 +405,62 @@ export const executeFinancialOperation = onCall(async (request) => {
     }
 
     // --- Canonical credit (server-computed, authoritative) -----------------
-    // The user's local "today" (client-supplied, bounds-checked) — decides
-    // whether this date may still use the live tracker config. Not part of
-    // the fingerprint: a retry across midnight is still the same operation.
-    const currentTrackingDate = resolveCurrentTrackingDate(data.currentTrackingDate, profileSnap.get('dayStartHour'));
-    const fin = calculateDailyFinancials(effectiveDay, effectiveLogs.filter((l) => !(effectiveDay && isArchiveLog(l))), configs, defaultUnitPrice, { currentTrackingDate, ledgerSnapshots: ledger?.snapshots || {} });
+    const effectiveConfigs = (type === 'TRACKER_DELETE')
+      ? configs.filter((c) => c.id !== data.trackerId)
+      : configs;
+    const fin = calculateDailyFinancials(
+      effectiveDay,
+      effectiveLogs.filter((l) => !(effectiveDay && isArchiveLog(l))),
+      effectiveConfigs,
+      defaultUnitPrice,
+      { currentTrackingDate, ledgerSnapshots: ledger?.snapshots || {} }
+    );
     const ledgerExistsAfter = ledgerSnap.exists;
 
     if (type === 'DAY_CLOSE' || type === 'ZERO_COUNT_DAY_CLOSE') {
+      // FIX 1: Strict Count Ownership Model.
+      // `days/{date}.counts` represents ONLY consumption owned by the day document.
+      // Manual log counts remain owned by their logs.
+      // `dailyFinancials/{date}.countsByTracker` holds the canonical combined total.
+      const dayCounts = effectiveDay?.counts || {};
       t.set(userRef.collection('days').doc(date), {
-        date, counts: fin.counts, trackerSnapshots: fin.snapshots,
-        status: 'closed', foldedIntoLifetime: true, closedAt: new Date(), updatedAt: new Date(),
+        date,
+        counts: dayCounts,
+        trackerSnapshots: effectiveDay?.trackerSnapshots || fin.snapshots,
+        status: 'closed',
+        foldedIntoLifetime: true,
+        closedAt: new Date(),
+        updatedAt: new Date(),
       }, { merge: true });
       // Fold once: use the ledger's existing credit if already folded, else the recomputed one.
       const creditToFold = folded ? (ledger.canonicalCredit || ZERO) : fin.canonicalCredit;
       const cur = curAgg;
       // write ledger first without a second lifetime delta, then apply fold
       t.set(ledgerRef, {
-        date, countsByTracker: fin.counts, snapshots: fin.snapshots, canonicalCredit: fin.canonicalCredit,
-        ledgerSchemaVersion: LEDGER_SCHEMA_VERSION, ambiguous: !!fin.ambiguous, conflicting: fin.conflicting || [],
+        date,
+        countsByTracker: fin.counts,
+        snapshots: fin.snapshots,
+        canonicalCredit: fin.canonicalCredit,
+        ledgerSchemaVersion: LEDGER_SCHEMA_VERSION,
+        ambiguous: !!fin.ambiguous,
+        conflicting: fin.conflicting || [],
         unresolvedComponents: fin.unresolved || { spent: false, saved: false, baselineSaved: false, smokingUnits: false },
         missingConfig: fin.missingConfig || [],
-        eligible: fin.eligible, foldedIntoLifetime: true, migratedFromLegacy: ledger?.migratedFromLegacy === true,
-        updatedAt: new Date(), ...(ledgerExistsAfter ? {} : { createdAt: new Date() }),
+        eligible: fin.eligible,
+        foldedIntoLifetime: true,
+        migratedFromLegacy: ledger?.migratedFromLegacy === true,
+        updatedAt: new Date(),
+        ...(ledgerExistsAfter ? {} : { createdAt: new Date() }),
       });
       if (!folded) {
-        t.set(userRef, { lifetimeAggregates: {
-          saved: num(cur.saved) + num(creditToFold.saved),
-          wasted: num(cur.wasted) + num(creditToFold.wasted),
-          smokingUnits: num(cur.smokingUnits) + num(creditToFold.smokingUnits),
-          baselineSaved: num(cur.baselineSaved) + num(creditToFold.baselineSaved),
-        } }, { merge: true });
+        t.set(userRef, {
+          lifetimeAggregates: {
+            saved: roundMoney(num(cur.saved) + num(creditToFold.saved)),
+            wasted: roundMoney(num(cur.wasted) + num(creditToFold.wasted)),
+            smokingUnits: Math.round(num(cur.smokingUnits) + num(creditToFold.smokingUnits)),
+            baselineSaved: roundMoney(num(cur.baselineSaved) + num(creditToFold.baselineSaved)),
+          },
+        }, { merge: true });
       }
     } else if (!fin.eligible) {
       // The date has no remaining tracking evidence → it earns no allowance.
@@ -268,16 +469,22 @@ export const executeFinancialOperation = onCall(async (request) => {
         t.delete(ledgerRef);
         if (folded) {
           const old = ledger.canonicalCredit || ZERO;
-          t.set(userRef, { lifetimeAggregates: {
-            saved: num(curAgg.saved) - num(old.saved),
-            wasted: num(curAgg.wasted) - num(old.wasted),
-            smokingUnits: num(curAgg.smokingUnits) - num(old.smokingUnits),
-            baselineSaved: num(curAgg.baselineSaved) - num(old.baselineSaved),
-          } }, { merge: true });
+          t.set(userRef, {
+            lifetimeAggregates: {
+              saved: roundMoney(num(curAgg.saved) - num(old.saved)),
+              wasted: roundMoney(num(curAgg.wasted) - num(old.wasted)),
+              smokingUnits: Math.round(num(curAgg.smokingUnits) - num(old.smokingUnits)),
+              baselineSaved: roundMoney(num(curAgg.baselineSaved) - num(old.baselineSaved)),
+            },
+          }, { merge: true });
         }
       }
     } else {
       writeLedgerAndLifetime(t, userRef, ledgerRef, ledgerExistsAfter, ledgerWithAgg, fin, folded);
+    }
+
+    if (shouldPersist && resolvedZone) {
+      t.set(userRef, { timeZone: resolvedZone }, { merge: true });
     }
 
     const result = { canonicalCredit: fin.canonicalCredit, counts: fin.counts };
@@ -329,7 +536,15 @@ async function planMigration(userRef, defaultUnitPrice) {
   });
 
   const plan = migrationPlan(dates, configs, defaultUnitPrice);
-  const summary = plan.map((p) => ({ date: p.date, category: p.category, legacySaved: p.legacySaved, canonicalSaved: p.canonicalSaved, deltaSaved: p.deltaSaved }));
+  const summary = plan.map((p) => ({
+    date: p.date, category: p.category,
+    legacySaved: p.legacySaved, legacyWasted: p.legacyWasted,
+    legacyBaselineSaved: p.legacyBaselineSaved, legacySmokingUnits: p.legacySmokingUnits,
+    canonicalSaved: p.canonicalSaved, canonicalWasted: p.canonicalWasted,
+    canonicalBaselineSaved: p.canonicalBaselineSaved, canonicalSmokingUnits: p.canonicalSmokingUnits,
+    deltaSaved: p.deltaSaved, deltaWasted: p.deltaWasted,
+    deltaBaselineSaved: p.deltaBaselineSaved, deltaSmokingUnits: p.deltaSmokingUnits,
+  }));
   const unresolved = summary.filter((s) => s.category === 'B' || s.category === 'C');
   return { plan, summary, unresolved };
 }
@@ -359,9 +574,10 @@ async function transitionMode(userRef, from, to) {
  *  3. Freeze (LEGACY → MIGRATING), then re-classify from the FROZEN data: a
  *     client write that landed before the freeze can still have produced a B/C
  *     date. If so, nothing has been applied yet, so roll back to LEGACY.
- *  4. Replace each A date's already-credited LEGACY contribution with the
- *     canonical credit (NET delta, never additive), one transaction per date,
- *     marked `migratedFromLegacy` so a rerun resumes; then flip to OPTION_B.
+ *  4. Materialize canonical ledger for eligible dates (Categories A and D).
+ *     FIX 6: Category D dates (already correct in legacy totals) must also have
+ *     their canonical ledger materialized with foldedIntoLifetime: true.
+ *     FIX 7: Category A dates reconcile all four metrics: saved, wasted, baselineSaved, smokingUnits.
  * A multi-date migration as a whole is still NOT globally atomic (see
  * docs/financial-semantics.md §24): an interrupted run is left MIGRATING and
  * resumes on the next call.
@@ -376,7 +592,7 @@ export const migrateAccount = onCall(async (request) => {
   const profileSnap = await userRef.get();
   if (!profileSnap.exists) throw new HttpsError('not-found', 'NO_PROFILE');
   const mode = profileSnap.get('financialMode') || 'LEGACY';
-  const defaultUnitPrice = num(profileSnap.get('unitPrice')) || 0.5;
+  const defaultUnitPrice = resolveUnitPrice(profileSnap);
 
   if (mode === 'OPTION_B') {
     return { dryRun, currentMode: 'OPTION_B', alreadyMigrated: true };
@@ -417,17 +633,13 @@ export const migrateAccount = onCall(async (request) => {
       note: 'Rolled back to LEGACY: unresolved B/C dates appeared after the freeze.' };
   }
 
-  // 4. Apply the NET replacement for each A date.
-  //
-  // One transaction PER DATE: the ledger write and its lifetime delta commit
-  // together. Previously the loop wrote every ledger and then applied one
-  // combined `lifetimeAggregates` write afterwards, so an interruption in
-  // between left a date marked `migratedFromLegacy` whose delta had never been
-  // applied — and a rerun skips it by marker, silently losing the delta (the
-  // account kept its LEGACY totals while the canonical ledger said otherwise).
+  // 4. Materialize canonical ledger for eligible dates (Categories A and D).
+  // FIX 6: Category D dates (already correct in legacy totals) must also have
+  // their canonical ledger materialized with foldedIntoLifetime: true.
+  // FIX 7: Category A dates reconcile all four metrics: saved, wasted, baselineSaved, smokingUnits.
   let migrated = 0;
   for (const p of plan) {
-    if (p.category !== 'A') continue;
+    if (p.category !== 'A' && p.category !== 'D') continue;
     const ledgerRef = userRef.collection('dailyFinancials').doc(p.date);
     const applied = await db.runTransaction(async (t) => {
       const existing = await t.get(ledgerRef);
@@ -438,17 +650,25 @@ export const migrateAccount = onCall(async (request) => {
         date: p.date, countsByTracker: p.fin.counts, snapshots: p.fin.snapshots,
         canonicalCredit: p.fin.canonicalCredit, ledgerSchemaVersion: LEDGER_SCHEMA_VERSION,
         ambiguous: !!p.fin.ambiguous, missingConfig: p.fin.missingConfig || [],
-        foldedIntoLifetime: true, migratedFromLegacy: true, updatedAt: new Date(),
+        foldedIntoLifetime: true, migratedFromLegacy: true,
+        eligible: p.fin.eligible !== false,
+        unresolvedComponents: p.fin.unresolved || { spent: false, saved: false, baselineSaved: false, smokingUnits: false },
+        conflicting: p.fin.conflicting || [],
+        updatedAt: new Date(),
         ...(existing.exists ? {} : { createdAt: new Date() }),
       }, { merge: true });
-      t.set(userRef, {
-        lifetimeAggregates: {
-          ...cur,
-          saved: num(cur.saved) + num(p.deltaSaved),
-          wasted: num(cur.wasted) + num(p.deltaWasted),
-        },
-        updatedAt: new Date(),
-      }, { merge: true });
+
+      if (p.category === 'A') {
+        t.set(userRef, {
+          lifetimeAggregates: {
+            saved: roundMoney(num(cur.saved) + num(p.deltaSaved)),
+            wasted: roundMoney(num(cur.wasted) + num(p.deltaWasted)),
+            smokingUnits: Math.round(num(cur.smokingUnits) + num(p.deltaSmokingUnits)),
+            baselineSaved: roundMoney(num(cur.baselineSaved) + num(p.deltaBaselineSaved)),
+          },
+          updatedAt: new Date(),
+        }, { merge: true });
+      }
       return true;
     });
     if (applied) migrated += 1;
@@ -472,6 +692,12 @@ export const migrateAccount = onCall(async (request) => {
  *   (same partial-failure handling as the client-side wipe).
  * - Serves any financial mode, but clients only route locked accounts here;
  *   LEGACY keeps the client-side wipe, which works without Cloud Functions.
+ *
+ * Partial-Failure & Retry Semantics:
+ * db.recursiveDelete is not a single atomic transaction; Firestore executes
+ * bulk deletion across batched chunks. In case of transient network timeout or
+ * partial failure, some documents may remain. The operation is fully idempotent:
+ * clients may safely retry deleteAccountData until completion.
  */
 export const deleteAccountData = onCall(async (request) => {
   const uid = request.auth?.uid;

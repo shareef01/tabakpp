@@ -717,6 +717,60 @@ describe('OPTION B / MIGRATING trusted-write lock (Phase 3)', () => {
     }));
   });
 
+  // AUD-016: the trusted callable's receipts live in `trustedOperations` — a
+  // server-only namespace. No client operation is permitted in ANY financial
+  // mode, so a forged LEGACY-gateway receipt can never masquerade as a trusted
+  // one and the callable's idempotency state is beyond client reach.
+  describe('trustedOperations — server-only receipt namespace (AUD-016)', () => {
+    const trustedReceipt = {
+      operationId: 'srv1', operationType: 'DAY_CLOSE', sourceDocumentPath: 'users/alice/dailyFinancials/2026-10-01',
+      trackingDate: '2026-10-01', payloadFingerprint: 'fp-trusted', resultStatus: 'OK',
+      result: { canonicalCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 }, counts: { cig: 2 } },
+      createdAt: new Date(),
+    };
+
+    it('LEGACY: owner create is REJECTED (namespace is server-only, unconditionally)', async () => {
+      const db = await seed(null);
+      await assertFails(setDoc(doc(db, 'users/alice/trustedOperations/srv1'), trustedReceipt));
+    });
+
+    it('OPTION_B: owner create is REJECTED (even in the trusted financial mode)', async () => {
+      const db = await seed('OPTION_B');
+      await assertFails(setDoc(doc(db, 'users/alice/trustedOperations/srv1'), trustedReceipt));
+    });
+
+    it('MIGRATING: owner create is REJECTED', async () => {
+      const db = await seed('MIGRATING');
+      await assertFails(setDoc(doc(db, 'users/alice/trustedOperations/srv1'), trustedReceipt));
+    });
+
+    it('owner read is REJECTED (receipt contents never leak to clients)', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice/trustedOperations/srv1'), trustedReceipt);
+      });
+      const db = await seed(null);
+      await assertFails(getDoc(doc(db, 'users/alice/trustedOperations/srv1')));
+    });
+
+    it('owner update and delete are REJECTED (receipts are immutable and unerasable by clients)', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice/trustedOperations/srv1'), trustedReceipt);
+      });
+      const db = await seed(null);
+      await assertFails(updateDoc(doc(db, 'users/alice/trustedOperations/srv1'), { resultStatus: 'FORGED' }));
+      await assertFails(deleteDoc(doc(db, 'users/alice/trustedOperations/srv1')));
+    });
+
+    it('cross-user access is REJECTED (owner isolation still applies to the catch-all)', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice/trustedOperations/srv1'), trustedReceipt);
+      });
+      const mallory = testEnv.authenticatedContext('mallory').firestore();
+      await assertFails(getDoc(doc(mallory, 'users/alice/trustedOperations/srv1')));
+      await assertFails(setDoc(doc(mallory, 'users/mallory/trustedOperations/srv1'), trustedReceipt));
+    });
+  });
+
   for (const mode of ['OPTION_B', 'MIGRATING']) {
     it(`${mode}: client log create is REJECTED`, async () => {
       const db = await seed(mode);

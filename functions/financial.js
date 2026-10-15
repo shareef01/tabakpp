@@ -21,6 +21,20 @@ export const SMOKING_TYPES = ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING'];
 
 export const isArchiveLog = (log) => log?.origin === 'DAY_RESET' || (log?.id || '').endsWith('_DAY');
 
+export const roundMoney = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n === 0) return 0;
+  const sign = n < 0 ? -1 : 1;
+  const abs = Math.abs(n);
+  const parts = String(abs).split('e');
+  const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
+  const rounded = Math.round(shifted);
+  if (rounded === 0) return 0;
+  const roundedParts = String(rounded).split('e');
+  const result = Number(roundedParts[0] + 'e' + (roundedParts[1] ? Number(roundedParts[1]) - 2 : '-2'));
+  return sign * result;
+};
+
 /**
  * Day-level canonical credit: one target/baseline allowance per tracker/date.
  *  - wasted        = Σ count × price          (actual consumption cost)
@@ -37,16 +51,21 @@ export const computeDayCredit = (counts, trackerSnapshots, defaultUnitPrice = 0.
     const count = Math.max(0, (counts || {})[id] || 0);
     const target = Math.max(0, snap?.target || 0);
     const price = snap?.unitPrice == null ? defaultUnitPrice : snap.unitPrice;
-    if (snap?.isFinanciallyTracked !== false) {
-      wasted += count * price;
-      saved += Math.max(0, target - count) * price;
+    if (snap?.isFinanciallyTracked !== false && Number.isFinite(Number(price))) {
+      wasted += count * Number(price);
+      saved += Math.max(0, target - count) * Number(price);
       if (snap?.baseline != null) {
-        baselineSaved += Math.max(0, snap.baseline - count) * price;
+        baselineSaved += Math.max(0, snap.baseline - count) * Number(price);
       }
     }
     if (SMOKING_TYPES.includes(snap?.type)) smokingUnits += count;
   });
-  return { wasted, saved, smokingUnits, baselineSaved };
+  return {
+    wasted: roundMoney(wasted),
+    saved: roundMoney(saved),
+    smokingUnits: Math.round(smokingUnits),
+    baselineSaved: roundMoney(baselineSaved),
+  };
 };
 
 /**
@@ -55,13 +74,50 @@ export const computeDayCredit = (counts, trackerSnapshots, defaultUnitPrice = 0.
  * explicit 0), NOT from positive savings — a valid zero-savings historical
  * stamp (target == consumption) must stay reconstructible. A component the
  * stamp does not record is `null` (UNKNOWN), never an invented value.
+ *
+ * FIX 2: Immutable per-tracker snapshots stored on the log (`trackerSnapshots`)
+ * are preferred directly. For legacy logs without snapshots, unit price is derived
+ * ONLY if the log has a single active tracker. Multi-tracker logs without per-tracker
+ * snapshots return null to prevent duplicate spending or manufactured unit prices.
  */
 export const deriveSnapshotFromLog = (log, trackerId, fallbackType) => {
   const count = (log?.counts || {})[trackerId] || 0;
+  if (count <= 0) return null;
+
+  // 1. Prefer persisted per-tracker snapshot on the log (FIX 2)
+  const snap = log?.trackerSnapshots?.[trackerId];
+  if (snap && (snap.unitPrice != null || snap.target != null || snap.baseline != null)) {
+    const price = snap.unitPrice == null ? null : Number(snap.unitPrice);
+    const target = snap.target == null ? null : Math.max(0, Math.round(Number(snap.target)));
+    const baseline = snap.baseline == null ? null : Math.max(0, Math.round(Number(snap.baseline)));
+    return {
+      type: snap.type || fallbackType || 'CIGARETTE',
+      target,
+      baseline,
+      unitPrice: price,
+      isFinanciallyTracked: snap.isFinanciallyTracked !== false,
+      isPrimaryTracked: snap.isPrimaryTracked === true,
+      __derived: false,
+      __fromLogSnapshot: true,
+      __hasTarget: target != null,
+      __hasBaseline: baseline != null,
+    };
+  }
+
+  // 2. Legacy fallback from aggregateCredit
   const c = log?.aggregateCredit;
-  if (!c || count <= 0) return null;
+  if (!c) return null;
+
+  // If there are multiple active trackers in this log and no per-tracker snapshot,
+  // we CANNOT derive individual tracker prices by dividing total wasted by count.
+  const activeEntries = Object.entries(log?.counts || {}).filter(([_, v]) => Number(v) > 0);
+  if (activeEntries.length > 1) {
+    return null; // Irrecoverable without snapshot: keep unresolved rather than fabricating
+  }
+
   const price = Number.isFinite(Number(c.wasted)) ? Number(c.wasted) / count : null;
-  if (price == null || !(price > 0)) return null;
+  if (price == null || price <= 0 || !Number.isFinite(price)) return null;
+
   // A POSITIVE recorded allowance reconstructs a target. A bare `saved: 0`
   // cannot (target == count is indistinguishable from "no allowance recorded"),
   // so a zero-savings stamp alone stays UNRESOLVED — only a dated snapshot can
@@ -70,8 +126,8 @@ export const deriveSnapshotFromLog = (log, trackerId, fallbackType) => {
   const hasBaseline = c.baselineSaved != null && Number(c.baselineSaved) > 0;
   return {
     type: fallbackType || 'CIGARETTE',
-    target: hasTarget ? Math.max(0, Math.round(count + Number(c.saved) / price)) : null,
-    baseline: hasBaseline ? Math.max(0, Math.round(count + Number(c.baselineSaved) / price)) : null,
+    target: hasTarget && price > 0 ? Math.max(0, Math.round(count + Number(c.saved) / price)) : null,
+    baseline: hasBaseline && price > 0 ? Math.max(0, Math.round(count + Number(c.baselineSaved) / price)) : null,
     unitPrice: price,
     isFinanciallyTracked: true,
     isPrimaryTracked: true,
@@ -149,7 +205,7 @@ export const calculateDailyFinancials = (dayDoc, logsForDate = [], configs = [],
         if (existing.__fromConfig) { snapshots[id] = derived; return; } // historical stamp beats live config
         // Two historical log stamps disagree about the same tracker/date.
         const sameTarget = Math.round(Number(existing.target) || 0) === Math.round(Number(derived.target) || 0);
-        const samePrice = Number(existing.unitPrice ?? defaultUnitPrice) === Number(derived.unitPrice ?? defaultUnitPrice);
+        const samePrice = Math.abs(Number(existing.unitPrice ?? defaultUnitPrice) - Number(derived.unitPrice ?? defaultUnitPrice)) < 1e-4;
         if (!sameTarget || !samePrice) {
           ambiguous = true;
           if (!conflicting.includes(id)) conflicting.push(id);
@@ -201,6 +257,15 @@ export const calculateDailyFinancials = (dayDoc, logsForDate = [], configs = [],
   const unresolved = { spent: false, saved: false, baselineSaved: false, smokingUnits: false };
   let wasted = 0; let saved = 0; let smokingUnits = 0; let baselineSaved = 0;
   if (eligible) {
+    if (missingConfig.size > 0) {
+      for (const id of missingConfig) {
+        if ((counts[id] || 0) > 0) {
+          unresolved.spent = true;
+          unresolved.saved = true;
+          unresolved.smokingUnits = true;
+        }
+      }
+    }
     Object.entries(snapshots).forEach(([id, snap]) => {
       const count = Math.max(0, counts[id] || 0);
       const pOk = priceKnown(snap);
@@ -231,7 +296,12 @@ export const calculateDailyFinancials = (dayDoc, logsForDate = [], configs = [],
   }
 
   const credit = eligible
-    ? { wasted, saved, smokingUnits, baselineSaved }
+    ? {
+        wasted: roundMoney(wasted),
+        saved: roundMoney(saved),
+        smokingUnits: Math.round(smokingUnits),
+        baselineSaved: roundMoney(baselineSaved),
+      }
     : { ...ZERO_CREDIT };
   return {
     date,
@@ -273,13 +343,13 @@ export const applyDelta = (base, delta) => {
 /**
  * Migration planner (Phase 8) — pure. For every date that has records, compares
  * the already-credited LEGACY contribution (day stamp + Σ log stamps) to the
- * canonical Option-B day credit and classifies the date:
+ * canonical Option-B day credit across all FOUR financial aggregate fields
+ * (saved, wasted, baselineSaved, smokingUnits) and classifies the date:
  *   D — already correct (no delta)
  *   A — reconstructible difference (migrate idempotently)
  *   B — ambiguous stamps (needs a human interpretation decision)
  *   C — non-reconstructible (missing config) — preserved, never invented
- * The lifetime correction for an A date is `canonicalSaved - legacySaved`
- * (a NET replacement: never an addition).
+ * The lifetime correction for an A date is `canonical - legacy` (NET replacement).
  */
 export const migrationPlan = (dates, configs = [], defaultUnitPrice = 0.5) => {
   const out = [];
@@ -288,15 +358,42 @@ export const migrationPlan = (dates, configs = [], defaultUnitPrice = 0.5) => {
     const fin = calculateDailyFinancials(day, legacyLogs, configs, defaultUnitPrice);
     const legacySaved = num(day?.aggregateCredit?.saved) + legacyLogs.reduce((a, l) => a + num(l?.aggregateCredit?.saved), 0);
     const legacyWasted = num(day?.aggregateCredit?.wasted) + legacyLogs.reduce((a, l) => a + num(l?.aggregateCredit?.wasted), 0);
-    const deltaSaved = fin.canonicalCredit.saved - legacySaved;
-    const deltaWasted = fin.canonicalCredit.wasted - legacyWasted;
+    const legacyBaselineSaved = num(day?.aggregateCredit?.baselineSaved) + legacyLogs.reduce((a, l) => a + num(l?.aggregateCredit?.baselineSaved), 0);
+    const legacySmokingUnits = num(day?.aggregateCredit?.smokingUnits) + legacyLogs.reduce((a, l) => a + num(l?.aggregateCredit?.smokingUnits), 0);
+
+    const deltaSaved = roundMoney(fin.canonicalCredit.saved - legacySaved);
+    const deltaWasted = roundMoney(fin.canonicalCredit.wasted - legacyWasted);
+    const deltaBaselineSaved = roundMoney(fin.canonicalCredit.baselineSaved - legacyBaselineSaved);
+    const deltaSmokingUnits = Math.round(fin.canonicalCredit.smokingUnits - legacySmokingUnits);
+
     const u = fin.unresolved || {};
     let category;
     if (fin.missingConfig.length > 0 && Object.keys(fin.snapshots).length === 0) category = 'C';
-    else if (fin.ambiguous || u.saved || u.spent) category = 'B';
-    else if (Math.abs(deltaSaved) < 1e-9 && Math.abs(deltaWasted) < 1e-9) category = 'D';
+    else if (fin.ambiguous || u.saved || u.spent || u.baselineSaved || u.smokingUnits) category = 'B';
+    else if (
+      Math.abs(deltaSaved) < 1e-4
+      && Math.abs(deltaWasted) < 1e-4
+      && Math.abs(deltaBaselineSaved) < 1e-4
+      && Math.abs(deltaSmokingUnits) === 0
+    ) category = 'D';
     else category = 'A';
-    out.push({ date, category, legacySaved, canonicalSaved: fin.canonicalCredit.saved, deltaSaved, deltaWasted, fin });
+    out.push({
+      date,
+      category,
+      legacySaved: roundMoney(legacySaved),
+      legacyWasted: roundMoney(legacyWasted),
+      legacyBaselineSaved: roundMoney(legacyBaselineSaved),
+      legacySmokingUnits: Math.round(legacySmokingUnits),
+      canonicalSaved: fin.canonicalCredit.saved,
+      canonicalWasted: fin.canonicalCredit.wasted,
+      canonicalBaselineSaved: fin.canonicalCredit.baselineSaved,
+      canonicalSmokingUnits: fin.canonicalCredit.smokingUnits,
+      deltaSaved,
+      deltaWasted,
+      deltaBaselineSaved,
+      deltaSmokingUnits,
+      fin,
+    });
   }
   return out;
 };

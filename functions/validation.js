@@ -104,6 +104,65 @@ const MAX_ZONE_LAG_MS = 12 * 60 * 60 * 1000;
 const trackingDateAt = (ms, dayStartHour) =>
   new Date(ms - dayStartHour * 60 * 60 * 1000).toISOString().slice(0, 10);
 
+/** Validates whether a string is a recognized IANA timezone identifier. */
+export const isValidIanaTimeZone = (tz) => {
+  if (typeof tz !== 'string' || !tz || tz.length > 64) return false;
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Extracts local year, month, day, and hour for a given date in an IANA timezone. */
+export const getZonedDateTimeParts = (date, timeZone) => {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const parts = formatter.formatToParts(date);
+  const map = {};
+  for (const { type, value } of parts) {
+    map[type] = value;
+  }
+  return {
+    year: parseInt(map.year, 10),
+    month: parseInt(map.month, 10),
+    day: parseInt(map.day, 10),
+    hour: parseInt(map.hour, 10) % 24,
+    minute: parseInt(map.minute, 10),
+    second: parseInt(map.second, 10),
+  };
+};
+
+/**
+ * Derives the calendar tracking date for a given instant in a validated timezone,
+ * applying the dayStartHour boundary (hours < dayStartHour roll back to previous day).
+ */
+export const computeTrackingDateForZone = (now, timeZone, dayStartHour = DEFAULT_DAY_START_HOUR) => {
+  const start = resolveDayStartHour(dayStartHour);
+  const parts = getZonedDateTimeParts(now, timeZone);
+  let { year, month, day, hour } = parts;
+  if (hour < start) {
+    const d = new Date(Date.UTC(year, month - 1, day));
+    d.setUTCDate(d.getUTCDate() - 1);
+    year = d.getUTCFullYear();
+    month = d.getUTCMonth() + 1;
+    day = d.getUTCDate();
+  }
+  const yStr = String(year).padStart(4, '0');
+  const mStr = String(month).padStart(2, '0');
+  const dStr = String(day).padStart(2, '0');
+  return `${yStr}-${mStr}-${dStr}`;
+};
+
 /**
  * The user's CURRENT tracking date. The server has no timezone for the user,
  * so the client sends the date its device computes (same day-start rule both
@@ -125,6 +184,59 @@ export const resolveCurrentTrackingDate = (claimed, dayStartHour, now = new Date
     throw new HttpsError('invalid-argument', 'IMPLAUSIBLE_CURRENT_TRACKING_DATE');
   }
   return claimed;
+};
+
+/**
+ * Trustworthy server-side resolution of the user's current tracking date:
+ * 1. If stored profile timezone is a valid IANA zone, use it with server time.
+ * 2. If profile timezone is missing/invalid, but request provides a valid IANA zone,
+ *    use it and flag for persistence.
+ * 3. Fallback: if client claimed date is plausible on Earth (UTC-12..UTC+14), accept it.
+ * 4. Otherwise, fall back to server UTC time.
+ */
+export const resolveUserTrackingDate = ({
+  now = new Date(),
+  profileTimeZone,
+  requestTimeZone,
+  claimedDate,
+  dayStartHour,
+} = {}) => {
+  const start = resolveDayStartHour(dayStartHour);
+
+  // If a claimed date is supplied, it MUST be valid and plausible somewhere on Earth
+  if (claimedDate != null) {
+    resolveCurrentTrackingDate(claimedDate, start, now);
+  }
+
+  if (isValidIanaTimeZone(profileTimeZone)) {
+    return {
+      trackingDate: computeTrackingDateForZone(now, profileTimeZone, start),
+      timeZone: profileTimeZone,
+      shouldPersist: false,
+    };
+  }
+
+  if (isValidIanaTimeZone(requestTimeZone)) {
+    return {
+      trackingDate: computeTrackingDateForZone(now, requestTimeZone, start),
+      timeZone: requestTimeZone,
+      shouldPersist: true,
+    };
+  }
+
+  if (claimedDate != null) {
+    return {
+      trackingDate: claimedDate,
+      timeZone: null,
+      shouldPersist: false,
+    };
+  }
+
+  return {
+    trackingDate: computeTrackingDateForZone(now, 'UTC', start),
+    timeZone: 'UTC',
+    shouldPersist: false,
+  };
 };
 
 /** The profile's day-start hour; 0 (midnight) is a valid setting, not "unset". */

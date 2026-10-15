@@ -5,6 +5,7 @@ import kotlinx.datetime.*
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.round
 
 object SmokingCalculator {
     const val DEFAULT_DAY_START_HOUR = 6
@@ -512,7 +513,12 @@ object SmokingCalculator {
             }
             if (SMOKING_TYPES.contains(snap.type)) smokingUnits += count
         }
-        return LifetimeAggregates(saved = saved, wasted = wasted, smokingUnits = smokingUnits, baselineSaved = baselineSaved)
+        return LifetimeAggregates(
+            saved = roundMoney(saved),
+            wasted = roundMoney(wasted),
+            smokingUnits = round(smokingUnits),
+            baselineSaved = roundMoney(baselineSaved)
+        )
     }
 
     fun mergeCounts(base: Map<String, Double>?, extra: Map<String, Double>): Map<String, Double> {
@@ -956,18 +962,32 @@ object SmokingCalculator {
         val todayUnresolved: UnresolvedComponents? = null
     )
 
+    fun roundMoney(amount: Double): Double {
+        if (!amount.isFinite() || amount == 0.0) return 0.0
+        val sign = if (amount < 0.0) -1.0 else 1.0
+        val absVal = abs(amount)
+        val s = absVal.toString()
+        val parts = s.split('e', 'E')
+        val exp = if (parts.size > 1) (parts[1].toIntOrNull() ?: 0) + 2 else 2
+        val shifted = (parts[0] + "e" + exp).toDoubleOrNull() ?: (absVal * 100.0)
+        val rounded = floor(shifted + 0.5)
+        if (rounded == 0.0) return 0.0
+        val rParts = rounded.toLong().toString().split('e', 'E')
+        val rExp = if (rParts.size > 1) (rParts[1].toIntOrNull() ?: 0) - 2 else -2
+        val result = (rParts[0] + "e" + rExp).toDoubleOrNull() ?: (rounded / 100.0)
+        val finalVal = sign * result
+        return if (finalVal == -0.0) 0.0 else finalVal
+    }
+
     fun formatCurrency(amount: Double): String {
-        // Round in cent space: naive (amount - intPart) * 100 truncation
-        // turns 8.03 into "8,02 €" and breaks entirely for negatives.
-        //
-        // floor(x + 0.5), not round(x): kotlin.math.round is Math.rint, which
-        // breaks ties to even, while the web's Math.round breaks them upward. On
-        // an exact half-cent — reachable from a unit price like 0.125 — the two
-        // clients printed amounts a cent apart for the same stored data. This is
-        // both JS-identical and the conventional currency rounding.
-        val totalCents = floor(amount * 100 + 0.5).toLong()
-        val sign = if (totalCents < 0) "-" else ""
-        val cents = abs(totalCents)
+        if (!amount.isFinite()) return "0,00 €"
+        val sign = if (amount < 0.0) "-" else ""
+        val absVal = abs(amount)
+        val s = absVal.toString()
+        val parts = s.split('e', 'E')
+        val exp = if (parts.size > 1) (parts[1].toIntOrNull() ?: 0) + 2 else 2
+        val shifted = (parts[0] + "e" + exp).toDoubleOrNull() ?: (absVal * 100.0)
+        val cents = floor(shifted + 0.5).toLong()
         return "$sign${cents / 100},${(cents % 100).toString().padStart(2, '0')} €"
     }
 
@@ -1154,7 +1174,8 @@ object SmokingCalculator {
         trackingDay: String,
         activeCounts: Map<String, Double> = emptyMap(),
         defaultUnitPrice: Double = 0.5,
-        monthsToInclude: Int = 6
+        monthsToInclude: Int = 6,
+        ledgers: List<DailyFinancialRecord> = emptyList()
     ): Pair<List<MonthSummary>, MonthSummary?> {
         val merged = aggregateLoggedCounts(logs).toMutableMap()
         dayDocs.forEach { day ->
@@ -1166,6 +1187,7 @@ object SmokingCalculator {
         }
         val snapshotsByDate = dayDocs.associate { it.date to it.trackerSnapshots }
         val dayCreditByDate = dayDocs.mapNotNull { day -> day.aggregateCredit?.let { day.date to it } }.toMap()
+        val ledgersByDate = ledgers.associateBy { it.date }
         val credits = mutableMapOf<String, LifetimeAggregates>()
         val unknown = mutableSetOf<String>()
         val baselineDates = mutableSetOf<String>()
@@ -1174,15 +1196,33 @@ object SmokingCalculator {
             if (hasBaseline || (credit?.baselineSaved ?: 0.0) != 0.0) baselineDates.add(date)
             if (credit != null) credits[date] = RegistryMutations.applyCredit(credits[date] ?: LifetimeAggregates(), credit)
         }
-        logs.forEach { log -> add(log.logDate, log.aggregateCredit,
-            log.aggregateCredit == null || log.economicStatus == "UNKNOWN", log.trackerSnapshots.values.any { it.baseline != null }) }
+        logs.forEach { log ->
+            if (log.logDate !in ledgersByDate) {
+                add(log.logDate, log.aggregateCredit,
+                    log.aggregateCredit == null || log.economicStatus == "UNKNOWN", log.trackerSnapshots.values.any { it.baseline != null })
+            }
+        }
         dayDocs.forEach { day ->
-            val snapshots = day.trackerSnapshots
-            val known = snapshots.isNotEmpty() && snapshots.values.all { !it.isFinanciallyTracked || it.unitPrice != null }
-            val counts = if (day.date == trackingDay && day.status != "closed" && activeCounts.isNotEmpty()) activeCounts else day.counts
-            val credit = if (known && day.status != "closed") computeDayCredit(counts, snapshots, defaultUnitPrice)
-                else day.aggregateCredit ?: if (known) computeDayCredit(counts, snapshots, defaultUnitPrice) else null
-            add(day.date, credit, credit == null, snapshots.values.any { it.baseline != null })
+            if (day.date !in ledgersByDate) {
+                val snapshots = day.trackerSnapshots
+                val known = snapshots.isNotEmpty() && snapshots.values.all { !it.isFinanciallyTracked || it.unitPrice != null }
+                val counts = if (day.date == trackingDay && day.status != "closed" && activeCounts.isNotEmpty()) activeCounts else day.counts
+                val credit = if (known && day.status != "closed") computeDayCredit(counts, snapshots, defaultUnitPrice)
+                    else day.aggregateCredit ?: if (known) computeDayCredit(counts, snapshots, defaultUnitPrice) else null
+                add(day.date, credit, credit == null, snapshots.values.any { it.baseline != null })
+            }
+        }
+        ledgersByDate.forEach { (date, l) ->
+            val unres = l.unresolvedComponents
+            val isUnres = l.ambiguous || unres.spent || unres.saved || unres.baselineSaved || unres.smokingUnits
+            add(date, l.canonicalCredit, isUnres, l.canonicalCredit.baselineSaved != 0.0)
+        }
+        if (ledgers.isNotEmpty()) {
+            merged.keys.forEach { date ->
+                if (date !in ledgersByDate) {
+                    unknown.add(date)
+                }
+            }
         }
         val dayRecords = mutableMapOf<String, DayRecord>()
         merged.forEach { (date, counts) ->

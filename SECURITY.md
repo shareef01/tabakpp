@@ -11,11 +11,27 @@ Only the latest release of `tabak++` is actively maintained and supported with s
 
 ## Threat Model & Security Architecture
 
-`tabak++` is designed to run on Firebase Spark (free) tier without custom backend servers:
-1. **Zero-Trust Client Model**: Clients are completely untrusted. All data validation, ownership isolation, and numeric boundaries are enforced by Cloud Firestore Security Rules (`firestore.rules`). On a closed day, rules freeze `trackerSnapshots`, `status`, `date`, `foldedIntoLifetime`, and `legacyMigrationApplied`. `counts` and `aggregateCredit` remain writable by the authenticated owner subject only to rules-level shape and bounds checks — the application-layer `updateHistoricalDay` path additionally reconciles `lifetimeAggregates` by the delta, but a direct rules-valid Firestore write can bypass that reconciliation.
-2. **User Data Isolation**: Every document is scoped under `/users/{uid}/` and strictly requires `request.auth.uid == userId`. No user can read or modify another user's data through client requests governed by the deployed Firestore rules. (This guarantee applies to Firestore rules-enforced paths; it is not a defense against Admin SDK or server-side bypasses, which do not exist in this Spark-tier app.)
-3. **Public Firebase Configuration**: In accordance with Google's Firebase architecture, client configuration parameters (such as `apiKey`, `projectId`, `appId`) embedded in client binaries or web bundles are identifiers, not secrets. Security is enforced through Firestore Security Rules and Firebase Authentication. (API-key restrictions in Google Cloud Console limit which APIs a public Firebase key may call; they are not authorization credentials for Firestore data.)
-4. **App Check**: Web uses reCAPTCHA Enterprise (`ReCaptchaEnterpriseProvider`) with `isTokenAutoRefreshEnabled: true`. Android uses build-variant-aware provider selection — debug builds use `DebugAppCheckProviderFactory`, release builds use `PlayIntegrityAppCheckProviderFactory` (v1.0.7 and later). Provider selection is compile-time via source-set separation (no runtime branching). App Check token auto-refresh is explicitly enabled in both Android source sets, making it independent of Firebase's global data-collection default flag. Enforcement is currently OFF pending verification of external prerequisites: Play Integrity/App Check registration, production signing certificate (SHA-256) registration, App Check metrics from released clients, and client-version compatibility (v1.0.6 uses the Debug provider and is not suitable for production enforcement; ordinary installations would not have their per-installation debug token registered). Play Integrity supports apps distributed outside Google Play; sideloading is not by itself a blocker. See `SETUP_GUIDE.md` → "App Check rollout sequence" for the upgrade plan. App Check reduces abuse by attested clients; it does not replace Firestore rules as the authorization/data-validation boundary for owner-scoped data.
+`tabak++` operates under a dual-mode security architecture designed for complete financial integrity and owner data isolation:
+
+1. **Dual Financial Modes (Legacy vs Option B)**:
+   - **Legacy Mode**: Operates on direct client Firestore writes constrained by Firestore Security Rules (`firestore.rules`). On closed days, rules freeze `trackerSnapshots`, `status`, `date`, `foldedIntoLifetime`, and `legacyMigrationApplied`.
+   - **Option B Trusted Mode**: Financial mutations for migrated accounts route exclusively through trusted server-side Cloud Functions (`executeFinancialOperation`). Firestore Security Rules enforce a strict `financialLocked` fence denying all direct client writes to financial collections (`days`, `logs`, `dailyFinancials`, `financialOperations`, and profile `lifetimeAggregates`).
+2. **Zero-Trust Client Boundary & Admin Transactions**:
+   - In Option B, client-supplied financial totals and price derivations are never trusted. All calculations (`calculateDailyFinancials`, `computeDayCredit`) execute server-side in Cloud Functions using immutable historical snapshots and server-verified profile configurations.
+   - Operations execute in atomic Firestore transactions that atomically persist the source document mutation, canonical daily ledger, updated lifetime aggregates, and an idempotency receipt (`trustedOperations/{operationId}`).
+3. **Configuration & Non-Financial State**:
+   - Tracker configurations (`configs/{configId}`) allow owner-authenticated creation, updates, and reordering subject to strict schema, bounds, and cap validations (max 8 active trackers).
+   - Tracker deletion for Option B accounts is executed via the `TRACKER_DELETE` Cloud Function to ensure active open-day counts and stamped snapshots are cleaned up atomically.
+   - Profile metadata (`meta/{metaId}`) holds avatars and preferences outside the high-frequency financial write path.
+4. **User Data Isolation**:
+   - Every document is strictly scoped under `/users/{uid}/` and requires `request.auth.uid == userId`. Cross-user reads and writes are denied unconditionally.
+   - Receipts in `trustedOperations` are denied to all client readers and writers; only the Admin SDK can read or write trusted receipts.
+5. **Account Deletion & Recent Login Requirement**:
+   - For Option B and Migrating accounts, client-side deletion of financial data is blocked by security rules. Complete account data wipe is handled server-side by the `deleteAccountData` Cloud Function, which validates recent authentication (auth time within 5 minutes) and removes all user subcollections.
+6. **Public Firebase Configuration**:
+   - In accordance with standard Firebase architecture, client identifiers (`apiKey`, `projectId`, `appId`) embedded in web or mobile binaries are identifiers, not secrets. Security is enforced through Firestore Security Rules, verified Firebase Authentication tokens, and Cloud Function callable context.
+7. **App Check**:
+   - Web uses reCAPTCHA Enterprise (`ReCaptchaEnterpriseProvider`). Android release builds use `PlayIntegrityAppCheckProviderFactory`. App Check reduces abuse and automated traffic; it complements but does not replace Firestore rules and server validation.
 
 ## Reporting a Vulnerability
 

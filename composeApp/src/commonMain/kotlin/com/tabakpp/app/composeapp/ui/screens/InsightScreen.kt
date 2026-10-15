@@ -37,6 +37,7 @@ import com.tabakpp.app.composeapp.theme.SurfaceBase
 import com.tabakpp.app.composeapp.theme.TabakTypography
 import com.tabakpp.app.composeapp.theme.TextMuted
 import com.tabakpp.app.composeapp.theme.tabakCardShadow
+import com.tabakpp.app.data.DailyFinancialRecord
 import com.tabakpp.app.data.DayDocument
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.TrackerConfig
@@ -45,7 +46,7 @@ import com.tabakpp.app.domain.SmokingCalculator
 /**
  * Historical Insights subview within the History screen.
  * Displays monthly trend comparisons for consumption, spending, and streaks.
- * Uses the same data streams as HistoryScreen (logs, dayDocs, configs).
+ * Uses the same data streams as HistoryScreen (logs, dayDocs, configs, ledgers).
  */
 @Composable
 fun HistoricalInsightsContent(
@@ -54,13 +55,15 @@ fun HistoricalInsightsContent(
     configs: List<TrackerConfig>,
     trackingDay: String,
     activeCounts: Map<String, Double> = emptyMap(),
+    ledgers: List<DailyFinancialRecord> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     val (completedMonths, currentMonthMtd) = SmokingCalculator.aggregateMonthlyData(
         logs = logs,
         dayDocs = dayDocs,
         trackingDay = trackingDay,
-        activeCounts = activeCounts
+        activeCounts = activeCounts,
+        ledgers = ledgers
     )
 
     val trend = if (completedMonths.isNotEmpty()) {

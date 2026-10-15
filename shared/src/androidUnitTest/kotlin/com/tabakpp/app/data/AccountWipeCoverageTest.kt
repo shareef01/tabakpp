@@ -33,6 +33,16 @@ class AccountWipeCoverageTest {
             .map { it.groupValues[1] }
             .toList()
         assertTrue(defined.isNotEmpty(), "no users/{uid} subcollections found in firestore.rules")
-        assertEquals(defined.sorted(), USER_SUBCOLLECTIONS.sorted())
+        // AUD-016 exception: `trustedOperations` and `trustedDeletedLogs` are server-only
+        // namespaces — clients cannot touch them (rules deny unconditionally), a
+        // LEGACY account can never own any, and locked accounts (the only ones
+        // that can) delete via deleteAccountData's Admin recursiveDelete, which
+        // removes the whole users/{uid} subtree. Listing them in the client wipe
+        // would only make the wipe fail with permission-denied. They are still
+        // pinned to the rules so a rename is caught.
+        assertTrue("trustedOperations" in defined, "trustedOperations must stay defined in firestore.rules")
+        assertTrue("trustedDeletedLogs" in defined, "trustedDeletedLogs must stay defined in firestore.rules")
+        val clientWipeable = defined.filter { it != "trustedOperations" && it != "trustedDeletedLogs" }
+        assertEquals(clientWipeable.sorted(), USER_SUBCOLLECTIONS.sorted())
     }
 }

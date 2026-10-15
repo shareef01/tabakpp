@@ -245,6 +245,16 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(SmokingCalculator.getTrackingDate(beforeDayStart, 6)).toBe('2024-03-30');
       expect(SmokingCalculator.getTrackingDate(afterJump, 6)).toBe('2024-03-31');
     });
+
+    it('supports explicit IANA timezones (e.g. Europe/Berlin at 2026-10-15T05:30:00Z)', () => {
+      // 05:30:00 UTC is 07:30:00 CEST (UTC+2) in Europe/Berlin -> with dayStartHour 6, 7 >= 6 -> 2026-10-15
+      const now = new Date('2026-10-15T05:30:00Z');
+      expect(SmokingCalculator.getTrackingDate(now, 6, 'Europe/Berlin')).toBe('2026-10-15');
+
+      // 03:30:00 UTC is 05:30:00 CEST in Europe/Berlin -> with dayStartHour 6, 5 < 6 -> 2026-10-14
+      const earlier = new Date('2026-10-15T03:30:00Z');
+      expect(SmokingCalculator.getTrackingDate(earlier, 6, 'Europe/Berlin')).toBe('2026-10-14');
+    });
   });
 
   describe('getLimitStatus (item 4/5 — zero-target semantics, three-state visual status)', () => {

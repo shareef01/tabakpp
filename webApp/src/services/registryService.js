@@ -36,11 +36,14 @@ const optionBLedgerActive = async (uid) => {
  * server has no timezone for the user, so without it the server evaluated
  * "today" in UTC and could treat the user's current day as a past one.
  */
-const trustedExecute = (profile, type, payload) =>
-  TrustedFinancial.execute(type, {
+const trustedExecute = (profile, type, payload) => {
+  const timeZone = profile?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  return TrustedFinancial.execute(type, {
     ...payload,
-    currentTrackingDate: SmokingCalculator.getTrackingDate(new Date(), profile?.dayStartHour ?? 6),
+    timeZone,
+    currentTrackingDate: SmokingCalculator.getTrackingDate(new Date(), profile?.dayStartHour ?? 6, timeZone),
   });
+};
 
 /** OPTION B write gate — routing read; see optionBLedgerActive below. */
 
@@ -58,9 +61,8 @@ const financialWritesLocked = async (uid) => {
   return mode === 'MIGRATING' || mode === 'OPTION_B';
 };
 
-/** Stable FNV-1a hash of a canonical JSON form — deterministic operation ids
- *  for the same logical edit (idempotent retries), distinct across edits. */
-const stableHash = (value) => {
+/** Stable FNV-1a hash of a canonical JSON form. */
+const _stableHash = (value) => {
   const s = JSON.stringify(value);
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -68,6 +70,17 @@ const stableHash = (value) => {
     h = Math.imul(h, 0x01000193);
   }
   return (h >>> 0).toString(16);
+};
+
+/**
+ * Generate a unique operation ID per action (FIX 4).
+ * Callers reuse an explicit operationId ONLY when retrying that exact action.
+ */
+export const generateOperationId = (prefix = 'op') => {
+  if (typeof crypto !== 'undefined' && crypto?.randomUUID) {
+    return `${prefix}_${crypto.randomUUID()}`;
+  }
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 };
 
 /** Doc id always wins over any payload `id` field (Android parity). */
@@ -81,7 +94,7 @@ const timestampMillis = (value) => value?.toMillis?.() ?? ((value?.seconds ?? 0)
  */
 const PROFILE_SETTINGS_KEYS = new Set([
   'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
-  'pouchPrice', 'estimatedYield', 'dayStartHour'
+  'pouchPrice', 'estimatedYield', 'dayStartHour', 'timeZone'
 ]);
 
 /** Legacy web-only economics keys — strip on every settings write. */
@@ -646,10 +659,11 @@ export const RegistryService = {
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
       return trustedExecute(optionB, delta >= 0 ? 'COUNTER_INCREMENT' : 'COUNTER_DECREMENT', {
-        operationId: operationId || `ac_${counterId}_${trackingDate}_${Date.now()}`,
+        operationId: operationId || generateOperationId(`ac_${counterId}_${trackingDate}`),
         date: trackingDate, trackerId: counterId, delta, defaultUnitPrice,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('COUNTER_ADJUST_UNSUPPORTED');
     const configRef = doc(db, 'users', uid, 'configs', counterId);
     const dayRef = doc(db, 'users', uid, 'days', trackingDate);
 
@@ -809,10 +823,11 @@ export const RegistryService = {
     if (optionB) {
       const normalized = normalizeCounts(counts);
       return trustedExecute(optionB, 'HISTORICAL_DAY_UPDATE', {
-        operationId: operationId || `hist_${date}_${stableHash(normalized)}`,
+        operationId: operationId || generateOperationId(`hist_${date}`),
         date, counts: normalized,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('HISTORICAL_DAY_UPDATE_UNSUPPORTED');
     const userRef = doc(db, 'users', uid);
     const dayRef = doc(db, 'users', uid, 'days', date);
     const normalized = normalizeCounts(counts);
@@ -942,9 +957,10 @@ export const RegistryService = {
       const snap = await getDoc(logRef);
       if (!snap.exists()) throw new Error("LOG_NOT_FOUND");
       return trustedExecute(optionB, 'MANUAL_UPDATE', {
-        operationId: operationId || `upd_${logId}`, date: snap.data().logDate, logId, counts: normalized, defaultUnitPrice: unitPrice,
+        operationId: operationId || generateOperationId(`upd_${logId}`), date: snap.data().logDate, logId, counts: normalized, defaultUnitPrice: unitPrice,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('MANUAL_UPDATE_UNSUPPORTED');
 
     const configIds = await listConfigIds(uid);
 
@@ -991,9 +1007,10 @@ export const RegistryService = {
       const snap = await getDoc(logRef);
       if (!snap.exists()) return;
       return trustedExecute(optionB, 'MANUAL_DELETE', {
-        operationId: operationId || `del_${logId}`, date: snap.data().logDate, logId,
+        operationId: operationId || generateOperationId(`del_${logId}`), date: snap.data().logDate, logId,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('MANUAL_DELETE_UNSUPPORTED');
 
     const configIds = await listConfigIds(uid);
 
@@ -1024,7 +1041,7 @@ export const RegistryService = {
    * Restore a previously deleted log and re-credit lifetime aggregates
    * (Android parity with restoreLog).
    */
-  restoreLog: async (uid, log, unitPrice = 0.5, operationId = null) => {
+  restoreLog: async (uid, log, unitPrice = 0.5, operationId = null, allowUnresolved = false) => {
     if (!uid || !log?.id) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', log.id);
@@ -1033,9 +1050,14 @@ export const RegistryService = {
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
       return trustedExecute(optionB, 'MANUAL_RESTORE', {
-        operationId: operationId || `res_${log.id}`, date: log.logDate, logId: log.id, counts: normalizedCounts,
+        operationId: operationId || generateOperationId(`res_${log.id}`),
+        date: log.logDate,
+        logId: log.id,
+        counts: normalizedCounts,
+        allowUnresolved: allowUnresolved || log?.allowUnresolved === true,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('MANUAL_RESTORE_UNSUPPORTED');
 
     const configIds = await listConfigIds(uid);
 
@@ -1096,6 +1118,7 @@ export const RegistryService = {
         operationId: operationId || logId, date, logId, counts: normalized, defaultUnitPrice: unitPrice,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('MANUAL_CREATE_UNSUPPORTED');
 
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const configIds = await listConfigIds(uid);

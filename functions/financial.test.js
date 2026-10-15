@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { computeDayCredit, calculateDailyFinancials, applyDelta, fingerprintOf, migrationPlan } from './financial.js';
+import {
+  computeDayCredit, calculateDailyFinancials, applyDelta, fingerprintOf, migrationPlan,
+  deriveSnapshotFromLog, roundMoney,
+} from './financial.js';
 
 const snap = (target, baseline, unitPrice, type = 'CIGARETTE') => ({
   type, target, baseline, unitPrice, isFinanciallyTracked: true, isPrimaryTracked: true,
@@ -61,6 +64,14 @@ test('clamps at zero and drops empty trackers', () => {
 test('fingerprint is order-independent and payload-sensitive', () => {
   assert.equal(fingerprintOf({ a: 1, b: 2 }), fingerprintOf({ b: 2, a: 1 }));
   assert.notEqual(fingerprintOf({ a: 1 }), fingerprintOf({ a: 2 }));
+  assert.notEqual(
+    fingerprintOf({ type: 'MANUAL_CREATE', allowUnresolved: false }),
+    fingerprintOf({ type: 'MANUAL_CREATE', allowUnresolved: true })
+  );
+  assert.notEqual(
+    fingerprintOf({ type: 'MANUAL_CREATE', currentTrackingDate: '2026-10-15' }),
+    fingerprintOf({ type: 'MANUAL_CREATE', currentTrackingDate: '2026-10-14' })
+  );
 });
 
 test('money is summed at historically-stamped prices, not the current config', () => {
@@ -86,11 +97,14 @@ test('migration plan: legacy €15 folded vs canonical €5 ⇒ NET delta −€
 test('migration plan: an already-correct date is category D (no delta, no rewrite)', () => {
   const day = {
     date: 'd', counts: { cig: 5 }, trackerSnapshots: { cig: snap(10, 15, 1) },
-    aggregateCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 0 },
+    aggregateCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 10 },
   };
   const plan = migrationPlan([{ date: 'd', day, logs: [] }], [], 1);
   assert.equal(plan[0].category, 'D');
   assert.equal(plan[0].deltaSaved, 0);
+  assert.equal(plan[0].deltaWasted, 0);
+  assert.equal(plan[0].deltaBaselineSaved, 0);
+  assert.equal(plan[0].deltaSmokingUnits, 0);
 });
 
 test('migration plan: a non-reconstructible date is category C (never invented)', () => {
@@ -247,3 +261,175 @@ for (const { case: name, input, expected } of sharedFixtures.filter((f) => f.op 
     assert.deepEqual(computeDayCredit(input.counts, input.trackerSnapshots, input.defaultUnitPrice), expected);
   });
 }
+
+// ============================================================================
+// REGRESSION SUITE: FULL REPOSITORY REMEDIATION (FIX 1, 2, 6, 7, 15)
+// ============================================================================
+
+test('FIX 1: Strict count ownership prevents double counting when closing day', () => {
+  // Day document owns count = 3, manual log owns count = 2
+  const dayDocOwned = { date: '2026-10-01', counts: { cig: 3 }, trackerSnapshots: { cig: snap(10, 15, 1) } };
+  const manualLogs = [
+    { id: 'log1', logDate: '2026-10-01', counts: { cig: 2 }, origin: 'MANUAL_ENTRY', aggregateCredit: { wasted: 2, saved: 0, smokingUnits: 2, baselineSaved: 0 } },
+  ];
+  // 1. Initial calculation: canonical combined count = 5
+  const initialFin = calculateDailyFinancials(dayDocOwned, manualLogs, [], 1);
+  assert.equal(initialFin.counts.cig, 5, 'Canonical total must be 3 + 2 = 5');
+  assert.equal(initialFin.spent, 5);
+  assert.equal(initialFin.saved, 5); // 10 - 5 = 5
+
+  // 2. DAY_CLOSE invariant: days/{date}.counts retains ONLY day-document owned counts (3).
+  // dailyFinancials/{date}.countsByTracker stores canonical combined counts (5).
+  // Closing must NEVER write 5 back into days/{date}.counts.
+  const closedDayDoc = { ...dayDocOwned, status: 'closed' }; // still counts: { cig: 3 }
+  const afterCloseFin = calculateDailyFinancials(closedDayDoc, manualLogs, [], 1);
+  assert.equal(afterCloseFin.counts.cig, 5, 'Recalculation after close must STILL be 5, never 7');
+  assert.equal(afterCloseFin.spent, 5);
+
+  // 3. Repeated close (idempotency check)
+  const repeatedCloseFin = calculateDailyFinancials(closedDayDoc, manualLogs, [], 1);
+  assert.equal(repeatedCloseFin.counts.cig, 5, 'Repeated close remains 5');
+});
+
+test('FIX 2: Multi-tracker manual log with snapshots calculates exact per-tracker unit prices', () => {
+  // Tracker A: 2 × €1 = €2
+  // Tracker B: 3 × €2 = €6
+  // Total spent = €8, never €16!
+  const logWithSnapshots = {
+    id: 'multi_log',
+    logDate: '2026-09-15',
+    counts: { trkA: 2, trkB: 3 },
+    origin: 'MANUAL_ENTRY',
+    trackerSnapshots: {
+      trkA: { unitPrice: 1, target: 5, baseline: 5, type: 'CIGARETTE' },
+      trkB: { unitPrice: 2, target: 5, baseline: 5, type: 'CIGARETTE' },
+    },
+    aggregateCredit: { wasted: 8, saved: 0, smokingUnits: 5, baselineSaved: 0 },
+  };
+
+  const snapA = deriveSnapshotFromLog(logWithSnapshots, 'trkA', 'CIGARETTE');
+  const snapB = deriveSnapshotFromLog(logWithSnapshots, 'trkB', 'CIGARETTE');
+  assert.ok(snapA);
+  assert.ok(snapB);
+  assert.equal(snapA.unitPrice, 1);
+  assert.equal(snapB.unitPrice, 2);
+
+  const fin = calculateDailyFinancials(null, [logWithSnapshots], [], 1, { currentTrackingDate: '2026-10-01' });
+  assert.equal(fin.spent, 8, 'Total spent must be €8, never multiplied');
+  assert.equal(fin.counts.trkA, 2);
+  assert.equal(fin.counts.trkB, 3);
+});
+
+test('FIX 2: Legacy multi-tracker manual log without per-tracker snapshots does NOT divide total wasted across counts', () => {
+  // Legacy log without snapshots: aggregate wasted = 8, counts: { trkA: 2, trkB: 3 }
+  // Dividing 8/2 = 4 and 8/3 = 2.67 would fabricate prices and duplicate spending.
+  const legacyMultiLog = {
+    id: 'legacy_multi',
+    logDate: '2026-09-15',
+    counts: { trkA: 2, trkB: 3 },
+    origin: 'MANUAL_ENTRY',
+    aggregateCredit: { wasted: 8, saved: 0, smokingUnits: 5, baselineSaved: 0 },
+  };
+
+  const snapA = deriveSnapshotFromLog(legacyMultiLog, 'trkA', 'CIGARETTE');
+  const snapB = deriveSnapshotFromLog(legacyMultiLog, 'trkB', 'CIGARETTE');
+  assert.equal(snapA, null, 'Must be null (unresolved) rather than fabricating unit price');
+  assert.equal(snapB, null, 'Must be null (unresolved) rather than fabricating unit price');
+
+  const fin = calculateDailyFinancials(null, [legacyMultiLog], [], 1, { currentTrackingDate: '2026-10-01' });
+  assert.equal(fin.unresolved.spent, true, 'Spent must be marked unresolved');
+  assert.equal(fin.canonicalCredit.wasted, 0, 'No manufactured money in canonicalCredit');
+});
+
+test('FIX 6 & FIX 7: Migration plan reconciles all four metrics for Category A and reports clean Category D', () => {
+  const dayA = {
+    date: '2026-10-01', counts: { cig: 5 }, trackerSnapshots: { cig: snap(10, 15, 1) },
+    aggregateCredit: { saved: 15, wasted: 5, smokingUnits: 5, baselineSaved: 20 },
+  };
+  const dayD = {
+    date: '2026-10-02', counts: { cig: 5 }, trackerSnapshots: { cig: snap(10, 15, 1) },
+    aggregateCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 10 },
+  };
+
+  const plan = migrationPlan([
+    { date: '2026-10-01', day: dayA, logs: [] },
+    { date: '2026-10-02', day: dayD, logs: [] },
+  ], [{ id: 'cig', type: 'CIGARETTE' }], 1);
+
+  // Category A: all 4 metrics reconciled
+  const itemA = plan.find((p) => p.date === '2026-10-01');
+  assert.equal(itemA.category, 'A');
+  assert.equal(itemA.legacySaved, 15);
+  assert.equal(itemA.canonicalSaved, 5);
+  assert.equal(itemA.deltaSaved, -10);
+  assert.equal(itemA.deltaWasted, 0); // 5 -> 5
+  assert.equal(itemA.deltaSmokingUnits, 0); // 5 -> 5
+  assert.equal(itemA.deltaBaselineSaved, -10); // 20 -> 10 (baseline is 15 - 5 = 10)
+
+  // Category D: zero deltas for all 4 metrics
+  const itemD = plan.find((p) => p.date === '2026-10-02');
+  assert.equal(itemD.category, 'D');
+  assert.equal(itemD.deltaSaved, 0);
+  assert.equal(itemD.deltaWasted, 0);
+  assert.equal(itemD.deltaSmokingUnits, 0);
+  assert.equal(itemD.deltaBaselineSaved, 0);
+});
+
+test('FIX 15: Consistent monetary precision (2 decimal places without floating point drift)', () => {
+  const day = {
+    date: '2026-10-01',
+    counts: { cig: 3 },
+    trackerSnapshots: { cig: snap(10, 15, 0.33) },
+  };
+  const fin = calculateDailyFinancials(day, [], [], 0.33);
+  // 3 * 0.33 = 0.99
+  assert.equal(fin.spent, 0.99);
+  // (10 - 3) * 0.33 = 2.31
+  assert.equal(fin.saved, 2.31);
+  // (15 - 3) * 0.33 = 3.96
+  assert.equal(fin.baselineSaved, 3.96);
+  assert.equal(roundMoney(0.1 + 0.2), 0.3);
+});
+
+test('Financial rounding: symmetric commercial half-away-from-zero precision policy', () => {
+  // Required boundary cases from release gate
+  assert.equal(roundMoney(1.005), 1.01, '1.005 rounds up to 1.01');
+  assert.equal(roundMoney(10.075), 10.08, '10.075 overcomes IEEE 754 float representation and rounds to 10.08');
+  assert.equal(roundMoney(-1.005), -1.01, '-1.005 rounds symmetrically away from zero to -1.01');
+  assert.equal(roundMoney(-10.075), -10.08, '-10.075 rounds symmetrically away from zero to -10.08');
+  assert.equal(roundMoney(0), 0);
+  assert.equal(roundMoney(1.004), 1.00);
+  assert.equal(roundMoney(-1.004), -1.00);
+
+  // Repeated positive and negative lifetime corrections (no asymmetric drift)
+  let lifetimeCorrection = 0;
+  for (let i = 0; i < 1000; i++) {
+    lifetimeCorrection = roundMoney(lifetimeCorrection + roundMoney(1.005));
+    lifetimeCorrection = roundMoney(lifetimeCorrection + roundMoney(-1.005));
+  }
+  assert.equal(lifetimeCorrection, 0, 'Symmetric corrections over 1000 iterations must yield 0 net drift');
+
+  // Per-item vs per-day rounding policy:
+  // Items accumulate at exact fractional rates; rounding occurs at the day aggregate boundary.
+  // For a roll-your-own tracker at €0.125 per unit:
+  // 1 unit = €0.125 -> rounds to €0.13 at day boundary
+  // 2 units = €0.25 -> rounds to €0.25 at day boundary
+  // 3 units = €0.375 -> rounds to €0.38 at day boundary
+  // If rounded per-item, 3 units might erroneously be 3 * 0.13 = €0.39 or 3 * 0.12 = €0.36.
+  const ryoSnap = { unitPrice: 0.125, target: 10, isFinanciallyTracked: true };
+  const day1 = computeDayCredit({ ryo: 1 }, { ryo: ryoSnap });
+  const day2 = computeDayCredit({ ryo: 2 }, { ryo: ryoSnap });
+  const day3 = computeDayCredit({ ryo: 3 }, { ryo: ryoSnap });
+  assert.equal(day1.wasted, 0.13, '1 unit of 0.125 rounds to 0.13');
+  assert.equal(day2.wasted, 0.25, '2 units of 0.125 is 0.25');
+  assert.equal(day3.wasted, 0.38, '3 units of 0.125 is 0.375 -> rounds to 0.38, not per-item 0.39');
+
+  // Large transaction sequence (10,000 operations)
+  let balance = 1000.00;
+  for (let i = 0; i < 10000; i++) {
+    // Add 10.075 rounded to 10.08, subtract 10.075 rounded to 10.08
+    balance = roundMoney(balance + roundMoney(10.075));
+    balance = roundMoney(balance - roundMoney(10.075));
+  }
+  assert.equal(balance, 1000.00, 'Balance must remain exactly 1000.00 without floating point drift after 10000 ops');
+});
