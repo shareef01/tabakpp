@@ -92,6 +92,7 @@ describe('closeDay — financial-mode routing (W1B-1)', () => {
       operationId: 'close_2026-10-01',
       date: '2026-10-01',
       currentTrackingDate: ISO_DATE,
+      timeZone: expect.any(String),
     });
     // No direct (rules-denied) financial write is attempted.
     expect(h.runTransaction).not.toHaveBeenCalled();
@@ -121,6 +122,7 @@ describe('closeDay — financial-mode routing (W1B-1)', () => {
       operationId: 'op-explicit',
       date: '2026-10-01',
       currentTrackingDate: ISO_DATE,
+      timeZone: expect.any(String),
     });
   });
 
@@ -301,6 +303,7 @@ describe('historical-update + tracker-delete trusted routing (W1B-2 / W1B-4a)', 
     expect(h.runTransaction).not.toHaveBeenCalled();
     expect(TrustedFinancial.execute).toHaveBeenCalledWith('TRACKER_DELETE', {
       operationId: 'del_cig0_2026-10-01', date: '2026-10-01', trackerId: 'cig0', currentTrackingDate: ISO_DATE,
+      timeZone: expect.any(String),
     });
   });
 

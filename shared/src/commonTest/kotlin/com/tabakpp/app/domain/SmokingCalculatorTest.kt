@@ -27,6 +27,14 @@ class SmokingCalculatorTest {
         // 00:00:00 next calendar day -> Previous Day (belongs to night-owl session)
         val midnight = Instant.parse("2024-05-21T00:00:00Z")
         assertEquals("2024-05-20", SmokingCalculator.getTrackingDate(midnight, hour, TimeZone.UTC))
+
+        // Europe/Berlin at 2026-10-15T05:30:00Z (07:30 local CEST) -> 2026-10-15
+        val berlinNow = Instant.parse("2026-10-15T05:30:00Z")
+        assertEquals("2026-10-15", SmokingCalculator.getTrackingDate(berlinNow, hour, TimeZone.of("Europe/Berlin")))
+
+        // Europe/Berlin at 2026-10-15T03:30:00Z (05:30 local CEST, < 06:00) -> 2026-10-14
+        val berlinEarly = Instant.parse("2026-10-15T03:30:00Z")
+        assertEquals("2026-10-14", SmokingCalculator.getTrackingDate(berlinEarly, hour, TimeZone.of("Europe/Berlin")))
     }
 
     @Test

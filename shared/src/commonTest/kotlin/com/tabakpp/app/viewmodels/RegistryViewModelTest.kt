@@ -296,7 +296,24 @@ class RegistryViewModelTest {
         val payload = gw.calls.first().second
         assertEquals(payload["date"], payload["currentTrackingDate"])
         assertEquals(vm.trackingDay.value, payload["currentTrackingDate"])
+        assertEquals("UTC", payload["timeZone"])
         assertTrue(reg.liveCounterCalls.isEmpty())
+    }
+
+    @Test
+    fun increment_stampsStoredProfileTimeZoneInTrustedPayload() {
+        val (vm, reg, _) = build()
+        val gw = FakeTrustedFinancial()
+        vm.optionBGateway = gw
+        reg.financialMode = "OPTION_B"
+        reg.profileFlow.value = UserProfile(timeZone = "Europe/Berlin", dayStartHour = 6)
+        scheduler.runCurrent()
+        vm.optionBLedgerEnabled = true
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1, gw.calls.size)
+        val payload = gw.calls.first().second
+        assertEquals("Europe/Berlin", payload["timeZone"])
     }
 
     @Test

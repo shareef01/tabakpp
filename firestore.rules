@@ -283,7 +283,7 @@ service cloud.firestore {
         'deleting', 'smokingMigrationLeaseId', 'smokingMigrationLeaseUntil', 'schemaVersion', 'migratingLegacyCounts', 'migratingLegacyDate',
           'migratingLegacyId', 'migratingLegacyVersion', 'migratingLegacyUnitPrice',
         // OPTION B — account financial write mode ('LEGACY' | 'OPTION_B').
-        'financialMode'
+        'financialMode', 'timeZone'
       ]);
     }
 
@@ -326,6 +326,7 @@ service cloud.firestore {
         && (!('pouchPrice' in d) || (isNumber(d.pouchPrice) && d.pouchPrice >= 0 && d.pouchPrice <= 10000))
         && (!('estimatedYield' in d) || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
         && (!('widgetSize' in d) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
+        && (!('timeZone' in d) || (d.timeZone is string && d.timeZone.size() >= 1 && d.timeZone.size() <= 64))
         && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000));
     }
 
@@ -457,6 +458,8 @@ service cloud.firestore {
         && (!changed.hasAny(['estimatedYield'])
           || (isWholeNumber(d.estimatedYield) && d.estimatedYield >= 0 && d.estimatedYield <= 10000))
         && (!changed.hasAny(['widgetSize']) || d.widgetSize in ['SMALL', 'MEDIUM', 'LARGE'])
+        && (!changed.hasAny(['timeZone'])
+          || (d.timeZone is string && d.timeZone.size() >= 1 && d.timeZone.size() <= 64))
         // (financialMode is not a settings field: the users/{uid} update rule
         // rejects any client change to it — only the trusted function sets it.)
         // `!('avatar' in d)` additionally covers `avatar: deleteField()` (used
@@ -481,7 +484,7 @@ service cloud.firestore {
         .hasOnly([
           'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
           'pouchPrice', 'estimatedYield', 'dayStartHour', 'avatar', 'updatedAt',
-          'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'
+          'ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield', 'timeZone'
         ]);
     }
 

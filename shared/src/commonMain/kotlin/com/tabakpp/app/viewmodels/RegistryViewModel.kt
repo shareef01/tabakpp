@@ -286,11 +286,14 @@ class RegistryViewModel(
      * decides which `days/{date}` document a mutation targets. The cached
      * state is only a UI reflection (live-listener key, metrics "today").
      */
+    private fun resolvedTimeZone(): TimeZone =
+        userProfile.value?.timeZone?.let { runCatching { TimeZone.of(it) }.getOrNull() } ?: timeZoneProvider()
+
     private fun currentTrackingDate(): String =
         SmokingCalculator.getTrackingDate(
             now = clock.now(),
             dayStartHour = userProfile.value?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR,
-            timeZone = timeZoneProvider()
+            timeZone = resolvedTimeZone()
         )
 
     /**
@@ -673,7 +676,13 @@ class RegistryViewModel(
         val inner = optionBGateway ?: error("OPTION_B requires the trusted financial gateway")
         return object : TrustedFinancial {
             override suspend fun execute(type: String, payload: Map<String, Any?>) =
-                inner.execute(type, payload + ("currentTrackingDate" to currentTrackingDateNow()))
+                inner.execute(
+                    type,
+                    payload + mapOf(
+                        "currentTrackingDate" to currentTrackingDateNow(),
+                        "timeZone" to resolvedTimeZone().id
+                    )
+                )
         }
     }
 
@@ -681,6 +690,7 @@ class RegistryViewModel(
     private fun currentTrackingDateNow(): String = SmokingCalculator.getTrackingDate(
         clock.now(),
         userProfile.value?.dayStartHour ?: SmokingCalculator.DEFAULT_DAY_START_HOUR,
+        timeZone = resolvedTimeZone()
     )
 
     private fun mutationBlocked(): Boolean {
@@ -1140,7 +1150,8 @@ class RegistryViewModel(
             a.unitPrice == b.unitPrice &&
             a.pouchPrice == b.pouchPrice &&
             a.estimatedYield == b.estimatedYield &&
-            a.dayStartHour == b.dayStartHour
+            a.dayStartHour == b.dayStartHour &&
+            a.timeZone == b.timeZone
 
     fun updateDisplayName(name: String) {
         if (mutationBlocked()) return

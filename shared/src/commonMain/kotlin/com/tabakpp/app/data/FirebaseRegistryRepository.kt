@@ -1314,6 +1314,9 @@ class FirebaseRegistryRepository(
             "pouchPrice" to profile.pouchPrice
             "estimatedYield" to profile.estimatedYield
             "dayStartHour" to profile.dayStartHour
+            if (profile.timeZone != null) {
+                "timeZone" to profile.timeZone
+            }
             "ecoMode" to FieldValue.delete
             "retailPrice" to FieldValue.delete
             "retailQty" to FieldValue.delete

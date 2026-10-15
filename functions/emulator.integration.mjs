@@ -399,28 +399,77 @@ const main = async () => {
   assert.equal(histAgg.lifetimeAggregates.saved, 8, 'saved must net-adjust 5 + (8−5)');
   assert.equal(histAgg.lifetimeAggregates.wasted, 2, 'wasted must net-adjust 5 + (2−5)');
 
-  // 11) TRACKER_DELETE — delete the config + drop the tracker from the open day + ledger.
+  // 11) TRACKER_DELETE date integrity, historical immutability, and cleanup
   const delUser = await signIn();
   const duid = delUser.localId;
   await seedOptionB(duid);
-  r = await call(delUser.idToken, { operationId: 'delc1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1, defaultUnitPrice: 1 });
+
+  // Seed counts on current open day TODAY
+  r = await call(delUser.idToken, { operationId: 'delc1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 2, defaultUnitPrice: 1 });
   assert.ok(r.ok, `seed increment failed: ${JSON.stringify(r.body)}`);
   assert.ok(await readDoc(`users/${duid}/configs/cig`), 'config should exist before delete');
+
+  // Seed an immutable historical day on YDAY with frozen snapshot
+  await writeDoc(`users/${duid}/days/${YDAY}`, {
+    date: YDAY,
+    counts: { cig: 5 },
+    trackerSnapshots: { cig: { target: 10, unitPrice: 1, baseline: 15 } },
+    status: 'closed',
+    foldedIntoLifetime: true,
+  });
+
+  // (a) Specifying an old/mismatched date must be REJECTED to prevent historical corruption
+  // and dangling unconfigured counts on current open day
+  r = await call(delUser.idToken, { operationId: 'del_mismatch', type: 'TRACKER_DELETE', date: YDAY, trackerId: 'cig' });
+  assert.equal(r.status, 400, `TRACKER_DELETE with mismatched date must be rejected: ${r.status}`);
+  assert.equal(r.body.error?.message, 'TRACKER_DELETE_MUST_TARGET_CURRENT_DATE');
+  assert.ok(await readDoc(`users/${duid}/configs/cig`), 'config must NOT be deleted on mismatched date');
+  const untouchedHistDay = await readDoc(`users/${duid}/days/${YDAY}`);
+  assert.equal(untouchedHistDay.counts.cig, 5, 'historical counts must remain immutable');
+
+  // (b) Current open day cleanup: TRACKER_DELETE targeting TODAY (or omitting date) succeeds
   r = await call(delUser.idToken, { operationId: 'del1', type: 'TRACKER_DELETE', date: TODAY, trackerId: 'cig' });
   assert.ok(r.ok, `TRACKER_DELETE failed: ${JSON.stringify(r.body)}`);
   assert.equal(await readDoc(`users/${duid}/configs/cig`), null, 'config must be deleted');
   const delDay = await readDoc(`users/${duid}/days/${TODAY}`);
-  assert.equal(delDay.counts.cig, undefined, 'tracker must be dropped from the day counts');
+  assert.equal(delDay.counts.cig, undefined, 'tracker must be dropped from open day counts');
+  assert.equal(delDay.trackerSnapshots.cig, undefined, 'tracker must be dropped from open day snapshots');
   const delLed = await readDoc(`users/${duid}/dailyFinancials/${TODAY}`);
   assert.equal(delLed.countsByTracker.cig, undefined, 'tracker must be dropped from the ledger counts');
+  assert.equal((delLed.missingConfigs || []).includes('cig'), false, 'financial state must not have missing config for deleted tracker');
 
-  // 11b) currentTrackingDate — the client's local "today" (the server has no
-  //      timezone for the user). A plausible date is used; one that is not
-  //      "today" anywhere on Earth is rejected; it is not part of the
-  //      operation's identity, so a retry that crosses midnight is still the
-  //      same operation (no OPERATION_CONFLICT).
+  // Historical closed day still retains its frozen counts and snapshots intact
+  const verifiedHistDay = await readDoc(`users/${duid}/days/${YDAY}`);
+  assert.equal(verifiedHistDay.counts.cig, 5, 'historical day counts preserved');
+  assert.equal(verifiedHistDay.trackerSnapshots.cig.target, 10, 'historical snapshots preserved');
+
+  // (c) Concurrent operations: concurrent increment and deletion for tracker 'vape'
+  const concUser = await signIn();
+  const concUid = concUser.localId;
+  await seedOptionB(concUid);
+  const [incRes, delRes] = await Promise.all([
+    call(concUser.idToken, { operationId: 'conc_inc', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'vape', delta: 1, defaultUnitPrice: 1 }),
+    call(concUser.idToken, { operationId: 'conc_del', type: 'TRACKER_DELETE', date: TODAY, trackerId: 'vape' }),
+  ]);
+  // One of them ordered first: either increment succeeded then delete cleaned it up,
+  // or delete removed the config first and increment failed with CONFIG_NOT_FOUND.
+  assert.ok(delRes.ok, `concurrent TRACKER_DELETE must succeed: ${JSON.stringify(delRes.body)}`);
+  assert.equal(await readDoc(`users/${concUid}/configs/vape`), null, 'vape config must be deleted');
+  const concDay = await readDoc(`users/${concUid}/days/${TODAY}`);
+  assert.equal(concDay?.counts?.vape, undefined, 'current day must not retain dangling counts for deleted tracker');
+
+  // 11b) Timezone policy and currentTrackingDate resolution
   const tzUser = await signIn();
-  await seedOptionB(tzUser.localId);
+  const tzUid = tzUser.localId;
+  await seedOptionB(tzUid);
+
+  // Passing a valid IANA timeZone persists to the account profile
+  r = await call(tzUser.idToken, { operationId: 'tz_init', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', timeZone: 'Europe/Berlin', currentTrackingDate: TODAY });
+  assert.ok(r.ok, `call with IANA timeZone must succeed: ${JSON.stringify(r.body)}`);
+  const tzProfile = await readDoc(`users/${tzUid}`);
+  assert.equal(tzProfile.timeZone, 'Europe/Berlin', 'valid IANA timeZone must be persisted to profile');
+
+  // Subsequent call without timeZone uses stored profile timezone
   r = await call(tzUser.idToken, { operationId: 'tz1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', currentTrackingDate: TODAY });
   assert.ok(r.ok, `a plausible currentTrackingDate must be accepted: ${JSON.stringify(r.body)}`);
   const far = new Date(`${TODAY}T00:00:00Z`); far.setUTCDate(far.getUTCDate() - 5);
@@ -428,7 +477,7 @@ const main = async () => {
   assert.ok(!r.ok && r.body.error?.message === 'IMPLAUSIBLE_CURRENT_TRACKING_DATE', `implausible date must be rejected: ${JSON.stringify(r.body)}`);
   r = await call(tzUser.idToken, { operationId: 'tz1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', currentTrackingDate: YDAY });
   assert.ok(r.ok && r.body.result.applied === false, `a retry with a different currentTrackingDate must be the same operation: ${JSON.stringify(r.body)}`);
-  assert.equal((await readDoc(`users/${tzUser.localId}/days/${TODAY}`)).counts.cig, 1, 'applied exactly once');
+  assert.equal((await readDoc(`users/${tzUid}/days/${TODAY}`)).counts.cig, 2, 'applied exactly twice (tz_init + tz1)');
 
   // 12) deleteAccountData — a locked (OPTION_B) account cannot client-wipe, so
   //     the trusted function deletes the caller's whole users/{uid} tree.

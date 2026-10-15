@@ -36,11 +36,14 @@ const optionBLedgerActive = async (uid) => {
  * server has no timezone for the user, so without it the server evaluated
  * "today" in UTC and could treat the user's current day as a past one.
  */
-const trustedExecute = (profile, type, payload) =>
-  TrustedFinancial.execute(type, {
+const trustedExecute = (profile, type, payload) => {
+  const timeZone = profile?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  return TrustedFinancial.execute(type, {
     ...payload,
-    currentTrackingDate: SmokingCalculator.getTrackingDate(new Date(), profile?.dayStartHour ?? 6),
+    timeZone,
+    currentTrackingDate: SmokingCalculator.getTrackingDate(new Date(), profile?.dayStartHour ?? 6, timeZone),
   });
+};
 
 /** OPTION B write gate — routing read; see optionBLedgerActive below. */
 
@@ -91,7 +94,7 @@ const timestampMillis = (value) => value?.toMillis?.() ?? ((value?.seconds ?? 0)
  */
 const PROFILE_SETTINGS_KEYS = new Set([
   'name', 'accent', 'widgetSize', 'purchaseType', 'unitPrice', 'unitsPerPack',
-  'pouchPrice', 'estimatedYield', 'dayStartHour'
+  'pouchPrice', 'estimatedYield', 'dayStartHour', 'timeZone'
 ]);
 
 /** Legacy web-only economics keys — strip on every settings write. */
