@@ -47,13 +47,19 @@ test('sanitizeCounts enforces the rules bounds instead of trusting the payload',
   assert.equal(code(() => sanitizeCounts({ cig: -1 })), 'INVALID_COUNT');
   assert.equal(code(() => sanitizeCounts({ 'a.b': 1 })), 'INVALID_TRACKER_ID');
   assert.equal(code(() => sanitizeCounts([1])), 'INVALID_COUNTS');
-  const many = Object.fromEntries(Array.from({ length: 26 }, (_, i) => [`t${i}`, 1]));
-  assert.equal(code(() => sanitizeCounts(many)), 'TOO_MANY_TRACKERS');
+  const exactly25 = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`t${i}`, 1]));
+  assert.equal(Object.keys(sanitizeCounts(exactly25)).length, 25);
+  const exactly26 = Object.fromEntries(Array.from({ length: 26 }, (_, i) => [`t${i}`, 1]));
+  assert.equal(code(() => sanitizeCounts(exactly26)), 'TOO_MANY_TRACKERS');
 });
 
-test('sanitizeHistoricalCounts keeps zeros (they clear a counter)', () => {
+test('sanitizeHistoricalCounts distinguishes day limit (25) from historical input payload limit (50)', () => {
   assert.deepEqual(sanitizeHistoricalCounts({ cig: 0, rolls: 3 }), { cig: 0, rolls: 3 });
   assert.equal(code(() => sanitizeHistoricalCounts({ cig: 10001 })), 'INVALID_COUNT');
+  const exactly50 = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`t${i}`, i % 2 === 0 ? 0 : 1]));
+  assert.equal(Object.keys(sanitizeHistoricalCounts(exactly50)).length, 50);
+  const exactly51 = Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`t${i}`, 1]));
+  assert.equal(code(() => sanitizeHistoricalCounts(exactly51)), 'TOO_MANY_TRACKERS');
 });
 
 test('resolveDayStartHour treats 0 (midnight) as a real setting', () => {

@@ -13,6 +13,20 @@
 export const DAY_START_HOUR_DEFAULT = 6;
 const SMOKING_TYPES = ['CIGARETTE', 'RYO_ROLL', 'JOINT_KING'];
 
+export const roundMoney = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n === 0) return 0;
+  const sign = n < 0 ? -1 : 1;
+  const abs = Math.abs(n);
+  const parts = String(abs).split('e');
+  const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
+  const rounded = Math.round(shifted);
+  if (rounded === 0) return 0;
+  const roundedParts = String(rounded).split('e');
+  const result = Number(roundedParts[0] + 'e' + (roundedParts[1] ? Number(roundedParts[1]) - 2 : '-2'));
+  return sign * result;
+};
+
 /**
  * Population-level minutes-of-life-expectancy estimate per smoking unit.
  * Sourced loosely from UK ASH / "11 minutes per cigarette" life-expectancy
@@ -632,11 +646,17 @@ export const SmokingCalculator = {
     return dateStr <= trackingDay;
   },
 
-  /** Round in cent space — Kotlin formatCurrency parity (de-DE style). */
+  roundMoney,
+
+  /** Round in cent space — symmetric commercial rounding parity with Kotlin and Functions. */
   formatCurrency: (amount) => {
-    const totalCents = Math.round((amount || 0) * 100);
-    const sign = totalCents < 0 ? '-' : '';
-    const cents = Math.abs(totalCents);
+    const n = Number(amount || 0);
+    if (!Number.isFinite(n) || n === 0) return '0,00 €';
+    const sign = n < 0 ? '-' : '';
+    const abs = Math.abs(n);
+    const parts = String(abs).split('e');
+    const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
+    const cents = Math.round(shifted);
     return `${sign}${Math.floor(cents / 100)},${String(cents % 100).padStart(2, '0')} €`;
   },
 

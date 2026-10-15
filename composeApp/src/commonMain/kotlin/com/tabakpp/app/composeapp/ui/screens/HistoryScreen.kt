@@ -57,6 +57,7 @@ fun HistoryScreen(
     val hasOlder by viewModel.hasOlderHistory.collectAsStateWithLifecycle()
     val records = remember(logs, dayDocs) { com.tabakpp.app.domain.historyRecords(logs, dayDocs) }
     val configs by viewModel.configs.collectAsStateWithLifecycle()
+    val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
     var historySubView by rememberSaveable { mutableStateOf("history") }
 
     val scope = rememberCoroutineScope()
@@ -132,6 +133,8 @@ fun HistoryScreen(
                             dayDocs = dayDocs,
                             configs = configs,
                             trackingDay = trackingDay,
+                            activeCounts = activeCounts,
+                            ledgers = ledgers,
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
                     }
