@@ -31,6 +31,10 @@ Account in Settings.
 - **Tombstone marker**: During deletion, a minimal UID-keyed marker (`{ deleting: true }`)
   is recorded to prevent surviving or cached authentication tokens from recreating data.
   This marker contains no personal identifiers and survives token reuse until final account removal.
+- **Erasure semantics and retry**: Firestore data erasure is executed across batched deletes
+  using the Firestore Admin SDK (`recursiveDelete`). In the event of a network interruption or
+  timeout during bulk subcollection deletion, the operation is idempotent and can be safely retried:
+  subsequent calls resume deletion until all user subcollections and documents are purged.
 - If final Authentication deletion fails after data erasure, the app reports the partial
   failure so the user can re-authenticate and retry.
 

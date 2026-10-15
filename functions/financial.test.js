@@ -64,6 +64,14 @@ test('clamps at zero and drops empty trackers', () => {
 test('fingerprint is order-independent and payload-sensitive', () => {
   assert.equal(fingerprintOf({ a: 1, b: 2 }), fingerprintOf({ b: 2, a: 1 }));
   assert.notEqual(fingerprintOf({ a: 1 }), fingerprintOf({ a: 2 }));
+  assert.notEqual(
+    fingerprintOf({ type: 'MANUAL_CREATE', allowUnresolved: false }),
+    fingerprintOf({ type: 'MANUAL_CREATE', allowUnresolved: true })
+  );
+  assert.notEqual(
+    fingerprintOf({ type: 'MANUAL_CREATE', currentTrackingDate: '2026-10-15' }),
+    fingerprintOf({ type: 'MANUAL_CREATE', currentTrackingDate: '2026-10-14' })
+  );
 });
 
 test('money is summed at historically-stamped prices, not the current config', () => {
