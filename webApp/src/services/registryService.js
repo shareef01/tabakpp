@@ -1038,7 +1038,7 @@ export const RegistryService = {
    * Restore a previously deleted log and re-credit lifetime aggregates
    * (Android parity with restoreLog).
    */
-  restoreLog: async (uid, log, unitPrice = 0.5, operationId = null) => {
+  restoreLog: async (uid, log, unitPrice = 0.5, operationId = null, allowUnresolved = false) => {
     if (!uid || !log?.id) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', log.id);
@@ -1047,7 +1047,11 @@ export const RegistryService = {
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
       return trustedExecute(optionB, 'MANUAL_RESTORE', {
-        operationId: operationId || generateOperationId(`res_${log.id}`), date: log.logDate, logId: log.id, counts: normalizedCounts,
+        operationId: operationId || generateOperationId(`res_${log.id}`),
+        date: log.logDate,
+        logId: log.id,
+        counts: normalizedCounts,
+        allowUnresolved: allowUnresolved || log?.allowUnresolved === true,
       });
     }
     if (await financialWritesLocked(uid)) throw new Error('MANUAL_RESTORE_UNSUPPORTED');

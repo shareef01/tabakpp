@@ -66,6 +66,20 @@ const parseArgs = () => {
 };
 
 const PROD_PROJECT_PATTERNS = [/prod/i, /tabakpp-app\b/i, /production/i];
+const ALLOWED_STAGING_PROJECT_PATTERNS = [
+  /^demo-takabpp-test$/,
+  /^demo-tabakpp-test$/,
+  /^tabakpp-staging(-\w+)?$/,
+  /^staging(-\w+)?$/,
+];
+
+const isAllowedStagingProject = (projectId) => {
+  if (!projectId || typeof projectId !== 'string') return false;
+  for (const pat of PROD_PROJECT_PATTERNS) {
+    if (pat.test(projectId)) return false;
+  }
+  return ALLOWED_STAGING_PROJECT_PATTERNS.some((pat) => pat.test(projectId)) || projectId.startsWith('demo-') || projectId.startsWith('staging-');
+};
 
 const printUsage = () => {
   console.log(`
@@ -154,17 +168,15 @@ async function main() {
     process.exit(1);
   }
 
-  // Staging project sanity check
-  for (const pat of PROD_PROJECT_PATTERNS) {
-    if (pat.test(opts.project)) {
-      console.error(`❌ CRITICAL SECURITY ERROR: "${opts.project}" matches a production pattern.`);
-      console.error('This migration CLI is strictly STAGING-ONLY. Aborting immediately.');
-      process.exit(1);
-    }
+  // Explicit staging project allowlist and production pattern defense
+  if (!isAllowedStagingProject(opts.project)) {
+    console.error(`❌ CRITICAL SECURITY ERROR: "${opts.project}" is not an authorized staging or demo project.`);
+    console.error('This migration CLI is strictly STAGING-ONLY. Allowed staging projects must match demo-* or staging-* allowlists.');
+    process.exit(1);
   }
 
-  if (!opts.targetUid) {
-    console.error('❌ ERROR: Missing required option: --target-uid <UID>');
+  if (!opts.targetUid || typeof opts.targetUid !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(opts.targetUid)) {
+    console.error(`❌ ERROR: Invalid or missing target UID: "${opts.targetUid}". Must be an alphanumeric ID without path separators.`);
     printUsage();
     process.exit(1);
   }

@@ -339,7 +339,12 @@ const computeDayCredit = (counts, trackerSnapshots, defaultUnitPrice = 0.5) => {
     }
     if (SMOKING_TYPES.includes(snap?.type)) smokingUnits += count;
   });
-  return { wasted, saved, smokingUnits, baselineSaved };
+  return {
+    wasted: roundMoney(wasted),
+    saved: roundMoney(saved),
+    smokingUnits: Math.round(smokingUnits),
+    baselineSaved: roundMoney(baselineSaved),
+  };
 };
 
 export const SmokingCalculator = {

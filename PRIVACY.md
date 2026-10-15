@@ -22,8 +22,9 @@ Data remains until the user deletes individual history entries or uses Delete
 Account in Settings.
 
 - **Account deletion**: Erases application subcollections (tracker configurations,
-  history logs, daily dated records, canonical ledgers, profile metadata), the profile
-  document, and the Firebase Authentication account.
+  history logs, daily dated records, canonical ledgers, profile metadata, trusted
+  restoration tombstones `trustedDeletedLogs`, and operation receipts `trustedOperations`),
+  the profile document, and the Firebase Authentication account.
 - **Trusted deletion (Option B)**: Because security rules deny client-side deletion of
   financial history for Option B accounts, account data erasure is performed server-side
   by the `deleteAccountData` Cloud Function, requiring recent authentication (within 5 minutes).

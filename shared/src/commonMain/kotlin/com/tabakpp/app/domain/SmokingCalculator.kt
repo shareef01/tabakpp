@@ -5,6 +5,7 @@ import kotlinx.datetime.*
 import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
+import kotlin.math.round
 
 object SmokingCalculator {
     const val DEFAULT_DAY_START_HOUR = 6
@@ -512,7 +513,12 @@ object SmokingCalculator {
             }
             if (SMOKING_TYPES.contains(snap.type)) smokingUnits += count
         }
-        return LifetimeAggregates(saved = saved, wasted = wasted, smokingUnits = smokingUnits, baselineSaved = baselineSaved)
+        return LifetimeAggregates(
+            saved = roundMoney(saved),
+            wasted = roundMoney(wasted),
+            smokingUnits = round(smokingUnits),
+            baselineSaved = roundMoney(baselineSaved)
+        )
     }
 
     fun mergeCounts(base: Map<String, Double>?, extra: Map<String, Double>): Map<String, Double> {
@@ -960,16 +966,28 @@ object SmokingCalculator {
         if (!amount.isFinite() || amount == 0.0) return 0.0
         val sign = if (amount < 0.0) -1.0 else 1.0
         val absVal = abs(amount)
-        val cents = floor(absVal * 100.0 + 0.5000000001)
-        val result = sign * (cents / 100.0)
-        return if (result == -0.0) 0.0 else result
+        val s = absVal.toString()
+        val parts = s.split('e', 'E')
+        val exp = if (parts.size > 1) (parts[1].toIntOrNull() ?: 0) + 2 else 2
+        val shifted = (parts[0] + "e" + exp).toDoubleOrNull() ?: (absVal * 100.0)
+        val rounded = floor(shifted + 0.5)
+        if (rounded == 0.0) return 0.0
+        val rParts = rounded.toLong().toString().split('e', 'E')
+        val rExp = if (rParts.size > 1) (rParts[1].toIntOrNull() ?: 0) - 2 else -2
+        val result = (rParts[0] + "e" + rExp).toDoubleOrNull() ?: (rounded / 100.0)
+        val finalVal = sign * result
+        return if (finalVal == -0.0) 0.0 else finalVal
     }
 
     fun formatCurrency(amount: Double): String {
         if (!amount.isFinite()) return "0,00 €"
         val sign = if (amount < 0.0) "-" else ""
         val absVal = abs(amount)
-        val cents = floor(absVal * 100.0 + 0.5000000001).toLong()
+        val s = absVal.toString()
+        val parts = s.split('e', 'E')
+        val exp = if (parts.size > 1) (parts[1].toIntOrNull() ?: 0) + 2 else 2
+        val shifted = (parts[0] + "e" + exp).toDoubleOrNull() ?: (absVal * 100.0)
+        val cents = floor(shifted + 0.5).toLong()
         return "$sign${cents / 100},${(cents % 100).toString().padStart(2, '0')} €"
     }
 

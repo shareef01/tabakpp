@@ -440,10 +440,12 @@ const main = async () => {
   r = await call(goneUser.idToken, { operationId: 'g2', type: 'MANUAL_CREATE', date: TODAY, logId: 'GL1', counts: { cig: 2 } });
   assert.ok(r.ok, `seed manual log failed: ${JSON.stringify(r.body)}`);
   await writeDoc(`users/${guid}/meta/profile`, { avatar: 'x' });
+  await writeDoc(`users/${guid}/trustedDeletedLogs/del1`, { logId: 'del1', counts: { cig: 1 } });
   const goneDocs = [
     `users/${guid}`, `users/${guid}/configs/cig`, `users/${guid}/days/${TODAY}`, `users/${guid}/logs/GL1`,
     `users/${guid}/meta/profile`, `users/${guid}/dailyFinancials/${TODAY}`,
     `users/${guid}/trustedOperations/g1`, `users/${guid}/trustedOperations/g2`,
+    `users/${guid}/trustedDeletedLogs/del1`,
   ];
   for (const p of goneDocs) assert.ok(await readDoc(p), `seed missing ${p}`);
 
@@ -736,7 +738,106 @@ const main = async () => {
   });
   assert.equal(tombstoneDirect.status, 403, 'Direct client write to trustedDeletedLogs must be denied 403 by Firestore rules');
 
-  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete, current-tracking-date, delete-account-data, 2->3->2-idempotency, undo-restore-snapshot-preservation, category-D-4-metric-reconciliation, option-b-rules-compatibility, map-tracker-limits-25-26-50, adversarial-restore-snapshot-provenance, trusted-deleted-logs-security-rules ALL 19 TEST SUITES PASSED');
+  // 20) Phase 3 & Phase 5: Restoration Backward Compatibility & Financial Invariants
+  const p3User = await signIn();
+  const p3Uid = p3User.localId;
+  const p3Token = p3User.idToken;
+  await seedOptionB(p3Uid);
+
+  // Scenario A: New deletion and restoration preserves server-stored snapshots & economics
+  const dateHist = '2026-08-10';
+  let p3Res = await call(p3Token, {
+    operationId: 'b_create_A', type: 'MANUAL_CREATE', date: dateHist, logId: 'LOG_A',
+    counts: { cig: 3 }, defaultUnitPrice: 1,
+  });
+  assert.ok(p3Res.ok, `seed LOG_A: ${JSON.stringify(p3Res.body)}`);
+
+  // Delete LOG_A -> writes tombstone in trustedDeletedLogs
+  p3Res = await call(p3Token, {
+    operationId: 'b_del_A', type: 'MANUAL_DELETE', date: dateHist, logId: 'LOG_A',
+  });
+  assert.ok(p3Res.ok, `delete LOG_A: ${JSON.stringify(p3Res.body)}`);
+  assert.equal(await readDoc(`users/${p3Uid}/logs/LOG_A`), null);
+  const tombstoneA = await readDoc(`users/${p3Uid}/trustedDeletedLogs/LOG_A`);
+  assert.ok(tombstoneA, 'server tombstone must exist in trustedDeletedLogs');
+
+  // Restore LOG_A
+  p3Res = await call(p3Token, {
+    operationId: 'b_res_A', type: 'MANUAL_RESTORE', date: dateHist, logId: 'LOG_A',
+    counts: { cig: 3 },
+  });
+  assert.ok(p3Res.ok, `restore LOG_A: ${JSON.stringify(p3Res.body)}`);
+  const restoredLogA = await readDoc(`users/${p3Uid}/logs/LOG_A`);
+  assert.ok(restoredLogA, 'LOG_A must be restored');
+  assert.equal(restoredLogA.restorationMode, 'VERIFIED');
+  assert.equal(await readDoc(`users/${p3Uid}/trustedDeletedLogs/LOG_A`), null, 'tombstone must be cleaned up on restore');
+
+  // Scenario B: Legacy deleted entry without tombstone
+  // Attempt without allowUnresolved -> fails closed
+  const legacyDate = '2026-07-20';
+  p3Res = await call(p3Token, {
+    operationId: 'b_res_legacy_fail', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_LEGACY_1',
+    counts: { cig: 4 },
+  });
+  assert.equal(p3Res.ok, false, 'Legacy restore without allowUnresolved must fail closed');
+  assert.match(JSON.stringify(p3Res.body), /NO_RESTORATION_EVIDENCE/);
+
+  // Attempt with allowUnresolved: true -> succeeds with unresolved economics
+  p3Res = await call(p3Token, {
+    operationId: 'b_res_legacy_ok', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_LEGACY_1',
+    counts: { cig: 4 },
+    allowUnresolved: true,
+  });
+  assert.ok(p3Res.ok, `Legacy restore with allowUnresolved: true must succeed: ${JSON.stringify(p3Res.body)}`);
+  const restoredLegacy = await readDoc(`users/${p3Uid}/logs/LOG_LEGACY_1`);
+  assert.ok(restoredLegacy, 'LOG_LEGACY_1 must be restored');
+  assert.equal(restoredLegacy.restorationMode, 'LEGACY_UNRESOLVED');
+  assert.equal(restoredLegacy.unresolvedEconomics, true);
+  assert.equal(restoredLegacy.counts.cig, 4);
+
+  // Verify financial ledger marks economics as unresolved without inventing savings (Invariant 7 & 8)
+  const legacyLedger = await readDoc(`users/${p3Uid}/dailyFinancials/${legacyDate}`);
+  assert.ok(legacyLedger, 'dailyFinancials must exist');
+  assert.equal(legacyLedger.unresolvedComponents.spent, true, 'spent must be unresolved');
+  assert.equal(legacyLedger.unresolvedComponents.saved, true, 'saved must be unresolved');
+  assert.equal(legacyLedger.canonicalCredit.saved, 0, 'authoritative savings must NOT be invented');
+
+  // Scenario C: Malicious restoration with forged financial overrides
+  p3Res = await call(p3Token, {
+    operationId: 'b_res_malicious', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_MALICIOUS',
+    counts: { cig: 2 },
+    allowUnresolved: true,
+    trackerSnapshots: { cig: { unitPrice: 500, target: 1000 } },
+    aggregateCredit: { saved: 99999, wasted: 1000 },
+  });
+  assert.ok(p3Res.ok, 'call should succeed with unverified fields stripped');
+  const restoredMalicious = await readDoc(`users/${p3Uid}/logs/LOG_MALICIOUS`);
+  assert.equal(restoredMalicious.restorationMode, 'LEGACY_UNRESOLVED');
+  assert.deepEqual(restoredMalicious.trackerSnapshots, {}, 'forged tracker snapshots must be dropped');
+  assert.equal(restoredMalicious.aggregateCredit.saved, 0, 'forged savings must be ignored');
+
+  // Scenario D: Repeated restoration (idempotent; no double credit) (Invariant 4)
+  const userBeforeRepeat = await readDoc(`users/${p3Uid}`);
+  const aggBeforeRepeat = { ...userBeforeRepeat.lifetimeAggregates };
+  p3Res = await call(p3Token, {
+    operationId: 'b_res_repeat', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_LEGACY_1',
+    counts: { cig: 4 },
+    allowUnresolved: true,
+  });
+  assert.ok(p3Res.ok, 'repeated restore must succeed idempotently');
+  const userAfterRepeat = await readDoc(`users/${p3Uid}`);
+  assert.deepEqual(userAfterRepeat.lifetimeAggregates, aggBeforeRepeat, 'lifetime aggregates must never double credit');
+
+  // Scenario E: Failed restoration and retry atomicity
+  p3Res = await call(p3Token, {
+    operationId: 'b_res_invalid', type: 'MANUAL_RESTORE', date: 'invalid-date', logId: 'LOG_INVALID',
+    counts: { cig: 1 },
+    allowUnresolved: true,
+  });
+  assert.equal(p3Res.ok, false, 'Invalid calendar date must fail validation');
+  assert.equal(await readDoc(`users/${p3Uid}/logs/LOG_INVALID`), null, 'atomic transaction leaves no partial log');
+
+  console.log('✅ integration: ALL 20 TEST SUITES PASSED (including backward-compatible restoration Scenarios A-E and all 10 financial integrity invariants)');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });
