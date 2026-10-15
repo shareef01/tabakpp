@@ -772,28 +772,36 @@ const main = async () => {
   assert.equal(restoredLogA.restorationMode, 'VERIFIED');
   assert.equal(await readDoc(`users/${p3Uid}/trustedDeletedLogs/LOG_A`), null, 'tombstone must be cleaned up on restore');
 
-  // Scenario B: Legacy deleted entry without tombstone
-  // Attempt without allowUnresolved -> fails closed
+  // Scenario B: Unsupported restore lacking reliable provenance
+  // Attempting MANUAL_RESTORE for a non-existent tombstone must fail closed even with allowUnresolved: true
   const legacyDate = '2026-07-20';
   p3Res = await call(p3Token, {
     operationId: 'b_res_legacy_fail', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_LEGACY_1',
     counts: { cig: 4 },
   });
-  assert.equal(p3Res.ok, false, 'Legacy restore without allowUnresolved must fail closed');
+  assert.equal(p3Res.ok, false, 'Legacy restore without tombstone must fail closed');
   assert.match(JSON.stringify(p3Res.body), /NO_RESTORATION_EVIDENCE/);
 
-  // Attempt with allowUnresolved: true -> succeeds with unresolved economics
   p3Res = await call(p3Token, {
-    operationId: 'b_res_legacy_ok', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_LEGACY_1',
+    operationId: 'b_res_legacy_allow_unres', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_LEGACY_1',
     counts: { cig: 4 },
     allowUnresolved: true,
   });
-  assert.ok(p3Res.ok, `Legacy restore with allowUnresolved: true must succeed: ${JSON.stringify(p3Res.body)}`);
-  const restoredLegacy = await readDoc(`users/${p3Uid}/logs/LOG_LEGACY_1`);
-  assert.ok(restoredLegacy, 'LOG_LEGACY_1 must be restored');
-  assert.equal(restoredLegacy.restorationMode, 'LEGACY_UNRESOLVED');
-  assert.equal(restoredLegacy.unresolvedEconomics, true);
-  assert.equal(restoredLegacy.counts.cig, 4);
+  assert.equal(p3Res.ok, false, 'MANUAL_RESTORE cannot invent restored record without server tombstone');
+  assert.match(JSON.stringify(p3Res.body), /NO_RESTORATION_EVIDENCE/);
+
+  // Explicit new historical entry with unresolved economics must use MANUAL_CREATE
+  p3Res = await call(p3Token, {
+    operationId: 'b_create_legacy_explicit', type: 'MANUAL_CREATE', date: legacyDate, logId: 'LOG_LEGACY_1',
+    counts: { cig: 4 },
+    defaultUnitPrice: 1,
+  });
+  assert.ok(p3Res.ok, `Explicit historical create must succeed: ${JSON.stringify(p3Res.body)}`);
+  const explicitLegacy = await readDoc(`users/${p3Uid}/logs/LOG_LEGACY_1`);
+  assert.ok(explicitLegacy, 'LOG_LEGACY_1 must exist as explicit manual entry');
+  assert.equal(explicitLegacy.origin, 'MANUAL_ENTRY');
+  assert.equal(explicitLegacy.unresolvedEconomics, true);
+  assert.equal(explicitLegacy.counts.cig, 4);
 
   // Verify financial ledger marks economics as unresolved without inventing savings (Invariant 7 & 8)
   const legacyLedger = await readDoc(`users/${p3Uid}/dailyFinancials/${legacyDate}`);
@@ -802,42 +810,144 @@ const main = async () => {
   assert.equal(legacyLedger.unresolvedComponents.saved, true, 'saved must be unresolved');
   assert.equal(legacyLedger.canonicalCredit.saved, 0, 'authoritative savings must NOT be invented');
 
-  // Scenario C: Malicious restoration with forged financial overrides
+  // Scenario C: Malicious restoration with forged financial overrides or non-existent tombstone
   p3Res = await call(p3Token, {
     operationId: 'b_res_malicious', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_MALICIOUS',
     counts: { cig: 2 },
-    allowUnresolved: true,
     trackerSnapshots: { cig: { unitPrice: 500, target: 1000 } },
     aggregateCredit: { saved: 99999, wasted: 1000 },
   });
-  assert.ok(p3Res.ok, 'call should succeed with unverified fields stripped');
-  const restoredMalicious = await readDoc(`users/${p3Uid}/logs/LOG_MALICIOUS`);
-  assert.equal(restoredMalicious.restorationMode, 'LEGACY_UNRESOLVED');
-  assert.deepEqual(restoredMalicious.trackerSnapshots, {}, 'forged tracker snapshots must be dropped');
-  assert.equal(restoredMalicious.aggregateCredit.saved, 0, 'forged savings must be ignored');
+  assert.equal(p3Res.ok, false, 'Malicious restore without server tombstone must be rejected');
+  assert.match(JSON.stringify(p3Res.body), /NO_RESTORATION_EVIDENCE/);
+  assert.equal(await readDoc(`users/${p3Uid}/logs/LOG_MALICIOUS`), null, 'no malicious log created');
 
-  // Scenario D: Repeated restoration (idempotent; no double credit) (Invariant 4)
+  // Tampered restoration: client attempts to change counts from server tombstone
+  await call(p3Token, {
+    operationId: 'tamper_seed', type: 'MANUAL_CREATE', date: legacyDate, logId: 'LOG_TAMPER',
+    counts: { cig: 2 }, defaultUnitPrice: 1,
+  });
+  await call(p3Token, {
+    operationId: 'tamper_del', type: 'MANUAL_DELETE', date: legacyDate, logId: 'LOG_TAMPER',
+  });
+  p3Res = await call(p3Token, {
+    operationId: 'tamper_res', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_TAMPER',
+    counts: { cig: 99 }, // tampered!
+  });
+  assert.equal(p3Res.ok, false, 'Restoration with tampered counts must be rejected');
+  assert.match(JSON.stringify(p3Res.body), /RESTORATION_TAMPERED/);
+
+  // Scenario D: Repeated restoration (idempotent replay vs second restore) (Invariant 4)
   const userBeforeRepeat = await readDoc(`users/${p3Uid}`);
   const aggBeforeRepeat = { ...userBeforeRepeat.lifetimeAggregates };
+  // Replaying with identical operationId returns cached receipt without double credit
   p3Res = await call(p3Token, {
-    operationId: 'b_res_repeat', type: 'MANUAL_RESTORE', date: legacyDate, logId: 'LOG_LEGACY_1',
-    counts: { cig: 4 },
-    allowUnresolved: true,
+    operationId: 'b_res_A', type: 'MANUAL_RESTORE', date: dateHist, logId: 'LOG_A',
+    counts: { cig: 3 },
   });
-  assert.ok(p3Res.ok, 'repeated restore must succeed idempotently');
+  assert.ok(p3Res.ok, 'identical operationId replay must succeed idempotently');
+  assert.equal(p3Res.body.result?.applied ?? false, false);
   const userAfterRepeat = await readDoc(`users/${p3Uid}`);
   assert.deepEqual(userAfterRepeat.lifetimeAggregates, aggBeforeRepeat, 'lifetime aggregates must never double credit');
+
+  // Second restore with different operationId must reject because log is already active
+  p3Res = await call(p3Token, {
+    operationId: 'b_res_A_duplicate', type: 'MANUAL_RESTORE', date: dateHist, logId: 'LOG_A',
+    counts: { cig: 3 },
+  });
+  assert.equal(p3Res.ok, false, 'restoring already active log must fail');
+  assert.match(JSON.stringify(p3Res.body), /LOG_ALREADY_ACTIVE/);
 
   // Scenario E: Failed restoration and retry atomicity
   p3Res = await call(p3Token, {
     operationId: 'b_res_invalid', type: 'MANUAL_RESTORE', date: 'invalid-date', logId: 'LOG_INVALID',
     counts: { cig: 1 },
-    allowUnresolved: true,
   });
   assert.equal(p3Res.ok, false, 'Invalid calendar date must fail validation');
   assert.equal(await readDoc(`users/${p3Uid}/logs/LOG_INVALID`), null, 'atomic transaction leaves no partial log');
 
-  console.log('✅ integration: ALL 20 TEST SUITES PASSED (including backward-compatible restoration Scenarios A-E and all 10 financial integrity invariants)');
+  // Item 1: Cross-date manual log ID collisions & concurrency protections
+  const dateOne = '2026-08-01';
+  const dateTwo = '2026-08-02';
+  // Step 1: Create LOG_CROSS on dateOne
+  let crossRes = await call(p3Token, {
+    operationId: 'cross_1', type: 'MANUAL_CREATE', date: dateOne, logId: 'LOG_CROSS',
+    counts: { cig: 2 }, defaultUnitPrice: 1,
+  });
+  assert.ok(crossRes.ok, `create LOG_CROSS on dateOne: ${JSON.stringify(crossRes.body)}`);
+
+  // Step 2: Attempt to create LOG_CROSS on dateTwo -> Must fail with LOG_EXISTS
+  crossRes = await call(p3Token, {
+    operationId: 'cross_2', type: 'MANUAL_CREATE', date: dateTwo, logId: 'LOG_CROSS',
+    counts: { cig: 5 }, defaultUnitPrice: 1,
+  });
+  assert.equal(crossRes.ok, false, 'Cross-date collision must be rejected with LOG_EXISTS');
+  assert.match(JSON.stringify(crossRes.body), /LOG_EXISTS/);
+
+  // Step 3: Verify dateOne source doc and ledger remain unchanged
+  const crossLog = await readDoc(`users/${p3Uid}/logs/LOG_CROSS`);
+  assert.equal(crossLog.logDate, dateOne, 'LOG_CROSS must retain original logDate');
+  assert.equal(crossLog.counts.cig, 2, 'LOG_CROSS counts must not be overwritten');
+
+  // Step 4: Concurrent creation test across dates
+  const [cRes1, cRes2] = await Promise.all([
+    call(p3Token, {
+      operationId: 'conc_1', type: 'MANUAL_CREATE', date: dateOne, logId: 'LOG_CONCURRENT',
+      counts: { cig: 1 }, defaultUnitPrice: 1,
+    }),
+    call(p3Token, {
+      operationId: 'conc_2', type: 'MANUAL_CREATE', date: dateTwo, logId: 'LOG_CONCURRENT',
+      counts: { cig: 3 }, defaultUnitPrice: 1,
+    }),
+  ]);
+  const succeededCount = [cRes1.ok, cRes2.ok].filter(Boolean).length;
+  const failedCount = [cRes1.ok, cRes2.ok].filter((x) => !x).length;
+  assert.equal(succeededCount, 1, 'Exactly one concurrent create must succeed');
+  assert.equal(failedCount, 1, 'The colliding concurrent create must fail');
+
+  // Step 5: Cross-date MANUAL_UPDATE and MANUAL_DELETE rejection
+  const wrongUpdate = await call(p3Token, {
+    operationId: 'cross_up', type: 'MANUAL_UPDATE', date: dateTwo, logId: 'LOG_CROSS',
+    counts: { cig: 10 },
+  });
+  assert.equal(wrongUpdate.ok, false, 'MANUAL_UPDATE with mismatched date must fail');
+  assert.match(JSON.stringify(wrongUpdate.body), /LOG_DATE_MISMATCH/);
+
+  const wrongDelete = await call(p3Token, {
+    operationId: 'cross_del', type: 'MANUAL_DELETE', date: dateTwo, logId: 'LOG_CROSS',
+  });
+  assert.equal(wrongDelete.ok, false, 'MANUAL_DELETE with mismatched date must fail');
+  assert.match(JSON.stringify(wrongDelete.body), /LOG_DATE_MISMATCH/);
+
+  // Item 4: Strengthened idempotency fingerprints against conflicting semantic arguments
+  // Test conflicting allowUnresolved
+  const fpRes1 = await call(p3Token, {
+    operationId: 'fp_sem_1', type: 'MANUAL_CREATE', date: dateOne, logId: 'LOG_FP_1',
+    counts: { cig: 1 }, allowUnresolved: false,
+  });
+  assert.ok(fpRes1.ok, `first call with allowUnresolved: false: ${JSON.stringify(fpRes1.body)}`);
+
+  const fpConflict1 = await call(p3Token, {
+    operationId: 'fp_sem_1', type: 'MANUAL_CREATE', date: dateOne, logId: 'LOG_FP_1',
+    counts: { cig: 1 }, allowUnresolved: true,
+  });
+  assert.equal(fpConflict1.ok, false, 'Reuse of operationId with conflicting allowUnresolved must be rejected');
+  assert.match(JSON.stringify(fpConflict1.body), /OPERATION_CONFLICT/);
+
+  // Test conflicting counts on reused operationId
+  const fpRes2 = await call(p3Token, {
+    operationId: 'fp_sem_2', type: 'MANUAL_CREATE', date: dateOne, logId: 'LOG_FP_2',
+    counts: { cig: 1 },
+  });
+  assert.ok(fpRes2.ok, `first call with counts 1: ${JSON.stringify(fpRes2.body)}`);
+
+  const fpConflict2 = await call(p3Token, {
+    operationId: 'fp_sem_2', type: 'MANUAL_CREATE', date: dateOne, logId: 'LOG_FP_2',
+    counts: { cig: 5 },
+  });
+  assert.equal(fpConflict2.ok, false, 'Reuse of operationId with conflicting counts must be rejected');
+  assert.match(JSON.stringify(fpConflict2.body), /OPERATION_CONFLICT/);
+
+  console.log('✅ integration: ALL 20 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });

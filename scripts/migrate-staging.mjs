@@ -6,18 +6,21 @@
  * to Option-B trusted canonical financials.
  *
  * Usage:
- *   node scripts/migrate-staging.mjs --project <CONFIRMED_STAGING_PROJECT> --target-uid <UID> [--dry-run]
- *   node scripts/migrate-staging.mjs --project <CONFIRMED_STAGING_PROJECT> --target-uid <UID> --live [--yes]
+ *   node scripts/migrate-staging.mjs --mode emulator --project demo-takabpp-test --target-uid <UID> [--dry-run]
+ *   node scripts/migrate-staging.mjs --mode staging --project tabakpp-staging --target-uid <UID> [--dry-run]
+ *   node scripts/migrate-staging.mjs --mode staging --project tabakpp-staging --target-uid <UID> --live [--yes]
  *
  * Options:
- *   --project <id>       REQUIRED. Staging Firebase project ID (e.g. demo-takabpp-test, tabakpp-staging).
- *                        Production project IDs are strictly rejected.
- *   --target-uid <uid>   REQUIRED. The UID of the account to migrate.
- *   --dry-run            Simulate migration and print four-metric reconciliation table (DEFAULT: true).
- *   --live               Execute live migration against the staging project.
- *   --yes                Skip confirmation prompt when running --live.
- *   --service-account <path> Optional path to a service account JSON file.
- *   --help               Show this help message.
+ *   --mode <emulator|staging> Explicit execution mode (default: emulator if emulator host detected, else required).
+ *   --project <id>            REQUIRED. Approved staging project ID (demo-takabpp-test, tabakpp-staging).
+ *   --target-uid <uid>        REQUIRED. The UID of the account to migrate.
+ *   --dry-run                 Simulate migration and print four-metric reconciliation table (DEFAULT: true).
+ *   --live                    Execute live migration against the staging project.
+ *   --yes                     Skip confirmation prompt when running --live.
+ *   --service-account <path>  Optional path to a service account JSON file.
+ *   --operator-token <token>  Legitimate Firebase Auth ID token with operator claims.
+ *   --web-api-key <key>       Firebase Web API Key for staging custom token exchange.
+ *   --help                    Show this help message.
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -33,11 +36,14 @@ try {
 const parseArgs = () => {
   const args = process.argv.slice(2);
   const options = {
+    mode: null,
     project: null,
     targetUid: null,
     dryRun: true,
     yes: false,
     serviceAccount: null,
+    operatorToken: process.env.OPERATOR_ID_TOKEN || null,
+    webApiKey: process.env.FIREBASE_WEB_API_KEY || null,
     help: false,
   };
 
@@ -45,6 +51,8 @@ const parseArgs = () => {
     const arg = args[i];
     if (arg === '--help' || arg === '-h') {
       options.help = true;
+    } else if (arg === '--mode') {
+      options.mode = args[++i]?.toLowerCase();
     } else if (arg === '--project') {
       options.project = args[++i];
     } else if (arg === '--target-uid') {
@@ -57,6 +65,10 @@ const parseArgs = () => {
       options.yes = true;
     } else if (arg === '--service-account') {
       options.serviceAccount = args[++i];
+    } else if (arg === '--operator-token') {
+      options.operatorToken = args[++i];
+    } else if (arg === '--web-api-key') {
+      options.webApiKey = args[++i];
     } else {
       console.error(`Unknown argument: ${arg}`);
       options.help = true;
@@ -65,20 +77,21 @@ const parseArgs = () => {
   return options;
 };
 
-const PROD_PROJECT_PATTERNS = [/prod/i, /tabakpp-app\b/i, /production/i];
-const ALLOWED_STAGING_PROJECT_PATTERNS = [
-  /^demo-takabpp-test$/,
-  /^demo-tabakpp-test$/,
-  /^tabakpp-staging(-\w+)?$/,
-  /^staging(-\w+)?$/,
-];
+// Strict explicit allowlist of authorized staging projects (no broad regex or prefixes)
+const APPROVED_STAGING_PROJECTS = new Set([
+  'demo-takabpp-test',
+  'demo-tabakpp-test',
+  'tabakpp-staging',
+]);
+
+const PROD_PROJECT_PATTERNS = [/prod/i, /tabakpp-app\b/i, /production/i, /tabakpp-web/i];
 
 const isAllowedStagingProject = (projectId) => {
   if (!projectId || typeof projectId !== 'string') return false;
   for (const pat of PROD_PROJECT_PATTERNS) {
     if (pat.test(projectId)) return false;
   }
-  return ALLOWED_STAGING_PROJECT_PATTERNS.some((pat) => pat.test(projectId)) || projectId.startsWith('demo-') || projectId.startsWith('staging-');
+  return APPROVED_STAGING_PROJECTS.has(projectId);
 };
 
 const printUsage = () => {
@@ -86,16 +99,21 @@ const printUsage = () => {
 tabak++ Staging-Only Migration CLI
 
 Usage:
-  node scripts/migrate-staging.mjs --project <STAGING_PROJECT> --target-uid <UID> [options]
+  node scripts/migrate-staging.mjs --mode <emulator|staging> --project <STAGING_PROJECT> --target-uid <UID> [options]
 
 Options:
-  --project <id>       REQUIRED. Explicit staging project ID (e.g., demo-takabpp-test).
-  --target-uid <uid>   REQUIRED. The target user UID to migrate.
-  --dry-run            Validate migration & print reconciliation table (default: true).
-  --live               Perform live migration against staging environment.
-  --yes                Bypass interactive confirmation prompt on --live.
-  --service-account    Path to service account JSON credentials.
-  --help               Display this help text.
+  --mode <emulator|staging> Explicit execution mode:
+                              emulator: local Firebase Emulator suite
+                              staging:  real Firebase staging project (tabakpp-staging)
+  --project <id>            REQUIRED. Explicit approved staging project ID (${[...APPROVED_STAGING_PROJECTS].join(', ')}).
+  --target-uid <uid>        REQUIRED. The target user UID to migrate.
+  --dry-run                 Validate migration & print reconciliation table (default: true).
+  --live                    Perform live migration against staging environment.
+  --yes                     Bypass interactive confirmation prompt on --live.
+  --service-account <file>  Path to service account JSON credentials.
+  --operator-token <token>  Verified Firebase Auth ID token with operator claims.
+  --web-api-key <key>       Firebase Web API Key for custom-to-ID token exchange in staging.
+  --help                    Display this help text.
 `);
 };
 
@@ -170,8 +188,16 @@ async function main() {
 
   // Explicit staging project allowlist and production pattern defense
   if (!isAllowedStagingProject(opts.project)) {
-    console.error(`❌ CRITICAL SECURITY ERROR: "${opts.project}" is not an authorized staging or demo project.`);
-    console.error('This migration CLI is strictly STAGING-ONLY. Allowed staging projects must match demo-* or staging-* allowlists.');
+    console.error(`❌ CRITICAL SECURITY ERROR: "${opts.project}" is not an authorized staging project.`);
+    console.error(`Allowed staging projects: ${[...APPROVED_STAGING_PROJECTS].join(', ')}.`);
+    process.exit(1);
+  }
+
+  // Resolve explicit execution mode
+  const mode = opts.mode || (process.env.FIRESTORE_EMULATOR_HOST ? 'emulator' : null);
+  if (!mode || (mode !== 'emulator' && mode !== 'staging')) {
+    console.error(`❌ ERROR: Missing or invalid execution mode: "${opts.mode}". Specify --mode emulator or --mode staging.`);
+    printUsage();
     process.exit(1);
   }
 
@@ -183,20 +209,21 @@ async function main() {
 
   console.log(`\n========================================`);
   console.log(`tabak++ Staging Migration CLI`);
+  console.log(`Mode:           ${mode.toUpperCase()}`);
   console.log(`Target Project: ${opts.project}`);
   console.log(`Target UID:     ${opts.targetUid}`);
-  console.log(`Mode:           ${opts.dryRun ? 'DRY-RUN (Simulation only)' : 'LIVE EXECUTION'}`);
+  console.log(`Action:         ${opts.dryRun ? 'DRY-RUN (Simulation only)' : 'LIVE EXECUTION'}`);
   console.log(`========================================\n`);
 
   if (!opts.dryRun && !opts.yes) {
-    const proceed = await confirm(`⚠️ Are you sure you want to execute a LIVE migration on staging project "${opts.project}" for UID "${opts.targetUid}"?`);
+    const proceed = await confirm(`⚠️ Are you sure you want to execute a LIVE migration on ${mode.toUpperCase()} project "${opts.project}" for UID "${opts.targetUid}"?`);
     if (!proceed) {
       console.log('Operation cancelled by operator.');
       process.exit(0);
     }
   }
 
-  // Initialize Firebase Admin
+  // Initialize Firebase Admin with credential-project identity verification
   const adminConfig = { projectId: opts.project };
   if (opts.serviceAccount) {
     if (!existsSync(opts.serviceAccount)) {
@@ -204,8 +231,12 @@ async function main() {
       process.exit(1);
     }
     const sa = JSON.parse(readFileSync(opts.serviceAccount, 'utf8'));
+    if (sa.project_id && sa.project_id !== opts.project) {
+      console.error(`❌ CRITICAL CREDENTIAL MISMATCH: Service account credentials are for project "${sa.project_id}", but target project is "${opts.project}". Aborting.`);
+      process.exit(1);
+    }
     adminConfig.credential = fbAdmin.credential.cert(sa);
-  } else if (!process.env.FIRESTORE_EMULATOR_HOST) {
+  } else if (mode === 'staging') {
     adminConfig.credential = fbAdmin.credential.applicationDefault();
   }
 
@@ -232,29 +263,67 @@ async function main() {
     process.exit(0);
   }
 
-  // Obtain an admin operator token or call internal migration logic
-  // If running against emulator or functions HTTP:
-  const emulatorHost = process.env.FIREBASE_FUNCTIONS_EMULATOR_HOST || '127.0.0.1:5001';
-  const url = `http://${emulatorHost}/${opts.project}/europe-west1/migrateAccount`;
-
+  // Resolve target endpoint & authenticate legitimate operator
+  let url;
   let adminToken;
-  try {
-    // Generate custom token for an operator identity and swap for ID token, or use admin auth
-    const customToken = await auth.createCustomToken('staging-migration-operator', { admin: true });
-    // In emulator, exchange custom token for idToken
+
+  if (mode === 'emulator') {
+    const emulatorHost = process.env.FIREBASE_FUNCTIONS_EMULATOR_HOST || '127.0.0.1:5001';
     const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST || '127.0.0.1:9099';
-    const tokRes = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: customToken, returnSecureToken: true }),
-    });
-    if (tokRes.ok) {
-      const tokData = await tokRes.json();
-      adminToken = tokData.idToken;
+    url = `http://${emulatorHost}/${opts.project}/europe-west1/migrateAccount`;
+
+    try {
+      const customToken = await auth.createCustomToken('staging-migration-operator', { admin: true });
+      const tokRes = await fetch(`http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=fake`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+      });
+      if (tokRes.ok) {
+        const tokData = await tokRes.json();
+        adminToken = tokData.idToken;
+      } else {
+        throw new Error(`Emulator token exchange returned HTTP ${tokRes.status}`);
+      }
+    } catch (err) {
+      console.error('❌ Failed to acquire operator ID token from Auth emulator:', err.message);
+      process.exit(1);
     }
-  } catch {
-    // Non-emulator fallback if using ADC
-    adminToken = 'admin-service-account';
+  } else {
+    // Mode === 'staging'
+    url = `https://europe-west1-${opts.project}.cloudfunctions.net/migrateAccount`;
+
+    if (opts.operatorToken) {
+      adminToken = opts.operatorToken;
+    } else if (opts.webApiKey) {
+      try {
+        const customToken = await auth.createCustomToken('staging-migration-operator', { admin: true });
+        const tokRes = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${opts.webApiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+        });
+        if (tokRes.ok) {
+          const tokData = await tokRes.json();
+          adminToken = tokData.idToken;
+        } else {
+          const errData = await tokRes.json().catch(() => ({}));
+          throw new Error(`Identity Toolkit token exchange failed: ${JSON.stringify(errData)}`);
+        }
+      } catch (err) {
+        console.error('❌ Failed to exchange operator custom token for ID token:', err.message);
+        process.exit(1);
+      }
+    } else {
+      console.error('❌ ERROR: Staging migration requires verified operator credentials.');
+      console.error('Provide --operator-token <ID_TOKEN> or provide --web-api-key <KEY> with service account.');
+      process.exit(1);
+    }
+  }
+
+  if (!adminToken || typeof adminToken !== 'string') {
+    console.error('❌ CRITICAL ERROR: Legitimate Firebase Authentication ID token was not obtained.');
+    process.exit(1);
   }
 
   console.log(`Invoking migrateAccount callable (dryRun: ${opts.dryRun})...`);
@@ -297,7 +366,7 @@ async function main() {
   if (opts.dryRun) {
     if (result.canCutOver) {
       console.log('✅ DRY RUN PASSED: Account is 100% clean and ready for live migration.');
-      console.log(`To execute live migration, run:\n  node scripts/migrate-staging.mjs --project ${opts.project} --target-uid ${opts.targetUid} --live`);
+      console.log(`To execute live migration, run:\n  node scripts/migrate-staging.mjs --mode ${mode} --project ${opts.project} --target-uid ${opts.targetUid} --live`);
     } else {
       console.log('⚠️ DRY RUN COMPLETED: Account has unresolved dates. Cannot cut over automatically.');
     }
