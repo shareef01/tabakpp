@@ -152,7 +152,8 @@ data class UserProfile(
     val migratingLegacyVersion: Int? = null,
     val migratingLegacyUnitPrice: Double? = null,
     @Serializable(with = TimestampOrLongSerializer::class) val createdAt: Timestamp? = null,
-    @Serializable(with = TimestampOrLongSerializer::class) val updatedAt: Timestamp? = null
+    @Serializable(with = TimestampOrLongSerializer::class) val updatedAt: Timestamp? = null,
+    val timeZone: String? = null
 )
 
 /** `users/{uid}/meta/profile` (item 12) — split from [UserProfile] so a large, rarely-changing avatar never rides along on a high-frequency write. */

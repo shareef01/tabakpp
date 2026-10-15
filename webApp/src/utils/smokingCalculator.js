@@ -366,7 +366,36 @@ export const SmokingCalculator = {
    * hour, matching mobile's getTrackingDate + TimeZone.currentSystemDefault().
    * A 2 AM session belongs to yesterday's tracking day (night-owl mode).
    */
-  getTrackingDate: (now = new Date(), dayStartHour = DAY_START_HOUR_DEFAULT) => {
+  getTrackingDate: (now = new Date(), dayStartHour = DAY_START_HOUR_DEFAULT, timeZone = null) => {
+    if (timeZone) {
+      try {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone,
+          hourCycle: 'h23',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+        });
+        const parts = formatter.formatToParts(now);
+        const map = {};
+        for (const { type, value } of parts) map[type] = value;
+        let year = parseInt(map.year, 10);
+        let month = parseInt(map.month, 10);
+        let day = parseInt(map.day, 10);
+        const hour = parseInt(map.hour, 10) % 24;
+        if (hour < dayStartHour) {
+          const d = new Date(Date.UTC(year, month - 1, day));
+          d.setUTCDate(d.getUTCDate() - 1);
+          year = d.getUTCFullYear();
+          month = d.getUTCMonth() + 1;
+          day = d.getUTCDate();
+        }
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      } catch {
+        // Fall back to local clock if timezone is invalid
+      }
+    }
     const d = new Date(now);
     if (d.getHours() < dayStartHour) d.setDate(d.getDate() - 1);
     const y = d.getFullYear();

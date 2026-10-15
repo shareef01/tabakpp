@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   isCalendarDate, requireTrackingDate, requireId, sanitizeCounts, sanitizeHistoricalCounts, resolveDayStartHour,
   requireRecentLogin, resolveCurrentTrackingDate,
+  isValidIanaTimeZone, getZonedDateTimeParts, computeTrackingDateForZone, resolveUserTrackingDate,
 } from './validation.js';
 
 const code = (fn) => {
@@ -100,3 +101,143 @@ test('resolveCurrentTrackingDate applies a midnight (0) day start', () => {
   // UTC fallback at 23:30 with a midnight start is still the 11th.
   assert.equal(resolveCurrentTrackingDate(null, 0, now), '2026-10-11');
 });
+
+test('isValidIanaTimeZone correctly identifies standard IANA zones and rejects invalid ones', () => {
+  assert.equal(isValidIanaTimeZone('Europe/Berlin'), true);
+  assert.equal(isValidIanaTimeZone('UTC'), true);
+  assert.equal(isValidIanaTimeZone('America/New_York'), true);
+  assert.equal(isValidIanaTimeZone('Asia/Tokyo'), true);
+  assert.equal(isValidIanaTimeZone('Pacific/Kiritimati'), true);
+  assert.equal(isValidIanaTimeZone('Pacific/Pago_Pago'), true);
+  assert.equal(isValidIanaTimeZone('Invalid/Zone'), false);
+  assert.equal(isValidIanaTimeZone(''), false);
+  assert.equal(isValidIanaTimeZone(null), false);
+  assert.equal(isValidIanaTimeZone(undefined), false);
+  assert.equal(isValidIanaTimeZone(123), false);
+});
+
+test('Timezone correctness reproduction: Europe/Berlin at 2026-10-15T05:30:00Z with dayStartHour=6', () => {
+  const now = new Date('2026-10-15T05:30:00Z');
+  // In UTC server clock (05:30 < 06:00), the old UTC logic produced 2026-10-14 (yesterday):
+  assert.equal(resolveCurrentTrackingDate(undefined, 6, now), '2026-10-14');
+
+  // In Europe/Berlin (CEST, UTC+2), local time is 07:30 (07:30 >= 06:00):
+  // The correct current tracking date is 2026-10-15:
+  const berlinTrackingDate = computeTrackingDateForZone(now, 'Europe/Berlin', 6);
+  assert.equal(berlinTrackingDate, '2026-10-15');
+
+  // Earlier the same morning at 03:30Z (05:30 local, 05:30 < 06:00):
+  const earlierNow = new Date('2026-10-15T03:30:00Z');
+  assert.equal(computeTrackingDateForZone(earlierNow, 'Europe/Berlin', 6), '2026-10-14');
+});
+
+test('DST transition in Europe/Berlin (2026-10-25 autumn fall-back from UTC+2 to UTC+1)', () => {
+  // Before fall-back: 2026-10-25T00:30:00Z is 02:30:00 CEST (UTC+2) -> before 06:00 day start -> 2026-10-24
+  const preSwitch = new Date('2026-10-25T00:30:00Z');
+  assert.equal(computeTrackingDateForZone(preSwitch, 'Europe/Berlin', 6), '2026-10-24');
+
+  // After fall-back: 2026-10-25T06:00:00Z is 07:00:00 CET (UTC+1) -> after 06:00 day start -> 2026-10-25
+  const postSwitch = new Date('2026-10-25T06:00:00Z');
+  assert.equal(computeTrackingDateForZone(postSwitch, 'Europe/Berlin', 6), '2026-10-25');
+});
+
+test('UTC boundaries and multi-timezone tracking date derivations', () => {
+  const instant = new Date('2026-10-15T10:00:00Z');
+
+  // Pacific/Kiritimati (UTC+14): local time is 2026-10-16 00:00:00
+  // With dayStartHour = 0 (midnight):
+  assert.equal(computeTrackingDateForZone(instant, 'Pacific/Kiritimati', 0), '2026-10-16');
+  // With dayStartHour = 6 (00:00 < 06:00):
+  assert.equal(computeTrackingDateForZone(instant, 'Pacific/Kiritimati', 6), '2026-10-15');
+
+  // Pacific/Pago_Pago (UTC-11): at 2026-10-15T05:00:00Z, local time is 2026-10-14 18:00:00
+  const pacificInstant = new Date('2026-10-15T05:00:00Z');
+  assert.equal(computeTrackingDateForZone(pacificInstant, 'Pacific/Pago_Pago', 6), '2026-10-14');
+
+  // America/New_York (EDT, UTC-4):
+  // At 2026-10-15T03:30:00Z, local time is 2026-10-14 23:30:00 (23 >= 6) -> 2026-10-14
+  assert.equal(computeTrackingDateForZone(new Date('2026-10-15T03:30:00Z'), 'America/New_York', 6), '2026-10-14');
+  // At 2026-10-15T11:00:00Z, local time is 2026-10-15 07:00:00 (7 >= 6) -> 2026-10-15
+  assert.equal(computeTrackingDateForZone(new Date('2026-10-15T11:00:00Z'), 'America/New_York', 6), '2026-10-15');
+
+  // Asia/Tokyo (JST, UTC+9):
+  // At 2026-10-15T00:30:00Z, local time is 2026-10-15 09:30:00 (9 >= 6) -> 2026-10-15
+  assert.equal(computeTrackingDateForZone(new Date('2026-10-15T00:30:00Z'), 'Asia/Tokyo', 6), '2026-10-15');
+});
+
+test('Day-start boundary rules (midnight 0 vs noon 12)', () => {
+  // 11:59 local vs 12:01 local in UTC with dayStartHour=12
+  const beforeNoon = new Date('2026-10-15T11:59:00Z');
+  const afterNoon = new Date('2026-10-15T12:01:00Z');
+  assert.equal(computeTrackingDateForZone(beforeNoon, 'UTC', 12), '2026-10-14');
+  assert.equal(computeTrackingDateForZone(afterNoon, 'UTC', 12), '2026-10-15');
+
+  // Midnight (dayStartHour=0)
+  const justBeforeMidnight = new Date('2026-10-15T23:59:59Z');
+  const atMidnight = new Date('2026-10-16T00:00:00Z');
+  assert.equal(computeTrackingDateForZone(justBeforeMidnight, 'UTC', 0), '2026-10-15');
+  assert.equal(computeTrackingDateForZone(atMidnight, 'UTC', 0), '2026-10-16');
+});
+
+test('resolveUserTrackingDate policy handles stored, requested, claimed, and missing timezones safely', () => {
+  const now = new Date('2026-10-15T05:30:00Z');
+
+  // 1. Valid stored profile timezone takes precedence
+  const r1 = resolveUserTrackingDate({
+    now,
+    profileTimeZone: 'Europe/Berlin',
+    requestTimeZone: 'America/New_York',
+    dayStartHour: 6,
+  });
+  assert.equal(r1.trackingDate, '2026-10-15');
+  assert.equal(r1.timeZone, 'Europe/Berlin');
+  assert.equal(r1.shouldPersist, false);
+
+  // 2. Profile timezone missing, but request supplies valid IANA zone -> adopt and persist
+  const r2 = resolveUserTrackingDate({
+    now,
+    profileTimeZone: null,
+    requestTimeZone: 'Europe/Berlin',
+    dayStartHour: 6,
+  });
+  assert.equal(r2.trackingDate, '2026-10-15');
+  assert.equal(r2.timeZone, 'Europe/Berlin');
+  assert.equal(r2.shouldPersist, true);
+
+  // 3. Both profile and request timezones missing, but client sends valid claimedDate
+  const r3 = resolveUserTrackingDate({
+    now,
+    profileTimeZone: null,
+    requestTimeZone: null,
+    claimedDate: '2026-10-15',
+    dayStartHour: 6,
+  });
+  assert.equal(r3.trackingDate, '2026-10-15');
+  assert.equal(r3.timeZone, null);
+  assert.equal(r3.shouldPersist, false);
+
+  // 4. Implausible claimedDate is strictly rejected
+  assert.throws(
+    () => resolveUserTrackingDate({
+      now,
+      profileTimeZone: null,
+      requestTimeZone: null,
+      claimedDate: '2026-10-25',
+      dayStartHour: 6,
+    }),
+    /IMPLAUSIBLE_CURRENT_TRACKING_DATE/
+  );
+
+  // 5. Everything missing falls back safely to UTC
+  const r5 = resolveUserTrackingDate({
+    now,
+    profileTimeZone: null,
+    requestTimeZone: null,
+    claimedDate: null,
+    dayStartHour: 6,
+  });
+  assert.equal(r5.trackingDate, '2026-10-14'); // UTC 05:30 < 06:00
+  assert.equal(r5.timeZone, 'UTC');
+  assert.equal(r5.shouldPersist, false);
+});
+

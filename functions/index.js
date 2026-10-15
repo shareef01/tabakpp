@@ -19,8 +19,8 @@ import {
   calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, migrationPlan, roundMoney,
 } from './financial.js';
 import {
-  MAX_COUNT, MAX_DAY_TRACKERS, requireId, requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate, sanitizeCounts,
-  sanitizeHistoricalCounts,
+  MAX_COUNT, MAX_DAY_TRACKERS, requireId, requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate,
+  resolveUserTrackingDate, isValidIanaTimeZone, sanitizeCounts, sanitizeHistoricalCounts,
 } from './validation.js';
 
 initializeApp();
@@ -146,7 +146,32 @@ export const executeFinancialOperation = onCall(async (request) => {
       return { applied: false, result: receiptSnap.get('result') || null };
     }
 
-    const date = requireTrackingDate(data.date);
+    // Resolve user's tracking date and timezone authoritatively from server time + account/request timezone
+    const { trackingDate: currentTrackingDate, timeZone: resolvedZone, shouldPersist } = resolveUserTrackingDate({
+      now: new Date(),
+      profileTimeZone: profileSnap.get('timeZone'),
+      requestTimeZone: data.timeZone,
+      claimedDate: data.currentTrackingDate,
+      dayStartHour: profileSnap.get('dayStartHour'),
+    });
+
+
+    let date;
+    if (type === 'TRACKER_DELETE') {
+      // TRACKER_DELETE deletes the config and drops counts from the CURRENT open tracking day.
+      // Callers cannot supply an old historical date to mutate past records or leave today dangling.
+      if (data.date) {
+        date = requireTrackingDate(data.date);
+        if (date !== currentTrackingDate) {
+          throw new HttpsError('failed-precondition', 'TRACKER_DELETE_MUST_TARGET_CURRENT_DATE');
+        }
+      } else {
+        date = currentTrackingDate;
+      }
+    } else {
+      date = requireTrackingDate(data.date);
+    }
+
     const { daySnap, day, logs, ledger, configs, ledgerSnap } = await readDateState(t, userRef, date);
     const ledgerRef = userRef.collection('dailyFinancials').doc(date);
     const folded = ledger?.foldedIntoLifetime === true;
@@ -158,13 +183,6 @@ export const executeFinancialOperation = onCall(async (request) => {
     const curAgg = profileSnap.get('lifetimeAggregates') || ZERO;
     const ledgerWithAgg = ledger ? { ...ledger, __profileAgg: curAgg } : null;
 
-    // Validate client-claimed currentTrackingDate if supplied (bounds-checked for real timezones).
-    resolveCurrentTrackingDate(data.currentTrackingDate, profileSnap.get('dayStartHour'));
-
-    // Item 4: Derive whether this date is active current tracking date exclusively from
-    // trusted server state (server clock + profile dayStartHour), preventing client
-    // manipulation of current vs historical pricing while allowing midnight-crossing retries.
-    const currentTrackingDate = resolveCurrentTrackingDate(undefined, profileSnap.get('dayStartHour'));
     const isCurrent = (date === currentTrackingDate);
 
     // The day state AFTER the staged source mutation. Eligibility and the
@@ -387,7 +405,16 @@ export const executeFinancialOperation = onCall(async (request) => {
     }
 
     // --- Canonical credit (server-computed, authoritative) -----------------
-    const fin = calculateDailyFinancials(effectiveDay, effectiveLogs.filter((l) => !(effectiveDay && isArchiveLog(l))), configs, defaultUnitPrice, { currentTrackingDate, ledgerSnapshots: ledger?.snapshots || {} });
+    const effectiveConfigs = (type === 'TRACKER_DELETE')
+      ? configs.filter((c) => c.id !== data.trackerId)
+      : configs;
+    const fin = calculateDailyFinancials(
+      effectiveDay,
+      effectiveLogs.filter((l) => !(effectiveDay && isArchiveLog(l))),
+      effectiveConfigs,
+      defaultUnitPrice,
+      { currentTrackingDate, ledgerSnapshots: ledger?.snapshots || {} }
+    );
     const ledgerExistsAfter = ledgerSnap.exists;
 
     if (type === 'DAY_CLOSE' || type === 'ZERO_COUNT_DAY_CLOSE') {
@@ -454,6 +481,10 @@ export const executeFinancialOperation = onCall(async (request) => {
       }
     } else {
       writeLedgerAndLifetime(t, userRef, ledgerRef, ledgerExistsAfter, ledgerWithAgg, fin, folded);
+    }
+
+    if (shouldPersist && resolvedZone) {
+      t.set(userRef, { timeZone: resolvedZone }, { merge: true });
     }
 
     const result = { canonicalCredit: fin.canonicalCredit, counts: fin.counts };
