@@ -647,12 +647,12 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     );
   }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
 
-  const restoreLog = useCallback(async (log) => {
+  const restoreLog = useCallback(async (log, allowUnresolved = false) => {
     if (!user) return;
     requireOnline('restoreLog');
     const opId = nextOpId();
     return runMutation(
-      () => RegistryService.restoreLog(user.uid, log, effectiveUnitPrice, opId),
+      () => RegistryService.restoreLog(user.uid, log, effectiveUnitPrice, opId, allowUnresolved || log?.allowUnresolved === true),
       'Could not restore entry.'
     );
   }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);

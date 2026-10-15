@@ -268,49 +268,128 @@ export const executeFinancialOperation = onCall(async (request) => {
     } else if (type === 'MANUAL_RESTORE') {
       const logId = requireId(data.logId, 'logId required');
       if (!logs.some((l) => l.id === logId)) {
-        // Item 2: Trusted snapshot provenance.
-        // Validate server-controlled immutable restoration evidence.
+        // Item 2 & Phase 3: Trusted snapshot provenance & restoration backward compatibility.
+        // Validate server-controlled immutable restoration evidence when available.
         const evidenceRef = userRef.collection('trustedDeletedLogs').doc(logId);
         const evidenceSnap = await t.get(evidenceRef);
-        if (!evidenceSnap.exists) {
-          throw new HttpsError('not-found', 'NO_RESTORATION_EVIDENCE');
-        }
-        const serverEvidence = evidenceSnap.data();
-        if (serverEvidence.logDate !== date) {
-          throw new HttpsError('failed-precondition', 'RESTORATION_DATE_MISMATCH');
-        }
-        // Verify client-submitted counts (if supplied) match server evidence; reject tampering
-        if (data.counts && typeof data.counts === 'object') {
+        let restoredLogData;
+
+        if (evidenceSnap.exists) {
+          // Scenario A: Restorable with verified economic evidence.
+          const serverEvidence = evidenceSnap.data();
+          if (serverEvidence.logDate !== date) {
+            throw new HttpsError('failed-precondition', 'RESTORATION_DATE_MISMATCH');
+          }
+          // Verify client-submitted counts (if supplied) match server evidence; reject tampering
+          if (data.counts && typeof data.counts === 'object') {
+            const clientCounts = sanitizeCounts(data.counts);
+            const evidenceCounts = serverEvidence.counts || {};
+            const sameCountKeys = Object.keys(clientCounts).length === Object.keys(evidenceCounts).length &&
+              Object.keys(clientCounts).every((k) => clientCounts[k] === evidenceCounts[k]);
+            if (!sameCountKeys) {
+              throw new HttpsError('invalid-argument', 'RESTORATION_TAMPERED');
+            }
+          }
+          const counts = serverEvidence.counts || {};
+          // Provenance guarantee: economic values come strictly from serverEvidence, NEVER payload data
+          const logSnapshots = serverEvidence.trackerSnapshots || {};
+          const own = serverEvidence.aggregateCredit || (isCurrent ? computeDayCredit(counts, logSnapshots, defaultUnitPrice) : { wasted: 0, saved: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 });
+
+          restoredLogData = {
+            id: logId,
+            logDate: date,
+            counts,
+            trackerSnapshots: logSnapshots,
+            isManual: true,
+            aggregateCredit: serverEvidence.aggregateCredit || (own ? {
+              saved: 0,
+              wasted: own.wasted,
+              smokingUnits: own.smokingUnits,
+              baselineSaved: 0,
+            } : null),
+            createdAt: serverEvidence.createdAt || new Date(),
+            updatedAt: new Date(),
+            restorationMode: 'VERIFIED',
+          };
+          t.delete(evidenceRef);
+        } else {
+          // Legacy deleted entry without server tombstone.
+          // Explicit compatibility policy:
+          // If allowUnresolved is not explicitly enabled, fail closed.
+          if (!data.allowUnresolved) {
+            throw new HttpsError('not-found', 'NO_RESTORATION_EVIDENCE');
+          }
+
+          // Scenario B: Restorable with unresolved economics.
+          // 1. Must supply valid counts. Empty / missing counts cannot be safely restored.
+          if (!data.counts || typeof data.counts !== 'object') {
+            throw new HttpsError('invalid-argument', 'INVALID_RESTORATION_COUNTS');
+          }
           const clientCounts = sanitizeCounts(data.counts);
-          const evidenceCounts = serverEvidence.counts || {};
-          const sameCountKeys = Object.keys(clientCounts).length === Object.keys(evidenceCounts).length &&
-            Object.keys(clientCounts).every((k) => clientCounts[k] === evidenceCounts[k]);
-          if (!sameCountKeys) {
-            throw new HttpsError('invalid-argument', 'RESTORATION_TAMPERED');
+          if (Object.keys(clientCounts).length === 0) {
+            throw new HttpsError('invalid-argument', 'INVALID_RESTORATION_COUNTS');
+          }
+
+          // 2. Reject untrusted financial overrides (prices, targets, saved amounts, snapshots).
+          // 3. For CURRENT date (today), reconstruct trackerSnapshots from server's live configs.
+          //    For HISTORICAL date, do NOT invent historical prices or targets — mark economics UNRESOLVED.
+          if (isCurrent) {
+            const currentSnapshots = {};
+            Object.keys(clientCounts).forEach((id) => {
+              const cfg = configs.find((c) => c.id === id);
+              if (cfg) {
+                currentSnapshots[id] = {
+                  target: cfg.target,
+                  baseline: cfg.baseline,
+                  unitPrice: cfg.unitPrice,
+                  type: cfg.type,
+                  isFinanciallyTracked: cfg.isFinanciallyTracked,
+                };
+              }
+            });
+            const own = computeDayCredit(clientCounts, currentSnapshots, defaultUnitPrice);
+            restoredLogData = {
+              id: logId,
+              logDate: date,
+              counts: clientCounts,
+              trackerSnapshots: currentSnapshots,
+              isManual: true,
+              aggregateCredit: {
+                saved: 0,
+                wasted: own.wasted,
+                smokingUnits: own.smokingUnits,
+                baselineSaved: 0,
+              },
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              restorationMode: 'LEGACY_LIVE_CONFIG',
+            };
+          } else {
+            // Historical date without server tombstone:
+            // Restorable with UNRESOLVED economics.
+            // Preserves consumption counts and smokingUnits, but strictly avoids inventing savings/spent.
+            const own = computeDayCredit(clientCounts, {}, defaultUnitPrice);
+            restoredLogData = {
+              id: logId,
+              logDate: date,
+              counts: clientCounts,
+              trackerSnapshots: {},
+              isManual: true,
+              unresolvedEconomics: true,
+              aggregateCredit: {
+                saved: 0,
+                wasted: 0,
+                smokingUnits: own.smokingUnits,
+                baselineSaved: 0,
+              },
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              restorationMode: 'LEGACY_UNRESOLVED',
+            };
           }
         }
-        const counts = serverEvidence.counts || {};
-        // Provenance guarantee: economic values come strictly from serverEvidence, NEVER payload data
-        const logSnapshots = serverEvidence.trackerSnapshots || {};
-        const own = serverEvidence.aggregateCredit || (isCurrent ? computeDayCredit(counts, logSnapshots, defaultUnitPrice) : { wasted: 0, saved: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 });
 
-        const restoredLogData = {
-          id: logId,
-          logDate: date,
-          counts,
-          trackerSnapshots: logSnapshots,
-          isManual: true,
-          aggregateCredit: serverEvidence.aggregateCredit || (own ? {
-            saved: 0,
-            wasted: own.wasted,
-            smokingUnits: own.smokingUnits,
-            baselineSaved: 0,
-          } : null),
-          createdAt: serverEvidence.createdAt || new Date(),
-          updatedAt: new Date(),
-        };
         t.set(userRef.collection('logs').doc(logId), restoredLogData);
-        t.delete(evidenceRef);
         effectiveLogs = [...logs, restoredLogData];
       }
     } else if (type === 'HISTORICAL_DAY_UPDATE') {

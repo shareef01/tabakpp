@@ -247,6 +247,21 @@ export const HistoryScreen = React.memo(({
       });
     } catch (err) {
       console.error(err);
+      if (err?.message?.includes('NO_RESTORATION_EVIDENCE') || err?.code === 'not-found') {
+        try {
+          if (onRestoreLog) await onRestoreLog({ ...log, allowUnresolved: true });
+          else await RegistryService.restoreLog(userId, log, unitPrice, null, true);
+          setHiddenLogIds((ids) => {
+            const next = new Set(ids);
+            next.delete(log.id);
+            return next;
+          });
+          setActionError('Entry restored with unresolved economics (no server tombstone).');
+          return;
+        } catch (innerErr) {
+          console.error(innerErr);
+        }
+      }
       setActionError(mapFirestoreError(err, 'Could not restore entry.'));
       setUndo({ log, key: key || `${log.id}-retry` });
       throw err;
