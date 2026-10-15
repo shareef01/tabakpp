@@ -215,8 +215,9 @@ const AppContent = () => {
     configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings,
     avatar, registryError, clearRegistryError, configsHasPendingWrites,
     increment, decrement, endDay, reorder, addProtocol, updateProtocol, deleteProtocol,
-    createManualEntry, deleteLog, restoreLog, updateHistoricalLog, updateHistoricalDay, updateAvatar
-  } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, avatar: null, configsHasPendingWrites: false };
+    createManualEntry, deleteLog, restoreLog, updateHistoricalLog, updateHistoricalDay, updateAvatar,
+    canonical, ledgers
+  } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, avatar: null, configsHasPendingWrites: false, canonical: null, ledgers: [] };
 
   // Derive onboarding state from real product state (item 27 — no schema change).
   const onboardingState = SmokingCalculator.getFirstWeekGuidance(
@@ -444,6 +445,8 @@ const AppContent = () => {
                         onDeleteLog={deleteLog}
                         onRestoreLog={restoreLog}
                         historyIsTruncated={logs.length >= 1200}
+                        canonical={canonical}
+                        ledgers={ledgers}
                       />}
                     </motion.div>
                   )}

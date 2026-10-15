@@ -58,9 +58,8 @@ const financialWritesLocked = async (uid) => {
   return mode === 'MIGRATING' || mode === 'OPTION_B';
 };
 
-/** Stable FNV-1a hash of a canonical JSON form — deterministic operation ids
- *  for the same logical edit (idempotent retries), distinct across edits. */
-const stableHash = (value) => {
+/** Stable FNV-1a hash of a canonical JSON form. */
+const _stableHash = (value) => {
   const s = JSON.stringify(value);
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -68,6 +67,17 @@ const stableHash = (value) => {
     h = Math.imul(h, 0x01000193);
   }
   return (h >>> 0).toString(16);
+};
+
+/**
+ * Generate a unique operation ID per action (FIX 4).
+ * Callers reuse an explicit operationId ONLY when retrying that exact action.
+ */
+export const generateOperationId = (prefix = 'op') => {
+  if (typeof crypto !== 'undefined' && crypto?.randomUUID) {
+    return `${prefix}_${crypto.randomUUID()}`;
+  }
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 };
 
 /** Doc id always wins over any payload `id` field (Android parity). */
@@ -646,10 +656,11 @@ export const RegistryService = {
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
       return trustedExecute(optionB, delta >= 0 ? 'COUNTER_INCREMENT' : 'COUNTER_DECREMENT', {
-        operationId: operationId || `ac_${counterId}_${trackingDate}_${Date.now()}`,
+        operationId: operationId || generateOperationId(`ac_${counterId}_${trackingDate}`),
         date: trackingDate, trackerId: counterId, delta, defaultUnitPrice,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('COUNTER_ADJUST_UNSUPPORTED');
     const configRef = doc(db, 'users', uid, 'configs', counterId);
     const dayRef = doc(db, 'users', uid, 'days', trackingDate);
 
@@ -809,10 +820,11 @@ export const RegistryService = {
     if (optionB) {
       const normalized = normalizeCounts(counts);
       return trustedExecute(optionB, 'HISTORICAL_DAY_UPDATE', {
-        operationId: operationId || `hist_${date}_${stableHash(normalized)}`,
+        operationId: operationId || generateOperationId(`hist_${date}`),
         date, counts: normalized,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('HISTORICAL_DAY_UPDATE_UNSUPPORTED');
     const userRef = doc(db, 'users', uid);
     const dayRef = doc(db, 'users', uid, 'days', date);
     const normalized = normalizeCounts(counts);
@@ -942,9 +954,10 @@ export const RegistryService = {
       const snap = await getDoc(logRef);
       if (!snap.exists()) throw new Error("LOG_NOT_FOUND");
       return trustedExecute(optionB, 'MANUAL_UPDATE', {
-        operationId: operationId || `upd_${logId}`, date: snap.data().logDate, logId, counts: normalized, defaultUnitPrice: unitPrice,
+        operationId: operationId || generateOperationId(`upd_${logId}`), date: snap.data().logDate, logId, counts: normalized, defaultUnitPrice: unitPrice,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('MANUAL_UPDATE_UNSUPPORTED');
 
     const configIds = await listConfigIds(uid);
 
@@ -991,9 +1004,10 @@ export const RegistryService = {
       const snap = await getDoc(logRef);
       if (!snap.exists()) return;
       return trustedExecute(optionB, 'MANUAL_DELETE', {
-        operationId: operationId || `del_${logId}`, date: snap.data().logDate, logId,
+        operationId: operationId || generateOperationId(`del_${logId}`), date: snap.data().logDate, logId,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('MANUAL_DELETE_UNSUPPORTED');
 
     const configIds = await listConfigIds(uid);
 
@@ -1033,9 +1047,10 @@ export const RegistryService = {
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
       return trustedExecute(optionB, 'MANUAL_RESTORE', {
-        operationId: operationId || `res_${log.id}`, date: log.logDate, logId: log.id, counts: normalizedCounts,
+        operationId: operationId || generateOperationId(`res_${log.id}`), date: log.logDate, logId: log.id, counts: normalizedCounts,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('MANUAL_RESTORE_UNSUPPORTED');
 
     const configIds = await listConfigIds(uid);
 
@@ -1096,6 +1111,7 @@ export const RegistryService = {
         operationId: operationId || logId, date, logId, counts: normalized, defaultUnitPrice: unitPrice,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('MANUAL_CREATE_UNSUPPORTED');
 
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const configIds = await listConfigIds(uid);

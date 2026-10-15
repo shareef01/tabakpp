@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SmokingCalculator — domain math ported 1:1 from the Kotlin
  * SmokingCalculator (shared/src/commonMain/kotlin/com/tabakpp/app/domain/).
  * Both clients read and write the same Firestore documents, so any change
@@ -859,9 +859,11 @@ export const SmokingCalculator = {
    * @param {number} monthsToInclude - how many complete recent months + current MTD to include
    * @returns {{ months: Array<{ month: string, label: string, units: number, trackedDays: number, avgUnitsPerTrackedDay: number, spent: number, saved: number, baselineSaved: number, hasBaseline: boolean, isCurrentMonth: boolean }>, currentMonthMtd: object }}
    */
-  aggregateMonthlyData: (logs, dayDocs = [], trackingDay, activeCounts = {}, defaultUnitPrice = 0.5, monthsToInclude = 6) => {
+  aggregateMonthlyData: (logs, dayDocs = [], trackingDay, activeCounts = {}, defaultUnitPrice = 0.5, monthsToInclude = 6, ledgers = []) => {
     const merged = projectLoggedCounts(logs, dayDocs, trackingDay, activeCounts);
     const economics = {};
+    const ledgersByDate = Object.fromEntries((ledgers || []).map((l) => [l.date, l]));
+    const hasAnyLedgers = (ledgers || []).length > 0;
     const add = (date, credit, unknown = false, baseline = false) => {
       const item = economics[date] ||= { spent: 0, saved: 0, baselineSaved: 0, hasBaseline: false, unknownEconomics: false };
       item.spent += credit?.wasted ?? 0;
@@ -870,10 +872,14 @@ export const SmokingCalculator = {
       item.hasBaseline ||= baseline || (credit?.baselineSaved ?? 0) !== 0;
       item.unknownEconomics ||= unknown;
     };
-    (logs || []).forEach((log) => add(log.logDate, log.aggregateCredit,
-      !log.aggregateCredit || log.economicStatus === 'UNKNOWN',
-      Object.values(log.trackerSnapshots || {}).some((snap) => snap.baseline != null)));
+    (logs || []).forEach((log) => {
+      if (ledgersByDate[log.logDate]) return;
+      add(log.logDate, log.aggregateCredit,
+        !log.aggregateCredit || log.economicStatus === 'UNKNOWN',
+        Object.values(log.trackerSnapshots || {}).some((snap) => snap.baseline != null));
+    });
     (dayDocs || []).forEach((day) => {
+      if (ledgersByDate[day.date]) return;
       const snapshots = day.trackerSnapshots || {};
       const knownSnapshots = Object.keys(snapshots).length > 0 && Object.values(snapshots)
         .every((snap) => snap.isFinanciallyTracked === false || snap.unitPrice != null);
@@ -883,6 +889,23 @@ export const SmokingCalculator = {
         : day.aggregateCredit || (knownSnapshots ? SmokingCalculator.computeDayCredit(counts, snapshots, defaultUnitPrice) : null);
       add(day.date, credit, !credit, Object.values(snapshots).some((snap) => snap.baseline != null));
     });
+    Object.entries(ledgersByDate).forEach(([date, l]) => {
+      if (!l || !l.canonicalCredit) {
+        add(date, null, true, false);
+        return;
+      }
+      const c = l.canonicalCredit;
+      const unres = l.unresolvedComponents || {};
+      const isUnresolved = !!l.ambiguous || Object.values(unres).some(Boolean);
+      add(date, c, isUnresolved, (c.baselineSaved ?? 0) !== 0);
+    });
+    if (hasAnyLedgers) {
+      Object.keys(merged).forEach((date) => {
+        if (!ledgersByDate[date]) {
+          economics[date] = { spent: 0, saved: 0, baselineSaved: 0, hasBaseline: false, unknownEconomics: true };
+        }
+      });
+    }
     const dayRecords = {};
     Object.entries(merged).forEach(([date, counts]) => {
       const units = Object.values(counts || {}).reduce((sum, value) => sum + Math.max(0, value || 0), 0);
