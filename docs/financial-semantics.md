@@ -722,3 +722,42 @@ rejection in LEGACY and MIGRATING, receipt-ignored-after-migration,
 same-operationId concurrency, deletion sweep) and
 `webApp/src/firestore.rules.test.js` (client read/create/update/delete denied
 across all modes, cross-user denial).
+
+---
+
+## 26. Full Repository Remediation & Architectural Guarantees (FIX 1 – FIX 15)
+
+The October 2026 repository remediation addresses all confirmed financial accounting defects, ledger invariants, and platform security boundaries:
+
+### 1. Count Ownership & Closure Idempotency (FIX 1)
+- **Strict Ownership**: `days/{date}.counts` represents solely consumption owned directly by the day document. Manual logs maintain ownership within their respective `logs/{id}` records.
+- **Combined Ledger Total**: `dailyFinancials/{date}.countsByTracker` reflects the authoritative combined consumption (day-owned + manual logs).
+- **Day Close Invariant**: `DAY_CLOSE` and `ZERO_COUNT_DAY_CLOSE` write `effectiveDay.counts` to `days/{date}` and combined counts to `dailyFinancials/{date}`. Closing a day never copies combined totals back into `days/{date}.counts`. Reopening, editing, or reclosing is idempotent and avoids count duplication (e.g., 3 day + 2 manual stays 5, never 7).
+
+### 2. Multi-Tracker Economics & Price Provenance (FIX 2)
+- **Per-Tracker Snapshots**: `MANUAL_CREATE`, `MANUAL_UPDATE`, and `MANUAL_RESTORE` stamp immutable per-tracker economic snapshots (`trackerSnapshots`) directly onto log documents.
+- **Historical Derivation Guard**: `deriveSnapshotFromLog` retrieves per-tracker snapshots directly. For legacy logs without snapshots, unit price derivation is permitted only when a single active tracker exists in the log. Multi-tracker legacy logs without snapshots return `null` (unresolved) rather than dividing aggregate spend across counts, preventing the multi-tracker spend multiplication defect (€8 -> €16).
+
+### 3. State Matching & Atomic Mutations (FIX 3 & FIX 5)
+- **Proposed-State Parity**: The record evaluated by `calculateDailyFinancials` matches the exact document committed to Firestore within the Admin transaction.
+- **Restoration Invariant**: `MANUAL_RESTORE` restores logs using preserved historical snapshots rather than revaluing against live tracker settings.
+
+### 4. Per-Action Idempotency (FIX 4)
+- **Action-Unique IDs**: Replaced deterministic payload hash generation (`hist_${date}_${stableHash(normalized)}`) with action-unique operation IDs (`generateOperationId`).
+- **Retry Safety**: Callers supply the exact `operationId` only when retrying an unconfirmed action. Distinct actions (e.g., 2 → 3 → 2 counts) receive distinct operation IDs, preventing legitimate sequence updates from being dropped as duplicates.
+- **Conflict Rejection**: In `executeFinancialOperation`, matching operation IDs with differing payload fingerprints throw `already-exists: OPERATION_CONFLICT`.
+
+### 5. Four-Metric Reconciliation & Category D Materialization (FIX 6 & FIX 7)
+- **Four Metrics**: Migration plan and reconciliation compute deltas for all four accounting metrics: `saved`, `wasted`, `baselineSaved`, and `smokingUnits`.
+- **Category D Invariant**: Migration materializes canonical ledger documents (`dailyFinancials/{date}`) for already-folded Category D dates with `foldedIntoLifetime: true` and zero deltas. This ensures subsequent historical edits have an authoritative baseline to adjust lifetime aggregates correctly.
+
+### 6. Option B Tracker Configuration (FIX 9)
+- **Direct Configuration Writes**: `firestore.rules` permits direct client creation, updating, and reordering of trackers (`configs/{configId}`) and avatars (`meta/profile`) for Option B accounts (`accountWritable(userId) && validConfig()`), because current configs do not alter frozen historical day/log snapshots.
+- **Protected Deletion**: Direct client deletion of `configs` remains denied under `financialLocked`. Deleting a tracker in Option B routes through Cloud Function `TRACKER_DELETE` to atomically scrub the tracker from the active open day and recalculate daily financials.
+
+### 7. Client Compatibility & Fail-Closed Gates (FIX 11)
+- If an account is in `OPTION_B` or `MIGRATING` mode, all client write methods fail closed deterministically with actionable errors (`ACCOUNT_MODE_UNSUPPORTED`, `HISTORICAL_DAY_UPDATE_UNSUPPORTED`, `MANUAL_UPDATE_UNSUPPORTED`, etc.) if the client lacks trusted operation capabilities, preventing silent fallback to legacy direct transactions.
+
+### 8. Explicit Zero Handling & Monetary Precision (FIX 14 & FIX 15)
+- All price and count resolution paths treat `0` as an explicit valid value rather than falling back to default prices via truthiness operators.
+- `roundMoney` ensures half-cent upward rounding and 2-decimal monetary precision across Cloud Functions, web client, and shared contracts.

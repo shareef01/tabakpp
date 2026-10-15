@@ -89,9 +89,9 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
         <MetricColumn
           icon={Wallet}
           label="Spent Today"
-          value={m.todayAvailable === false ? '—' : SmokingCalculator.formatCurrency(m.spentToday || 0)}
-          sub={m.todayAvailable === false ? 'Unavailable' : 'Cost'}
-          warning={m.todayAvailable !== false && (m.spentToday || 0) > 0}
+          value={m.todayAvailable === false || m.todayUnresolved?.spent ? '—' : SmokingCalculator.formatCurrency(m.spentToday || 0)}
+          sub={m.todayAvailable === false ? 'Unavailable' : m.todayUnresolved?.spent ? 'Unresolved' : 'Cost'}
+          warning={m.todayAvailable !== false && !m.todayUnresolved?.spent && (m.spentToday || 0) > 0}
         />
         <MetricColumn
           icon={Zap}

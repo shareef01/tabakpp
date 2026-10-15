@@ -14,7 +14,7 @@ import fbAdmin from 'firebase-admin';
 process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
 
-const PROJECT = 'demo-takabpp-test';
+const PROJECT = process.env.GCLOUD_PROJECT || 'demo-takabpp-test';
 const FS = `http://127.0.0.1:8080/v1/projects/${PROJECT}/databases/(default)/documents`;
 const AUTH = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake';
 const CALL = `http://127.0.0.1:5001/${PROJECT}/europe-west1/executeFinancialOperation`;
@@ -45,8 +45,9 @@ const readDoc = async (path) => {
   const j = await r.json();
   return Object.fromEntries(Object.entries(j.fields || {}).map(([k, x]) => [k, fromFs(x)]));
 };
-const writeDoc = async (path, fields) => {
-  const r = await fetch(`${FS}/${path}?currentDocument.exists=false`, {
+const writeDoc = async (path, fields, upsert = false) => {
+  const query = upsert ? '' : '?currentDocument.exists=false';
+  const r = await fetch(`${FS}/${path}${query}`, {
     method: 'PATCH', headers: owner, body: JSON.stringify({ fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, toFs(v)])) }),
   });
   assert.ok(r.ok, `seed ${path} failed: ${r.status}`);
@@ -457,7 +458,183 @@ const main = async () => {
   // Only the caller's tree: another OPTION_B user's data is untouched.
   assert.ok(await readDoc(`users/${duid}/days/${TODAY}`), 'another user\'s data must survive');
 
-  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete, current-tracking-date, delete-account-data all passed');
+  // 13) Double counting & 2 → 3 → 2 sequence with distinct operationIds
+  const seqUser = await signIn();
+  const suid = seqUser.localId;
+  await seedOptionB(suid);
+  // Increment: 0 -> 1 (seqA)
+  r = await call(seqUser.idToken, { operationId: 'seqA', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
+  assert.ok(r.ok && r.body.result?.applied === true);
+  // Increment: 1 -> 2 (seqB)
+  r = await call(seqUser.idToken, { operationId: 'seqB', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
+  assert.ok(r.ok && r.body.result?.applied === true);
+  // Decrement: 2 -> 1 (seqC)
+  r = await call(seqUser.idToken, { operationId: 'seqC', type: 'COUNTER_DECREMENT', date: TODAY, trackerId: 'cig', delta: -1 });
+  assert.ok(r.ok && r.body.result?.applied === true);
+  assert.equal((await readDoc(`users/${suid}/days/${TODAY}`)).counts.cig, 1);
+  // Increment: 1 -> 2 (seqD) - distinct operationId, same target count
+  r = await call(seqUser.idToken, { operationId: 'seqD', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
+  assert.ok(r.ok && r.body.result?.applied === true);
+  assert.equal((await readDoc(`users/${suid}/days/${TODAY}`)).counts.cig, 2);
+  let seqLedger = await readDoc(`users/${suid}/dailyFinancials/${TODAY}`);
+  assert.equal(seqLedger.countsByTracker.cig, 2);
+  assert.equal(seqLedger.canonicalCredit.saved, 8); // (10 - 2) * 1 = 8
+
+  // Idempotent retry of seqD returns applied: false and does not double count
+  r = await call(seqUser.idToken, { operationId: 'seqD', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
+  assert.ok(r.ok && r.body.result?.applied === false, 'retry must be idempotent');
+  assert.equal((await readDoc(`users/${suid}/days/${TODAY}`)).counts.cig, 2, 'retry must not increment count');
+
+  // 14) P0 Concern D: MANUAL_RESTORE preserves original snapshot economic values even after active tracker price change
+  const undoUser = await signIn();
+  const uuid = undoUser.localId;
+  await seedOptionB(uuid); // cig: limit 10, price 1, baseline 15
+  const originalSnap = { cig: { target: 10, baseline: 15, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true, isPrimaryTracked: true } };
+  const originalCredit = { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 13 };
+
+  // Step 1: Seed closed day and manual log on historical date YDAY
+  await writeDoc(`users/${uuid}/days/${YDAY}`, {
+    date: YDAY, counts: {}, status: 'closed', foldedIntoLifetime: false,
+    trackerSnapshots: originalSnap,
+  });
+  await writeDoc(`users/${uuid}/logs/ULOG1`, {
+    id: 'ULOG1', logDate: YDAY, counts: { cig: 2 }, isManual: true, origin: 'MANUAL_ENTRY',
+    trackerSnapshots: originalSnap, aggregateCredit: originalCredit,
+  });
+
+  // Step 2: Delete manual log on historical date
+  r = await call(undoUser.idToken, { operationId: 'u_del', type: 'MANUAL_DELETE', date: YDAY, logId: 'ULOG1' });
+  assert.ok(r.ok, `undo delete failed: ${JSON.stringify(r.body)}`);
+  assert.equal(await readDoc(`users/${uuid}/logs/ULOG1`), null);
+
+  // Step 3: Now the active tracker price changes from €1.00 to €5.00!
+  await writeDoc(`users/${uuid}/configs/cig`, {
+    name: 'Cigarettes', limit: 10, order: 0, type: 'CIGARETTE', pricePerUnit: 5,
+    isFinanciallyTracked: true, isPrimaryTracked: true, baseline: 15,
+  }, true);
+
+  // Step 4: Restore the deleted historical log via MANUAL_RESTORE with its original snapshot { unitPrice: 1 }
+  r = await call(undoUser.idToken, {
+    operationId: 'u_res', type: 'MANUAL_RESTORE', date: YDAY, logId: 'ULOG1',
+    counts: { cig: 2 },
+    trackerSnapshots: originalSnap,
+    aggregateCredit: originalCredit,
+  });
+  assert.ok(r.ok, `undo restore failed: ${JSON.stringify(r.body)}`);
+  const restoredLog = await readDoc(`users/${uuid}/logs/ULOG1`);
+  assert.ok(restoredLog, 'restored log must exist');
+  assert.equal(restoredLog.trackerSnapshots.cig.unitPrice, 1, 'restored snapshot must preserve €1 price');
+
+  // Step 5: Verify the daily ledger credit uses the original €1 price, NOT the new €5 price!
+  const undoLed = await readDoc(`users/${uuid}/dailyFinancials/${YDAY}`);
+  assert.equal(undoLed.canonicalCredit.saved, 8, 'canonical saved must be (10-2)*1=€8, NEVER (10-2)*5=€40');
+  assert.equal(undoLed.canonicalCredit.wasted, 2, 'canonical wasted must be 2*1=€2, NEVER 2*5=€10');
+  assert.equal(undoLed.canonicalCredit.baselineSaved, 13, 'baseline saved must be (15-2)*1=€13, NEVER 13*5=€65');
+
+  // 15) P0 Concern C & Task 4: Category D migration and Four-Metric Reconciliation
+  const catDUser = await signIn();
+  const cduid = catDUser.localId;
+  await writeDoc(`users/${cduid}`, {
+    name: '', financialMode: 'LEGACY', unitPrice: 1.5,
+    lifetimeAggregates: { saved: 20, wasted: 10, smokingUnits: 10, baselineSaved: 25 },
+  });
+  await writeDoc(`users/${cduid}/configs/cig`, {
+    name: 'Cigarettes', limit: 10, order: 0, type: 'CIGARETTE', pricePerUnit: 1.5,
+    isFinanciallyTracked: true, isPrimaryTracked: true, baseline: 15,
+  });
+  // Category D day: Closed day with trackerSnapshots (unitPrice 1.5), legacy aggregateCredit
+  await writeDoc(`users/${cduid}/days/${YDAY}`, {
+    date: YDAY, counts: { cig: 5 }, status: 'closed', foldedIntoLifetime: true,
+    trackerSnapshots: { cig: { target: 10, baseline: 15, unitPrice: 1.5, type: 'CIGARETTE', isFinanciallyTracked: true } },
+    aggregateCredit: { saved: 20, wasted: 10, smokingUnits: 10, baselineSaved: 25 },
+  });
+  // Run migration with targetUid as admin
+  m = await call(adminToken, { targetUid: cduid, dryRun: false }, 'migrateAccount');
+  assert.ok(m.ok, `Category D migration failed: ${JSON.stringify(m.body)}`);
+  const catDProfile = await readDoc(`users/${cduid}`);
+  assert.equal(catDProfile.financialMode, 'OPTION_B');
+  const catDLedger = await readDoc(`users/${cduid}/dailyFinancials/${YDAY}`);
+  assert.ok(catDLedger, 'canonical ledger must be created for Category D date');
+  assert.equal(catDLedger.foldedIntoLifetime, true, 'Category D ledger must be foldedIntoLifetime: true');
+  // Recomputed canonical values:
+  // count 5, target 10, baseline 15, unitPrice 1.5
+  // wasted: 5 * 1.5 = 7.5
+  // saved: (10 - 5) * 1.5 = 7.5
+  // baselineSaved: (15 - 5) * 1.5 = 15.0
+  // smokingUnits: 5
+  assert.equal(catDLedger.canonicalCredit.saved, 7.5);
+  assert.equal(catDLedger.canonicalCredit.wasted, 7.5);
+  assert.equal(catDLedger.canonicalCredit.baselineSaved, 15.0);
+  assert.equal(catDLedger.canonicalCredit.smokingUnits, 5);
+
+  // Four-metric reconciliation: all 4 lifetime totals match their canonical contributions
+  assert.equal(catDProfile.lifetimeAggregates.saved, 7.5, 'lifetime saved reconciled');
+  assert.equal(catDProfile.lifetimeAggregates.wasted, 7.5, 'lifetime wasted reconciled');
+  assert.equal(catDProfile.lifetimeAggregates.baselineSaved, 15.0, 'lifetime baselineSaved reconciled');
+  assert.equal(catDProfile.lifetimeAggregates.smokingUnits, 5, 'lifetime smokingUnits reconciled');
+
+  // 16) P0 Concern E: Option B Firestore security rules verification
+  const optBUser = await signIn();
+  const obuid = optBUser.localId;
+  await seedOptionB(obuid);
+  const userAuth = { Authorization: `Bearer ${optBUser.idToken}`, 'Content-Type': 'application/json' };
+
+  // (a) Option B user directly writes configs/vape -> ALLOWED
+  const cfgWrite = await fetch(`${FS}/users/${obuid}/configs/vape?currentDocument.exists=false`, {
+    method: 'PATCH', headers: userAuth,
+    body: JSON.stringify({ fields: Object.fromEntries(Object.entries({ name: 'Vape', limit: 20, order: 1, type: 'SIMPLE', pricePerUnit: 0.5 }).map(([k, v]) => [k, toFs(v)])) }),
+  });
+  assert.ok(cfgWrite.ok, `Option B direct config create must be allowed by rules: ${cfgWrite.status}`);
+
+  // (b) Option B user directly writes meta/profile (avatar) -> ALLOWED
+  const avatarWrite = await fetch(`${FS}/users/${obuid}/meta/profile`, {
+    method: 'PATCH', headers: userAuth,
+    body: JSON.stringify({ fields: { avatar: { stringValue: 'new-avatar' } } }),
+  });
+  assert.ok(avatarWrite.ok, `Option B avatar update must be allowed by rules: ${avatarWrite.status}`);
+
+  // (c) Option B user directly deletes configs/vape -> DENIED by rules (must use TRACKER_DELETE)
+  const cfgDel = await fetch(`${FS}/users/${obuid}/configs/vape`, {
+    method: 'DELETE', headers: userAuth,
+  });
+  assert.equal(cfgDel.status, 403, 'Option B direct config delete must be denied by rules');
+
+  // (d) Option B user directly writes days/ -> DENIED by rules (fail-closed)
+  const dayDirect = await fetch(`${FS}/users/${obuid}/days/${TODAY}`, {
+    method: 'PATCH', headers: userAuth,
+    body: JSON.stringify({ fields: { date: { stringValue: TODAY }, counts: { mapValue: { fields: { cig: { integerValue: 5 } } } } } }),
+  });
+  assert.equal(dayDirect.status, 403, 'Option B direct day write must be denied by rules');
+
+  // (e) Option B user directly writes logs/ -> DENIED by rules (fail-closed)
+  const logDirect = await fetch(`${FS}/users/${obuid}/logs/direct1`, {
+    method: 'PATCH', headers: userAuth,
+    body: JSON.stringify({ fields: { logDate: { stringValue: TODAY }, counts: { mapValue: { fields: { cig: { integerValue: 5 } } } } } }),
+  });
+  assert.equal(logDirect.status, 403, 'Option B direct log write must be denied by rules');
+
+  // (f) Option B user directly writes dailyFinancials/ -> DENIED by rules
+  const ledDirect = await fetch(`${FS}/users/${obuid}/dailyFinancials/${TODAY}`, {
+    method: 'PATCH', headers: userAuth,
+    body: JSON.stringify({ fields: { date: { stringValue: TODAY }, canonicalCredit: { mapValue: { fields: { saved: { doubleValue: 100 } } } } } }),
+  });
+  assert.equal(ledDirect.status, 403, 'Option B direct dailyFinancials write must be denied by rules');
+
+  // (g) Option B user directly modifies lifetimeAggregates on users/{uid} -> DENIED by rules
+  const aggDirect = await fetch(`${FS}/users/${obuid}?updateMask.fieldPaths=lifetimeAggregates`, {
+    method: 'PATCH', headers: userAuth,
+    body: JSON.stringify({ fields: { lifetimeAggregates: { mapValue: { fields: { saved: { doubleValue: 9999 } } } } } }),
+  });
+  assert.equal(aggDirect.status, 403, 'Option B direct lifetimeAggregates write must be denied by rules');
+
+  // (h) Option B user directly updates user settings (dayStartHour, name) -> ALLOWED by rules
+  const settingsDirect = await fetch(`${FS}/users/${obuid}?updateMask.fieldPaths=dayStartHour&updateMask.fieldPaths=name`, {
+    method: 'PATCH', headers: userAuth,
+    body: JSON.stringify({ fields: { dayStartHour: { integerValue: 8 }, name: { stringValue: 'Test User' } } }),
+  });
+  assert.ok(settingsDirect.ok, `Option B settings update must be allowed by rules: ${settingsDirect.status}`);
+
+  console.log('✅ integration: create, idempotency, conflict, close-once, mode-guard, phantom-savings, historical-no-fabrication, migration (€15→€5), interruption-resume, concurrency, no-migrating-dead-end, historical-day-update, tracker-delete, current-tracking-date, delete-account-data, 2->3->2-idempotency, undo-restore-snapshot-preservation, category-D-4-metric-reconciliation, option-b-rules-compatibility ALL 16 TEST SUITES PASSED');
 };
 
-main().catch((e) => { console.error('❌ integration failed:', e.message); process.exit(1); });
+main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });

@@ -1154,7 +1154,8 @@ object SmokingCalculator {
         trackingDay: String,
         activeCounts: Map<String, Double> = emptyMap(),
         defaultUnitPrice: Double = 0.5,
-        monthsToInclude: Int = 6
+        monthsToInclude: Int = 6,
+        ledgers: List<DailyFinancialRecord> = emptyList()
     ): Pair<List<MonthSummary>, MonthSummary?> {
         val merged = aggregateLoggedCounts(logs).toMutableMap()
         dayDocs.forEach { day ->
@@ -1166,6 +1167,7 @@ object SmokingCalculator {
         }
         val snapshotsByDate = dayDocs.associate { it.date to it.trackerSnapshots }
         val dayCreditByDate = dayDocs.mapNotNull { day -> day.aggregateCredit?.let { day.date to it } }.toMap()
+        val ledgersByDate = ledgers.associateBy { it.date }
         val credits = mutableMapOf<String, LifetimeAggregates>()
         val unknown = mutableSetOf<String>()
         val baselineDates = mutableSetOf<String>()
@@ -1174,15 +1176,33 @@ object SmokingCalculator {
             if (hasBaseline || (credit?.baselineSaved ?: 0.0) != 0.0) baselineDates.add(date)
             if (credit != null) credits[date] = RegistryMutations.applyCredit(credits[date] ?: LifetimeAggregates(), credit)
         }
-        logs.forEach { log -> add(log.logDate, log.aggregateCredit,
-            log.aggregateCredit == null || log.economicStatus == "UNKNOWN", log.trackerSnapshots.values.any { it.baseline != null }) }
+        logs.forEach { log ->
+            if (log.logDate !in ledgersByDate) {
+                add(log.logDate, log.aggregateCredit,
+                    log.aggregateCredit == null || log.economicStatus == "UNKNOWN", log.trackerSnapshots.values.any { it.baseline != null })
+            }
+        }
         dayDocs.forEach { day ->
-            val snapshots = day.trackerSnapshots
-            val known = snapshots.isNotEmpty() && snapshots.values.all { !it.isFinanciallyTracked || it.unitPrice != null }
-            val counts = if (day.date == trackingDay && day.status != "closed" && activeCounts.isNotEmpty()) activeCounts else day.counts
-            val credit = if (known && day.status != "closed") computeDayCredit(counts, snapshots, defaultUnitPrice)
-                else day.aggregateCredit ?: if (known) computeDayCredit(counts, snapshots, defaultUnitPrice) else null
-            add(day.date, credit, credit == null, snapshots.values.any { it.baseline != null })
+            if (day.date !in ledgersByDate) {
+                val snapshots = day.trackerSnapshots
+                val known = snapshots.isNotEmpty() && snapshots.values.all { !it.isFinanciallyTracked || it.unitPrice != null }
+                val counts = if (day.date == trackingDay && day.status != "closed" && activeCounts.isNotEmpty()) activeCounts else day.counts
+                val credit = if (known && day.status != "closed") computeDayCredit(counts, snapshots, defaultUnitPrice)
+                    else day.aggregateCredit ?: if (known) computeDayCredit(counts, snapshots, defaultUnitPrice) else null
+                add(day.date, credit, credit == null, snapshots.values.any { it.baseline != null })
+            }
+        }
+        ledgersByDate.forEach { (date, l) ->
+            val unres = l.unresolvedComponents
+            val isUnres = l.ambiguous || unres.spent || unres.saved || unres.baselineSaved || unres.smokingUnits
+            add(date, l.canonicalCredit, isUnres, l.canonicalCredit.baselineSaved != 0.0)
+        }
+        if (ledgers.isNotEmpty()) {
+            merged.keys.forEach { date ->
+                if (date !in ledgersByDate) {
+                    unknown.add(date)
+                }
+            }
         }
         val dayRecords = mutableMapOf<String, DayRecord>()
         merged.forEach { (date, counts) ->

@@ -75,8 +75,13 @@ Most quit apps bury you in tips. **tabak++** stays on the numbers that matter to
   optional personal baseline, never against a goal, because those are different claims.
 - **Owner-only by construction.** Firestore Security Rules are the primary
   authorization boundary: default-deny, scoped to `users/{uid}`.
-- **No backend team required.** No Cloud Functions needed — the application uses
-  Firebase Auth, Cloud Firestore, and client-side security rules only.
+- **Trusted Option-B Architecture.** In addition to legacy direct client writes,
+  the production architecture incorporates a trusted Firebase Cloud Functions
+  boundary (`executeFinancialOperation`, `migrateAccount`, `deleteAccountData`)
+  operating with the Admin SDK. In Option B mode, financial state is server-authoritative,
+  guaranteeing atomic four-metric canonical ledger reconciliation (`saved`, `wasted`,
+  `baselineSaved`, `smokingUnits`), strict count ownership preventing double counting,
+  and immutable historical snapshots.
 
 ## Stack
 
@@ -86,7 +91,7 @@ Two clients, one backend. Shared domain logic on Android lives in a Kotlin Multi
 |---|---|
 | **Android** | Kotlin 2.4 · Jetpack Compose (Compose Multiplatform UI) · GitLive Firebase |
 | **Web** | React 19 · Vite 8 · Tailwind CSS 4 · Firebase JS SDK · installable PWA |
-| **Backend** | Firebase Auth (email + Google) · Cloud Firestore · App Check (advisory) |
+| **Backend** | Firebase Auth (email + Google) · Cloud Firestore · Cloud Functions (Option B) · App Check (advisory) |
 | **Shared (KMP)** | Models, serializers, repositories, day-rollover / streak / spend math |
 | **Build** | Gradle 9.8 · AGP 9.4 · Java 17 bytecode · minSdk 26 · targetSdk 35 · compileSdk 37 |
 | **Toolchain** | Node 22.23.2 ([`.nvmrc`](.nvmrc)) · npm 10.9.8 (`packageManager`) |

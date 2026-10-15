@@ -251,19 +251,34 @@ describe('historical-update + tracker-delete trusted routing (W1B-2 / W1B-4a)', 
     expect(type).toBe('HISTORICAL_DAY_UPDATE');
     expect(payload.date).toBe('2026-10-01');
     expect(payload.counts).toEqual({ cig: 2 });
-    expect(payload.operationId).toMatch(/^hist_2026-10-01_[0-9a-f]+$/);
+    expect(payload.operationId).toMatch(/^hist_2026-10-01_.+$/);
   });
 
-  it('OPTION_B: the historical-edit operation id is stable across identical retries', async () => {
+  it('OPTION_B: an explicit operation id is honoured across retries of the same action', async () => {
+    TrustedFinancial.isEnabled.mockReturnValue(true);
+    h.getDoc.mockResolvedValue(snapOf({ financialMode: 'OPTION_B' }));
+    TrustedFinancial.execute.mockResolvedValue({ applied: true });
+
+    await RegistryService.updateHistoricalDay('u1', '2026-10-01', { cig: 2 }, 'op-retry-1');
+    await RegistryService.updateHistoricalDay('u1', '2026-10-01', { cig: 2 }, 'op-retry-1');
+
+    const ids = TrustedFinancial.execute.mock.calls.map((c) => c[1].operationId);
+    expect(ids).toEqual(['op-retry-1', 'op-retry-1']);
+  });
+
+  it('OPTION_B: distinct actions generate unique operation IDs (prevents 2 -> 3 -> 2 collision)', async () => {
     TrustedFinancial.isEnabled.mockReturnValue(true);
     h.getDoc.mockResolvedValue(snapOf({ financialMode: 'OPTION_B' }));
     TrustedFinancial.execute.mockResolvedValue({ applied: true });
 
     await RegistryService.updateHistoricalDay('u1', '2026-10-01', { cig: 2 });
+    await RegistryService.updateHistoricalDay('u1', '2026-10-01', { cig: 3 });
     await RegistryService.updateHistoricalDay('u1', '2026-10-01', { cig: 2 });
 
     const ids = TrustedFinancial.execute.mock.calls.map((c) => c[1].operationId);
-    expect(ids[0]).toBe(ids[1]);
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(ids[0]).not.toBe(ids[2]);
+    expect(ids[1]).not.toBe(ids[2]);
   });
 
   it('LEGACY: updateHistoricalDay keeps its direct transaction', async () => {
