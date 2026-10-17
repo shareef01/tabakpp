@@ -703,6 +703,11 @@ export const deleteAccountData = onCall(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'Sign-in required.');
   requireRecentLogin(request.auth.token);
-  await db.recursiveDelete(db.collection('users').doc(uid));
+  const userRef = db.collection('users').doc(uid);
+  await db.recursiveDelete(userRef);
+  // Same minimal tombstone the client-side LEGACY wipe leaves: without it a
+  // stale ID token could recreate a fresh LEGACY profile and data after the
+  // wipe. The rules reject every non-deleting write once the marker is set.
+  await userRef.set({ deleting: true });
   return { deleted: true };
 });
