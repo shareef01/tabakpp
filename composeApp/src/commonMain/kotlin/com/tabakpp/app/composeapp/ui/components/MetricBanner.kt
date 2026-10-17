@@ -67,7 +67,7 @@ fun MetricBanner(
             color = SurfaceBase,
             border = androidx.compose.foundation.BorderStroke(0.5.dp, Color.White.copy(alpha = 0.05f))
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(20.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(24.dp)
@@ -93,7 +93,7 @@ fun MetricBanner(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(20.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -122,6 +122,8 @@ fun MetricBanner(
                     )
                 }
 
+                Spacer(modifier = Modifier.height(20.dp))
+                HorizontalDivider(thickness = 0.5.dp, color = BorderGlass)
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -215,7 +217,7 @@ private fun MetricItem(
     modifier: Modifier = Modifier
 ) {
     val isLong = value.length > 6
-    val fontSize = if (isLong) 16.sp else 24.sp
+    val fontSize = if (isLong) 15.sp else 24.sp
     Column(modifier = modifier, horizontalAlignment = Alignment.Start) {
         Text(
             text = label,
@@ -225,12 +227,20 @@ private fun MetricItem(
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = value,
-                style = TabakTypography.headlineMedium.copy(fontWeight = FontWeight.Black, fontSize = fontSize),
-                color = valueColor
+                style = TabakTypography.headlineMedium.copy(
+                    fontWeight = FontWeight.Black,
+                    fontSize = fontSize,
+                    lineHeight = if (isLong) 19.sp else 28.sp,
+                    letterSpacing = if (isLong) 0.sp else (-0.5).sp
+                ),
+                color = valueColor,
+                modifier = Modifier.weight(1f, fill = false)
             )
             if (suffix.isNotEmpty()) {
                 Text(
                     text = " $suffix",
+                    maxLines = 1,
+                    softWrap = false,
                     style = TabakTypography.labelSmall.copy(
                         fontSize = 10.sp,
                         color = TextMuted,
@@ -263,7 +273,8 @@ private fun GoalStatusItem(
     val goalColor = when (goalStatus?.status) {
         "over" -> ErrorColor
         "at" -> WarningColor
-        else -> accentColor
+        "under" -> SuccessColor
+        else -> TextMuted
     }
     val goalText = when (goalStatus) {
         null -> "No target set"

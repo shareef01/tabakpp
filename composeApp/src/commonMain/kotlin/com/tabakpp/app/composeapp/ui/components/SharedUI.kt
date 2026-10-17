@@ -244,6 +244,52 @@ fun TabakSnackbar(snackbarData: SnackbarData) {
     }
 }
 
+/**
+ * Accent-tinted selection chip. Replaces Material's default [FilterChip] tones
+ * (a lavender container unrelated to the user's accent) so tabs, period pickers
+ * and presets share the same selected language as the rest of the app.
+ */
+@Composable
+fun TabakChoiceChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    val accent = LocalAccentColor.current
+    val reducedMotion = LocalReducedMotion.current
+    val containerColor by animateColorAsState(
+        targetValue = if (selected) accent.copy(alpha = 0.14f) else SurfaceBase,
+        animationSpec = if (reducedMotion) snap() else tween(200)
+    )
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) accent.copy(alpha = 0.55f) else BorderWhite,
+        animationSpec = if (reducedMotion) snap() else tween(200)
+    )
+    Surface(
+        selected = selected,
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 48.dp).tabakPressScale(),
+        shape = RoundedCornerShape(14.dp),
+        color = containerColor,
+        border = BorderStroke(1.dp, borderColor)
+    ) {
+        Box(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                style = TabakTypography.bodyMedium.copy(
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                ),
+                color = if (selected) accent else TextMuted,
+                maxLines = 1
+            )
+        }
+    }
+}
+
 @Composable
 fun SkeletonBox(
     modifier: Modifier = Modifier,
