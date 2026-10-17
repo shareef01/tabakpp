@@ -505,7 +505,10 @@ const main = async () => {
 
   r = await call(goneUser.idToken, {}, 'deleteAccountData');
   assert.ok(r.ok && r.body.result.deleted === true, `deleteAccountData failed: ${JSON.stringify(r.body)}`);
-  for (const p of goneDocs) assert.equal(await readDoc(p), null, `${p} must be deleted`);
+  // The profile is replaced by a bare tombstone (same as the client LEGACY
+  // wipe) so a stale token cannot recreate the account; everything else goes.
+  assert.deepEqual(await readDoc(`users/${guid}`), { deleting: true }, 'profile must be left as a bare tombstone');
+  for (const p of goneDocs.slice(1)) assert.equal(await readDoc(p), null, `${p} must be deleted`);
   // Only the caller's tree: another OPTION_B user's data is untouched.
   assert.ok(await readDoc(`users/${duid}/days/${TODAY}`), 'another user\'s data must survive');
 
