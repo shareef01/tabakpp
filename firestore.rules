@@ -358,8 +358,13 @@ service cloud.firestore {
         && d.lifetimeAggregates.get('baselineSaved', 0) == old.get('baselineSaved', 0)
         && validLifetimeAggregates(d.lifetimeAggregates);
     }
+    // The tombstone may never drop financialMode: a bare `{deleting: true}`
+    // overwrite of a MIGRATING/OPTION_B profile would default the account back
+    // to LEGACY and reopen every client financial path. Locked accounts use the
+    // diff form (only `deleting` changes) and the trusted deleteAccountData.
     function validDeletionUpdate(d, before) {
       return d.get('deleting', false) == true
+        && d.get('financialMode', 'LEGACY') == before.get('financialMode', 'LEGACY')
         && (d.keys().hasOnly(['deleting']) || d.diff(before).affectedKeys().hasOnly(['deleting']));
     }
     function validLegacyClaimMetadata(d) {
@@ -725,10 +730,13 @@ service cloud.firestore {
       allow update: if isOwner(userId) && (validDeletionUpdate(request.resource.data, resource.data)
         || (resource.data.get('deleting', false) != true
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['financialMode'])
+          // Locked accounts get no lease protocol: a self-granted lease would
+          // otherwise open smokingMigrationFinish and its smokingUnits write.
+          // Every finish clears the lease keys, so this closes that branch too.
+          && (!financialLocked(database, userId)
+              || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['lifetimeAggregates', 'smokingMigrationLeaseId', 'smokingMigrationLeaseUntil']))
           && (smokingMigrationFinish(request.resource.data, resource.data)
             || (!smokingLeaseHeld(resource.data)
-              && (!financialLocked(database, userId)
-                  || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['lifetimeAggregates']))
               && (
                 (isMutationOnlyUpdate() && validMutationUpdate()) ||
                 (isSettingsOnlyUpdate() && validSettingsUpdate())
@@ -794,15 +802,15 @@ service cloud.firestore {
       // non-identity data; cross-user isolation and shape bounds still hold).
       match /dailyFinancials/{date} {
         allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && !financialLocked(database, userId) && validLedgerCreate(date);
-        allow update: if isOwner(userId) && !financialLocked(database, userId) && validLedgerUpdate(date);
+        allow create: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validLedgerCreate(date);
+        allow update: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validLedgerUpdate(date);
         allow delete: if isOwner(userId) && !financialLocked(database, userId);
       }
 
       // Request-idempotency receipts (created once per logical operation).
       match /financialOperations/{operationId} {
         allow read: if isOwner(userId);
-        allow create: if isOwner(userId) && !financialLocked(database, userId) && validOperationReceipt();
+        allow create: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validOperationReceipt();
         allow update: if false; // immutable once written
         allow delete: if isOwner(userId) && !financialLocked(database, userId);
       }

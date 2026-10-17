@@ -5,7 +5,7 @@ import {
   assertSucceeds,
   initializeTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, updateDoc, writeBatch, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, writeBatch, deleteDoc, deleteField, Timestamp } from 'firebase/firestore';
 
 const PROJECT_ID = 'demo-tabakpp-rules';
 let testEnv;
@@ -862,5 +862,88 @@ describe('OPTION B / MIGRATING trusted-write lock (Phase 3)', () => {
     // The old model accepted a client "compliant" commit; now there is no client path.
     await expect(setDoc(doc(db, 'users/alice/logs/L1'), dayLog)).rejects.toThrow();
     await expect(updateDoc(doc(db, 'users/alice/days/2026-10-01'), { counts: { cig: 5 } })).rejects.toThrow();
+  });
+});
+
+describe('audit regressions: lease forgery, tombstone mode drop, tombstoned ledger writes', () => {
+  const ledgerData = {
+    date: '2026-10-01', countsByTracker: { cig: 2 }, snapshots: { cig: { target: 10, unitPrice: 1 } },
+    canonicalCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 }, ledgerSchemaVersion: 2,
+    foldedIntoLifetime: false,
+  };
+  const receiptData = {
+    operationId: 'op1', operationType: 'createManualLog', payloadFingerprint: 'fp1', resultStatus: 'OK',
+  };
+  const seed = async (data) => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice'), data);
+    });
+    return testEnv.authenticatedContext('alice').firestore();
+  };
+  const stored = async (path) => {
+    let data;
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      data = (await getDoc(doc(context.firestore(), path))).data();
+    });
+    return data;
+  };
+  const leaseUntil = () => Timestamp.fromMillis(Date.now() + 60_000);
+
+  for (const mode of ['OPTION_B', 'MIGRATING']) {
+    it(`${mode}: a self-granted smoking lease cannot forge lifetime smokingUnits`, async () => {
+      const db = await seed({ ...emptyProfile, smokingUnitsMigrated: false, financialMode: mode });
+      // Step 1 of the bypass: acquiring a lease through the mutation path.
+      await assertFails(updateDoc(doc(db, 'users/alice'), {
+        smokingMigrationLeaseId: 'lease1', smokingMigrationLeaseUntil: leaseUntil(),
+      }));
+      // Step 2, even with a lease already held: the finish branch is closed.
+      await seed({
+        ...emptyProfile, smokingUnitsMigrated: false, financialMode: mode,
+        smokingMigrationLeaseId: 'lease1', smokingMigrationLeaseUntil: leaseUntil(),
+      });
+      await assertFails(updateDoc(doc(db, 'users/alice'), {
+        smokingUnitsMigrated: true,
+        lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 99999999 },
+        smokingMigrationLeaseId: deleteField(), smokingMigrationLeaseUntil: deleteField(),
+      }));
+      expect((await stored('users/alice')).lifetimeAggregates.smokingUnits).toBe(0);
+    });
+  }
+
+  it('LEGACY: the smoking migration lease protocol still works', async () => {
+    const db = await seed({ ...emptyProfile, smokingUnitsMigrated: false });
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+      smokingMigrationLeaseId: 'lease1', smokingMigrationLeaseUntil: leaseUntil(),
+    }));
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+      smokingUnitsMigrated: true, 'lifetimeAggregates.smokingUnits': 7,
+      smokingMigrationLeaseId: deleteField(), smokingMigrationLeaseUntil: deleteField(),
+    }));
+  });
+
+  it('OPTION_B: a full tombstone overwrite cannot drop financialMode', async () => {
+    const db = await seed({ ...emptyProfile, financialMode: 'OPTION_B' });
+    await assertFails(setDoc(doc(db, 'users/alice'), { deleting: true }));
+    expect((await stored('users/alice')).financialMode).toBe('OPTION_B');
+    await assertFails(setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledgerData));
+    // The diff-form tombstone (the trusted deletion fence) is still accepted.
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), { deleting: true }));
+    expect((await stored('users/alice')).financialMode).toBe('OPTION_B');
+  });
+
+  it('LEGACY: the client wipe can still overwrite the profile with a bare tombstone', async () => {
+    const db = await seed({ ...emptyProfile, financialMode: 'LEGACY' });
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), { deleting: true }));
+    await assertSucceeds(setDoc(doc(db, 'users/alice'), { deleting: true }));
+  });
+
+  it('a tombstoned account rejects dailyFinancials and financialOperations writes', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice/dailyFinancials/2026-10-02'), { ...ledgerData, date: '2026-10-02' });
+    });
+    const db = await seed({ deleting: true });
+    await assertFails(setDoc(doc(db, 'users/alice/dailyFinancials/2026-10-01'), ledgerData));
+    await assertFails(updateDoc(doc(db, 'users/alice/dailyFinancials/2026-10-02'), { ambiguous: true }));
+    await assertFails(setDoc(doc(db, 'users/alice/financialOperations/op1'), receiptData));
   });
 });
