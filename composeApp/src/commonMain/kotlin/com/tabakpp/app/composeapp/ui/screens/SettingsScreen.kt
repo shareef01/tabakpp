@@ -38,6 +38,7 @@ import com.tabakpp.app.composeapp.ui.copyToClipboard
 import com.tabakpp.app.composeapp.ui.rememberExportFileSaver
 import com.tabakpp.app.composeapp.ui.components.AvatarIdentityBadge
 import com.tabakpp.app.composeapp.ui.components.ConfirmModal
+import com.tabakpp.app.composeapp.ui.components.TabakChoiceChip
 import com.tabakpp.app.composeapp.ui.components.TrackerForm
 import com.tabakpp.app.data.InputSanitizer
 import com.tabakpp.app.data.TrackerConfig
@@ -987,14 +988,13 @@ fun DayStartSettings(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 listOf(0 to "Midnight", 4 to "4 AM", 6 to "6 AM", 12 to "Noon").forEach { (preset, label) ->
-                    FilterChip(
+                    TabakChoiceChip(
                         selected = pendingHour == preset,
                         onClick = {
                             pendingHour = preset
                             if (preset != hour) onHourChange(preset)
                         },
-                        label = { Text(label) },
-                        modifier = Modifier.heightIn(min = 48.dp)
+                        label = label
                     )
                 }
             }

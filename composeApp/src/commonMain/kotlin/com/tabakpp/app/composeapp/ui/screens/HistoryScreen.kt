@@ -1,6 +1,7 @@
 package com.tabakpp.app.composeapp.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -24,6 +26,7 @@ import com.tabakpp.app.composeapp.theme.*
 import com.tabakpp.app.composeapp.ui.components.ConfirmModal
 import com.tabakpp.app.composeapp.ui.components.HistoryChart
 import com.tabakpp.app.composeapp.ui.components.ManualEntryForm
+import com.tabakpp.app.composeapp.ui.components.TabakChoiceChip
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.viewmodels.RegistryViewModel
@@ -110,17 +113,17 @@ fun HistoryScreen(
                             .padding(bottom = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(
+                        TabakChoiceChip(
                             selected = historySubView == "history",
                             onClick = { historySubView = "history" },
-                            label = { Text("History") },
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                            label = "History",
+                            modifier = Modifier.weight(1f)
                         )
-                        FilterChip(
+                        TabakChoiceChip(
                             selected = historySubView == "insights",
                             onClick = { historySubView = "insights" },
-                            label = { Text("Insights") },
-                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                            label = "Insights",
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -150,11 +153,11 @@ fun HistoryScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             listOf(7, 14, 30, 90).forEach { days ->
-                                FilterChip(
+                                TabakChoiceChip(
                                     selected = historyPeriod == days,
                                     onClick = { historyPeriod = days },
-                                    label = { Text("$days days") },
-                                    modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                    label = "$days days",
+                                    modifier = Modifier.weight(1f)
                                 )
                             }
                         }
@@ -272,11 +275,18 @@ fun HistoryScreen(
 
                 if (records.isEmpty()) {
                     item {
-                        Text(
-                            "Your tracked days will appear here.",
-                            color = TextMuted,
-                            modifier = Modifier.padding(16.dp)
-                        )
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Default.History, contentDescription = null, tint = TextDisabled, modifier = Modifier.size(32.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                "Your tracked days will appear here.",
+                                style = TabakTypography.bodyMedium,
+                                color = TextMuted
+                            )
+                        }
                     }
                 } else {
                     sortedDates.forEach { date ->
@@ -397,15 +407,33 @@ private fun MetricBlock(
         color = SurfaceBase,
         border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.05f))
     ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Icon(icon, contentDescription = null, tint = LocalAccentColor.current, modifier = Modifier.size(18.dp))
-                Text(subLabel.uppercase(), style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, color = TextMuted))
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val accent = LocalAccentColor.current
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(accent.copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    subLabel.uppercase(),
+                    style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp, color = TextMuted),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
-            Column {
-                Text(value, style = TabakTypography.headlineMedium.copy(fontSize = 20.sp, fontWeight = FontWeight.Black))
-                Text(label.uppercase(), style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp), color = TextMuted)
-            }
+            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                value,
+                style = TabakTypography.headlineMedium.copy(fontSize = 26.sp, fontWeight = FontWeight.Black),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(label.uppercase(), style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp), color = TextMuted)
         }
     }
 }
