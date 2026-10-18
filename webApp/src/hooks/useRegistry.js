@@ -551,7 +551,9 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     } catch (e) {
       pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.id !== op.id);
       publishCounterOverlay();
-      setRegistryError('Could not save that change. Your count was restored.');
+      setRegistryError(e?.message === 'DAY_CLOSED_NO_SNAPSHOT'
+        ? mapFirestoreError(e)
+        : 'Could not save that change. Your count was restored.');
       throw e;
     }
   }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
@@ -590,7 +592,9 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     } catch (e) {
       pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.id !== op.id);
       publishCounterOverlay();
-      setRegistryError('Could not save that change. Your count was restored.');
+      setRegistryError(e?.message === 'DAY_CLOSED_NO_SNAPSHOT'
+        ? mapFirestoreError(e)
+        : 'Could not save that change. Your count was restored.');
       throw e;
     }
   }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);

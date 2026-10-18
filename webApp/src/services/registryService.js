@@ -203,6 +203,39 @@ const mergeHistoricalEditCounts = (incoming, previous, liveConfigIds, historical
   return merged;
 };
 
+/**
+ * Counter tap on a CLOSED day (see adjustCounter). Recomputes the day's credit
+ * from its frozen snapshots and, when the day was already folded, moves
+ * lifetimeAggregates by exactly the credit delta in the same transaction.
+ */
+const applyLateCounterWrite = async (transaction, uid, dayRef, day, counterId, delta) => {
+  const snapshots = day.trackerSnapshots || {};
+  if (!Object.hasOwn(snapshots, counterId)) throw new Error('DAY_CLOSED_NO_SNAPSHOT');
+  const oldCounts = day.counts || {};
+  const counts = { ...oldCounts, [counterId]: Math.max(0, (oldCounts[counterId] || 0) + delta) };
+  if (countsEqual(counts, oldCounts)) return;
+  requireHistoricalPrices(counts, snapshots);
+  const newCredit = SmokingCalculator.computeDayCredit(counts, snapshots);
+
+  if (day.foldedIntoLifetime) {
+    const userRef = doc(db, 'users', uid);
+    const userSnap = await transaction.get(userRef);
+    if (userSnap.exists()) {
+      const current = userSnap.data().lifetimeAggregates || emptyAggregates();
+      const oldCredit = day.aggregateCredit || emptyAggregates();
+      transaction.update(userRef, {
+        'lifetimeAggregates.saved': (current.saved || 0) - (oldCredit.saved || 0) + newCredit.saved,
+        'lifetimeAggregates.wasted': (current.wasted || 0) - (oldCredit.wasted || 0) + newCredit.wasted,
+        'lifetimeAggregates.smokingUnits': (current.smokingUnits || 0) - (oldCredit.smokingUnits || 0) + newCredit.smokingUnits,
+        'lifetimeAggregates.baselineSaved': (current.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0),
+      });
+    }
+  }
+  transaction.update(dayRef, {
+    counts, aggregateCredit: newCredit, updatedTrackerId: counterId, updatedAt: serverTimestamp(),
+  });
+};
+
 const newClaimId = () => globalThis.crypto?.randomUUID?.() ?? (Date.now().toString(36) + '_' + Math.random().toString(36).slice(2));
 
 const emptyAggregates = () => ({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
@@ -674,7 +707,13 @@ export const RegistryService = {
 
       const daySnap = await transaction.get(dayRef);
       const existing = daySnap.exists() ? daySnap.data() : null;
-      if (existing?.status === 'closed') throw new Error('DAY_CLOSED');
+      if (existing?.status === 'closed') {
+        // Late write: closing a day (manually, or by another device whose
+        // clock is ahead) must not stop the user logging it. The stamped
+        // snapshot stays frozen, so only trackers stamped that day can move;
+        // the lifetime rollup is reconciled by delta, as in updateHistoricalDay.
+        return applyLateCounterWrite(transaction, uid, dayRef, existing, counterId, delta);
+      }
       if (!Object.hasOwn(existing?.trackerSnapshots || {}, counterId)
         && Object.keys(existing?.trackerSnapshots || {}).length >= 8) throw new Error('TRACKER_LIMIT');
 

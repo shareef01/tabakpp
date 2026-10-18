@@ -27,6 +27,18 @@ class RegistryErrorMapperTest {
     }
 
     @Test
+    fun closedDayWithoutSnapshot_pointsToManualEntry() {
+        val msg = RegistryErrorMapper.map(IllegalStateException("DAY_CLOSED_NO_SNAPSHOT"), fallback = "x")
+        assertTrue(msg.contains("manual entry in History"), msg)
+    }
+
+    @Test
+    fun undecodableDay_saysNothingChanged() {
+        val msg = RegistryErrorMapper.map(IllegalStateException("DAY_DECODE_FAILED"), fallback = "x")
+        assertTrue(msg.contains("nothing was changed"), msg)
+    }
+
+    @Test
     fun unrecognizedError_fallsThroughToFallback() {
         val fallback = "Could not save that change. Your count was restored."
         val msg = RegistryErrorMapper.map(RuntimeException("Some unknown error"), fallback = fallback)

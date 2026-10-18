@@ -134,11 +134,67 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(await dayDoc('2026-07-30')).toBeUndefined();
   });
 
-  it('adjustCounter refuses to write past a closed day', async () => {
+  it('adjustCounter keeps logging a closed day and moves lifetime by the delta (F-01)', async () => {
     await seed();
     await RegistryService.adjustCounter(UID, 'cig', 4, '2026-07-30', 0.5);
     await RegistryService.closeDay(UID, '2026-07-30');
-    await expect(RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5)).rejects.toThrow();
+    const frozen = (await dayDoc('2026-07-30')).trackerSnapshots;
+    // Repricing the live tracker must not leak into the closed day.
+    await setDoc(doc(holder.db, 'users', UID, 'configs', 'cig'), { ...cigConfig, pricePerUnit: 999 });
+
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+
+    const d = await dayDoc('2026-07-30');
+    expect(d.status).toBe('closed');
+    expect(d.counts).toEqual({ cig: 5 });
+    expect(d.trackerSnapshots).toEqual(frozen);
+    expect(d.aggregateCredit.wasted).toBeCloseTo(5);
+    const p = await profile();
+    // Folded once at 4 (wasted 4, saved 6); the late tap moves it to 5/5.
+    expect(p.lifetimeAggregates.wasted).toBeCloseTo(5);
+    expect(p.lifetimeAggregates.saved).toBeCloseTo(5);
+    expect(p.lifetimeAggregates.smokingUnits).toBe(5);
+
+    // Closing again must not re-credit the late tap.
+    await RegistryService.closeDay(UID, '2026-07-30');
+    expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(5);
+  });
+
+  it('late decrement on a closed day reverses its credit and clamps at zero', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-30');
+    await RegistryService.adjustCounter(UID, 'cig', -1, '2026-07-30', 0.5);
+    await RegistryService.adjustCounter(UID, 'cig', -1, '2026-07-30', 0.5);
+
+    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 0 });
+    const p = await profile();
+    expect(p.lifetimeAggregates.wasted).toBeCloseTo(0);
+    expect(p.lifetimeAggregates.saved).toBeCloseTo(10);
+    expect(p.lifetimeAggregates.smokingUnits).toBe(0);
+  });
+
+  it('a day closed by a device that is ahead stays loggable from the device that is behind (F-02)', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 2, '2026-07-30', 0.5);
+    // Device A already sees 2026-07-31 and reconciles; device B is still on 07-30.
+    await RegistryService.reconcileStaleDays(UID, '2026-07-31');
+    expect((await dayDoc('2026-07-30')).status).toBe('closed');
+
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+
+    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 3 });
+    expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(3);
+  });
+
+  it('a tracker with no snapshot on a closed day is refused with a specific error', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-30');
+    await setDoc(doc(holder.db, 'users', UID, 'configs', 'roll'), { ...cigConfig, name: 'Roll-ups', order: 1 });
+
+    await expect(RegistryService.adjustCounter(UID, 'roll', 1, '2026-07-30', 0.5)).rejects.toThrow('DAY_CLOSED_NO_SNAPSHOT');
+    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 1 });
   });
 
   it('a count written under an explicit prior date lands there even after "today" moved on', async () => {

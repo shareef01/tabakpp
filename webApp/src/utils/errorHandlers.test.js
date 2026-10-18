@@ -24,6 +24,10 @@ describe('mapAuthError', () => {
 });
 
 describe('mapFirestoreError', () => {
+  it('points a closed-day tap on an unstamped tracker to manual entry', () => {
+    expect(mapFirestoreError({ message: 'DAY_CLOSED_NO_SNAPSHOT' })).toMatch(/manual entry in History/);
+  });
+
   it('maps permission-denied clearly', () => {
     expect(mapFirestoreError({ code: 'permission-denied' })).toMatch(/security rules/);
   });

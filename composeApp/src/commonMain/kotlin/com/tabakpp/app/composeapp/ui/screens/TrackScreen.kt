@@ -195,9 +195,9 @@ fun TrackScreen(
 
     if (showEndDayConfirm) {
         ConfirmModal(
-            title = "End tracking day?",
-            message = "Today’s counts will be archived and counters reset. Archived entries can be edited in History.",
-            confirmLabel = "End Day",
+            title = "Close tracking day?",
+            message = "Your counts are already saved. Closing adds today to your lifetime totals now. You can keep logging today and edit this day in History.",
+            confirmLabel = "Close Day",
             tintColor = ErrorColor,
             isLoading = endingDay,
             onConfirm = { viewModel.endDay() },

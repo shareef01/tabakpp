@@ -70,6 +70,10 @@ object RegistryErrorMapper {
         val normalized = message.lowercase()
 
         return when {
+            normalized.contains("day_closed_no_snapshot") ->
+                "This day is closed and this tracker was not used on it. Add it with a manual entry in History."
+            normalized.contains("day_decode_failed") ->
+                "This day's record could not be read, so nothing was changed. Update the app and try again."
             normalized.contains("historical_price_unavailable") ->
                 "This older record has no reliable historical price. Its stored totals were preserved; changing its amounts is unavailable."
             normalized.contains("tracker_limit") ->
