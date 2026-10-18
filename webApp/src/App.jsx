@@ -535,7 +535,7 @@ const AppContent = () => {
                 } catch { /* registryError set in hook */ }
               }}
               title="Close tracking day?"
-              message="Your counts are already saved — closing just marks today complete and locks it in History. You can still edit it there afterward."
+              message="Your counts are already saved. Closing adds today to your lifetime totals now. You can keep logging today and edit this day in History."
               confirmText="Close Day"
             />
             <ConfirmModal

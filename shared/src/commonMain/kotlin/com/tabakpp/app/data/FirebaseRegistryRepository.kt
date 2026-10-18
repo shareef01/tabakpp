@@ -202,6 +202,58 @@ class FirebaseRegistryRepository(
         }
     }
 
+    /**
+     * Decode a day snapshot that is about to be written back. A document that
+     * EXISTS but cannot be decoded must fail the write: treating it as missing
+     * would make the caller `set()` a fresh day over it and drop every other
+     * tracker's counts and snapshots (audit F-03).
+     */
+    private fun decodeExistingDay(snap: DocumentSnapshot): DayDocument? {
+        if (!snap.exists) return null
+        return decodeDayDocument(snap) ?: throw IllegalStateException("DAY_DECODE_FAILED")
+    }
+
+    /**
+     * Counter tap on a CLOSED day. The frozen snapshot decides the money, so
+     * only trackers stamped that day can move; when the day was already folded,
+     * lifetimeAggregates moves by exactly the credit delta (as in
+     * [updateHistoricalDay]). All reads happen before any write.
+     */
+    private suspend fun Transaction.applyLateCounterWrite(
+        uid: String,
+        dayRef: DocumentReference,
+        day: DayDocument,
+        trackerId: String,
+        delta: Double
+    ) {
+        if (trackerId !in day.trackerSnapshots) throw IllegalStateException("DAY_CLOSED_NO_SNAPSHOT")
+        val counts = day.counts + (trackerId to maxOf(0.0, (day.counts[trackerId] ?: 0.0) + delta))
+        if (SmokingCalculator.countsEqual(counts, day.counts)) return
+        SmokingCalculator.requireHistoricalPrices(counts, day.trackerSnapshots)
+        val newCredit = SmokingCalculator.computeDayCredit(counts, day.trackerSnapshots)
+
+        if (day.foldedIntoLifetime) {
+            val userRef = firestore.collection("users").document(uid)
+            val userSnap = get(userRef)
+            if (userSnap.exists) {
+                val current = userSnap.data<UserProfile>().lifetimeAggregates
+                val oldCredit = day.aggregateCredit ?: LifetimeAggregates()
+                updateFields(userRef) {
+                    "lifetimeAggregates.saved" to (current.saved - oldCredit.saved + newCredit.saved)
+                    "lifetimeAggregates.wasted" to (current.wasted - oldCredit.wasted + newCredit.wasted)
+                    "lifetimeAggregates.smokingUnits" to (current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits)
+                    "lifetimeAggregates.baselineSaved" to (current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
+                }
+            }
+        }
+        updateFields(dayRef) {
+            "counts" to counts
+            "aggregateCredit" to newCredit
+            "updatedTrackerId" to trackerId
+            "updatedAt" to (Timestamp.ServerTimestamp as BaseTimestamp)
+        }
+    }
+
     /** Re-read configs by id inside a transaction (client SDK cannot query in a tx). */
     private suspend fun Transaction.loadConfigs(
         configsRef: CollectionReference,
@@ -296,8 +348,14 @@ class FirebaseRegistryRepository(
             val config = configSnap.data<TrackerConfig>().copy(id = trackerId)
 
             val daySnap = get(dayRef)
-            val existing = if (daySnap.exists) decodeDayDocument(daySnap) else null
-            if (existing?.status == "closed") throw Exception("DAY_CLOSED")
+            val existing = decodeExistingDay(daySnap)
+            if (existing?.status == "closed") {
+                // Late write: closing a day (manually, or by another device whose
+                // clock is ahead) must not stop the user logging it. Web parity:
+                // RegistryService.adjustCounter → applyLateCounterWrite.
+                applyLateCounterWrite(uid, dayRef, existing, trackerId, delta)
+                return@runTransaction
+            }
             if (trackerId !in (existing?.trackerSnapshots ?: emptyMap()) && (existing?.trackerSnapshots?.size ?: 0) >= 8) throw Exception("TRACKER_LIMIT")
 
             val counts = (existing?.counts ?: emptyMap()).toMutableMap()
@@ -517,7 +575,7 @@ class FirebaseRegistryRepository(
             firestore.runTransaction {
                 if (get(marker).exists) return@runTransaction
                 val daySnap = get(dayRef)
-                val day = if (daySnap.exists) decodeDayDocument(daySnap) else null
+                val day = decodeExistingDay(daySnap)
                 val previous = day?.trackerSnapshots ?: emptyMap()
                 val config = configs[id] ?: TrackerConfig(id, "Removed tracker", 0, 0,
                     type = TrackerType.SIMPLE, isFinanciallyTracked = false)

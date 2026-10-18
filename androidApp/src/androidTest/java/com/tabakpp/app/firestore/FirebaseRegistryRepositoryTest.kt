@@ -792,6 +792,83 @@ class FirebaseRegistryRepositoryTest {
     }
 
     // ============================================================
+    // Test D2 — Late writes on a closed day (audit F-01/F-02)
+    // ============================================================
+
+    @Test
+    fun testD2_lateWriteAfterClose_movesLifetimeByDelta() {
+        runBlocking {
+            cleanDay(testUid, TEST_DATE)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 2.0, TEST_DATE, 0.5)
+            repository.closeDay(testUid, TEST_DATE)
+            val before = firestore.collection("users").document(testUid).get().data<UserProfile>().lifetimeAggregates
+            val closed = getDay(testUid, TEST_DATE)!!
+
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+
+            val after = getDay(testUid, TEST_DATE)!!
+            assertEquals("closed", after.status)
+            assertEquals(3.0, after.counts[TEST_TRACKER_ID] ?: 0.0, 0.001)
+            assertEquals(closed.trackerSnapshots, after.trackerSnapshots, "Closed-day snapshot must stay frozen")
+            val profile = firestore.collection("users").document(testUid).get().data<UserProfile>().lifetimeAggregates
+            val oldCredit = closed.aggregateCredit!!
+            val newCredit = after.aggregateCredit!!
+            assertEquals(before.wasted - oldCredit.wasted + newCredit.wasted, profile.wasted, 0.001)
+            assertEquals(before.saved - oldCredit.saved + newCredit.saved, profile.saved, 0.001)
+            assertEquals(before.smokingUnits + 1.0, profile.smokingUnits, 0.001)
+
+            // Closing again must not re-credit the late tap.
+            repository.closeDay(testUid, TEST_DATE)
+            val again = firestore.collection("users").document(testUid).get().data<UserProfile>().lifetimeAggregates
+            assertEquals(profile.wasted, again.wasted, 0.001)
+        }
+    }
+
+    @Test
+    fun testD3_lateWriteOnUnstampedTracker_isRefusedWithoutWriting() {
+        runBlocking {
+            cleanDay(testUid, TEST_DATE)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+            repository.closeDay(testUid, TEST_DATE)
+            repository.addConfig(testUid, TrackerConfig(id = "late1", name = "Late", limit = 5, order = 9, type = TrackerType.CIGARETTE))
+            val configId = "late1"
+
+            val error = assertFailsWith<Exception> {
+                repository.updateLiveCounter(testUid, configId, 1.0, TEST_DATE, 0.5)
+            }
+            assertTrue(error.message.orEmpty().contains("DAY_CLOSED_NO_SNAPSHOT"), error.message)
+            assertEquals(mapOf(TEST_TRACKER_ID to 1.0), getDay(testUid, TEST_DATE)!!.counts)
+            firestore.collection("users").document(testUid).collection("configs").document(configId).delete()
+        }
+    }
+
+    // ============================================================
+    // Test D4 — An undecodable day is never overwritten (audit F-03)
+    // ============================================================
+
+    @Test
+    fun testD4_undecodableDay_isNotOverwrittenByCounterWrite() {
+        runBlocking {
+            cleanDay(testUid, TEST_DATE)
+            // `createdAt` as a string is rules-valid but not decodable as a
+            // timestamp, standing in for any field a newer/older client wrote.
+            ownerPatch(
+                "users/$testUid/days/$TEST_DATE",
+                """{"fields":{"date":{"stringValue":"$TEST_DATE"},"status":{"stringValue":"open"},""" +
+                    """"counts":{"mapValue":{"fields":{"other":{"doubleValue":4.0}}}},""" +
+                    """"createdAt":{"stringValue":"not-a-timestamp"}}}"""
+            )
+
+            runCatching { repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5) }
+
+            val snap = firestore.collection("users").document(testUid).collection("days").document(TEST_DATE).get()
+            val counts = snap.get<Map<String, Double>>("counts")
+            assertEquals(4.0, counts["other"] ?: 0.0, 0.001, "Other trackers' counts must survive")
+            cleanDay(testUid, TEST_DATE)
+        }
+    }
+
+    // ============================================================
     // Test E — Existing-day 5→6 increment (regression for counter persistence)
     // ============================================================
 

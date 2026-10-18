@@ -1,6 +1,6 @@
 # tabak++ Privacy Notice
 
-Last updated: 15 August 2026
+Last updated: 19 October 2026
 
 tabak++ stores account identifiers, profile settings, smoking-tracker counts,
 history entries, financial estimates, and an optional avatar in Firebase
@@ -21,22 +21,24 @@ devices.
 Data remains until the user deletes individual history entries or uses Delete
 Account in Settings.
 
-- **Account deletion**: Erases application subcollections (tracker configurations,
-  history logs, daily dated records, canonical ledgers, profile metadata, trusted
-  restoration tombstones `trustedDeletedLogs`, and operation receipts `trustedOperations`),
-  the profile document, and the Firebase Authentication account.
-- **Trusted deletion (Option B)**: Because security rules deny client-side deletion of
-  financial history for Option B accounts, account data erasure is performed server-side
-  by the `deleteAccountData` Cloud Function, requiring recent authentication (within 5 minutes).
-- **Tombstone marker**: During deletion, a minimal UID-keyed marker (`{ deleting: true }`)
-  is recorded to prevent surviving or cached authentication tokens from recreating data.
-  This marker contains no personal identifiers and survives token reuse until final account removal.
-- **Erasure semantics and retry**: Firestore data erasure is executed across batched deletes
-  using the Firestore Admin SDK (`recursiveDelete`). In the event of a network interruption or
-  timeout during bulk subcollection deletion, the operation is idempotent and can be safely retried:
-  subsequent calls resume deletion until all user subcollections and documents are purged.
-- If final Authentication deletion fails after data erasure, the app reports the partial
-  failure so the user can re-authenticate and retry.
+- **Account deletion (current production, Spark plan)**: The app deletes your tracker
+  configurations, history logs, daily dated records, canonical ledgers, operation
+  receipts and profile metadata (including the avatar). It then replaces your
+  profile document with a one-field marker (`{ deleting: true }`) keyed by your
+  anonymous Firebase user ID, and finally deletes your Firebase Authentication account.
+- **Deletion marker**: The marker holds no name, email address, settings or usage
+  data. It stops a still-valid sign-in token on another device from recreating data
+  after deletion. Security rules do not let the app remove it, so it is kept after
+  the account is deleted.
+- **Interrupted deletion**: Deletion runs in batches. If it is interrupted, signing in
+  again and repeating Delete Account resumes it. If final Authentication deletion
+  fails after the data is erased, the app reports the partial failure so you can
+  re-authenticate and retry.
+- **Server-side deletion (Option B, not currently deployed)**: If the Cloud Functions
+  backend is enabled, accounts in that mode are erased by the `deleteAccountData`
+  function (recent sign-in required, within 5 minutes) using the Admin SDK's
+  recursive delete, which also removes the server-only `trustedOperations` and
+  `trustedDeletedLogs` records.
 
 ## Security and limitations
 
