@@ -27,7 +27,7 @@ for name in ("track", "history", "settings"):
         raise SystemExit(f"missing {f} — connect device and run scripts/android-screenshots.ps1")
     img = Image.open(f).convert("RGB")
     w, h = img.size
-    top = int(h * 0.035)
+    top = int(h * 0.056)  # drop the whole status bar (clock, notification chips)
     bottom = int(h * 0.965)
     img = img.crop((0, top, w, bottom))
     w, h = img.size
