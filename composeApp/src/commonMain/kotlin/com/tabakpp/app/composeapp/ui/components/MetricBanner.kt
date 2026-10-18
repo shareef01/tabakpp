@@ -208,6 +208,7 @@ fun MetricBanner(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MetricItem(
     label: String,
@@ -224,7 +225,10 @@ private fun MetricItem(
             style = TabakTypography.labelSmall.copy(color = TextMuted, letterSpacing = 1.sp, fontWeight = FontWeight.Black)
         )
         Spacer(modifier = Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.Bottom) {
+        // FlowRow: a suffix that doesn't fit beside the value ("SCOUT" + "535 XP"
+        // in a third of a phone width) drops to the next line instead of
+        // squeezing the value and breaking a single word mid-letters.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 text = value,
                 style = TabakTypography.headlineMedium.copy(
@@ -234,11 +238,12 @@ private fun MetricItem(
                     letterSpacing = if (isLong) 0.sp else (-0.5).sp
                 ),
                 color = valueColor,
-                modifier = Modifier.weight(1f, fill = false)
+                softWrap = value.contains(' '),
+                modifier = Modifier.align(Alignment.Bottom)
             )
             if (suffix.isNotEmpty()) {
                 Text(
-                    text = " $suffix",
+                    text = suffix,
                     maxLines = 1,
                     softWrap = false,
                     style = TabakTypography.labelSmall.copy(
@@ -247,7 +252,7 @@ private fun MetricItem(
                         fontWeight = FontWeight.Black,
                         letterSpacing = 1.sp
                     ),
-                    modifier = Modifier.padding(bottom = 4.dp)
+                    modifier = Modifier.align(Alignment.Bottom).padding(bottom = 4.dp)
                 )
             }
         }
