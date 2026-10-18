@@ -12,7 +12,7 @@ The tabak++ financial migration cutover transitions accounts from unverified cli
 
 ### 1.1 The Callable Contract (`migrateAccount`)
 
-All migrations execute through the server-authoritative Firebase Callable Cloud Function `migrateAccount` (located in [`functions/index.js`](file:///c:/Users/shareef01/AndroidStudioProjects/tabakpp/functions/index.js)):
+All migrations execute through the server-authoritative Firebase Callable Cloud Function `migrateAccount` (located in [`functions/index.js`](../functions/index.js)):
 
 - **Authentication & Authorization**: The caller **must** present a valid Firebase Auth ID Token carrying the custom claim `admin === true`. Regular users or unauthenticated clients receive `permission-denied (403)`.
 - **Idempotency & Safety**:
@@ -31,10 +31,10 @@ All migrations execute through the server-authoritative Firebase Callable Cloud 
 
 ### 1.2 The Staging CLI (`scripts/migrate-staging.mjs`)
 
-The CLI [`scripts/migrate-staging.mjs`](file:///c:/Users/shareef01/AndroidStudioProjects/tabakpp/scripts/migrate-staging.mjs) provides an executable, operator-friendly tool for staging cutovers.
+The CLI [`scripts/migrate-staging.mjs`](../scripts/migrate-staging.mjs) provides an executable, operator-friendly tool for staging cutovers.
 
 #### Required Flags
-- `--project <CONFIRMED_STAGING_PROJECT_ID>`: Mandatory. Projects matching production naming patterns (`prod`, `production`, `tabakpp-app`) are rejected by hard-coded security guards.
+- `--project <CONFIRMED_STAGING_PROJECT_ID>`: Mandatory. Must be on the hard-coded staging allowlist (`demo-takabpp-test`, `demo-tabakpp-test`, `tabakpp-staging`); every other ID, including production `tabakpp-ff036`, is rejected. Names matching production patterns (`prod`, `production`, `tabakpp-app`, `tabakpp-web`) are also refused as a second guard.
 - `--target-uid <UID>`: Mandatory. Target user account UID.
 - `--dry-run`: Default behavior. Generates the full four-metric reconciliation table without writing data.
 - `--live`: Executes the real cutover on staging. Prompts for explicit operator confirmation unless `--yes` is specified.

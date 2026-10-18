@@ -4,22 +4,29 @@ import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { Card } from '../Common';
 import { Target, Zap, Activity, Wallet, Award, TrendingUp, Sun, Loader2 } from 'lucide-react';
 
-const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, className, title }) => (
-  <div title={title} className={cn("flex flex-col items-center justify-center gap-1.5 px-3 py-4 md:px-5 md:py-5 transition-colors duration-300 group/metric", className)}>
+// Word values ("Within today's targets", "Apprentice") use a smaller, wrapping
+// type ramp so they never clip a column sized for short numbers.
+const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success, className, title }) => {
+  const isText = typeof value === 'string' && /[a-z]/i.test(value) && value.length > 6;
+  return (
+  <div title={title} className={cn("min-w-0 flex flex-col items-center justify-center gap-1.5 px-3 py-4 md:px-4 md:py-5 text-center transition-colors duration-300 group/metric", className)}>
     <div className="flex items-center gap-1.5">
       <Icon
         size={13}
         className={cn(accent ? 'text-accent' : warning ? 'text-amber-400' : 'text-neutral-400')}
         strokeWidth={2.75}
       />
-      <span className="text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400">
+      <span className="text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 whitespace-nowrap">
         {label}
       </span>
     </div>
 
     <span className={cn(
-      'text-2xl md:text-3xl lg:text-[2.35rem] font-black tracking-tighter tabular-nums leading-none',
-      accent ? 'text-accent' : warning ? 'text-amber-300' : 'text-white'
+      'max-w-full font-black tracking-tighter tabular-nums',
+      isText
+        ? 'text-base md:text-lg lg:text-xl leading-tight break-words'
+        : 'text-2xl md:text-3xl lg:text-[2rem] xl:text-[2.35rem] leading-none whitespace-nowrap',
+      accent ? 'text-accent' : warning ? 'text-amber-300' : success ? 'text-emerald-400' : 'text-white'
     )}>
       {value}
     </span>
@@ -30,7 +37,8 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, classNam
       </span>
     )}
   </div>
-);
+  );
+};
 
 /**
  * MetricBanner — status strip with End Day as an integrated footer action.
@@ -64,7 +72,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
 
   return (
     <Card className="overflow-hidden bg-bg-card p-0" noPadding>
-      <div className="grid grid-cols-2 lg:grid-cols-6 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
+      <div className="grid grid-cols-2 lg:grid-cols-7 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
         <MetricColumn
           icon={Target}
           label="Remaining"
@@ -78,6 +86,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           value={goalText}
           accent={m.goalStatus?.status === 'over'}
           warning={m.goalStatus?.status === 'at'}
+          success={m.goalStatus?.status === 'under'}
           title={
             m.goalStatus
               ? m.goalStatus.status === 'over'
