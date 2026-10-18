@@ -207,7 +207,7 @@ fun HistoryScreen(
                         ) {
                             MetricBlock(
                                 value = "${metrics?.streak ?: 0}",
-                                label = "days",
+                                label = if (metrics?.streak == 1) "day" else "days",
                                 subLabel = "STREAK",
                                 icon = Icons.Default.Whatshot,
                                 modifier = Modifier.weight(1f)
