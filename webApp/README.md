@@ -3,12 +3,12 @@
 React PWA companion to the Kotlin Multiplatform mobile app. Shares the same Firebase Auth + Firestore backend on the **Spark (free) plan** — no Cloud Functions required.
 
 <p align="center">
-  <img src="assets/screenshots/dashboard.png" width="260" alt="PWA tracker dashboard" />
+  <img src="../assets/screenshots/showcase/web-track.png" width="900" alt="PWA Track screen: tracker cards with cigarette gauges above today's metrics" />
 </p>
 <p align="center">
-  <img src="assets/screenshots/history.png" width="250" alt="PWA usage trends and lifetime financial insight" />
+  <img src="../assets/screenshots/showcase/web-history.png" width="440" alt="PWA History: usage trend chart, at-a-glance stats and session log" />
   &nbsp;
-  <img src="assets/screenshots/settings.png" width="250" alt="PWA settings — theming, density, and counter protocols" />
+  <img src="../assets/screenshots/showcase/web-settings.png" width="440" alt="PWA Settings: profile, accent colors and trackers" />
 </p>
 
 ## Features

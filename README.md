@@ -80,12 +80,14 @@ Most quit apps bury you in tips. **tabak++** stays on today's numbers.
   optional personal baseline, never against a goal, because those are different claims.
 - **Owner-only by construction.** Firestore Security Rules are the primary
   authorization boundary: default-deny, scoped to `users/{uid}`.
-- **Server-authoritative money (Option B).** Alongside legacy direct client writes,
-  production runs a trusted Cloud Functions boundary (`executeFinancialOperation`,
-  `migrateAccount`, `deleteAccountData`) on the Admin SDK. In this mode financial
-  state is reconciled atomically on the server across the four canonical ledger
-  metrics (`saved`, `wasted`, `baselineSaved`, `smokingUnits`), with strict count
-  ownership to prevent double counting and immutable historical snapshots.
+- **Spark today, server-authoritative money parked (Option B).** Production runs
+  on the Firebase Spark plan with direct client writes (`LEGACY` accounts). A
+  trusted Cloud Functions boundary (`executeFinancialOperation`, `migrateAccount`,
+  `deleteAccountData`) lives in [`functions/`](functions/) but is **not deployed**:
+  it needs Blaze. When enabled, it reconciles financial state atomically on the
+  server across the four canonical ledger metrics (`saved`, `wasted`,
+  `baselineSaved`, `smokingUnits`), with strict count ownership to prevent double
+  counting. The code is kept and tested in CI against the emulators.
 
 ## Stack
 
@@ -95,7 +97,7 @@ Two clients, one backend. Shared domain logic on Android lives in a Kotlin Multi
 |---|---|
 | **Android** | Kotlin 2.4 · Jetpack Compose (Compose Multiplatform UI) · GitLive Firebase |
 | **Web** | React 19 · Vite 8 · Tailwind CSS 4 · Firebase JS SDK · installable PWA |
-| **Backend** | Firebase Auth (email + Google) · Cloud Firestore · Cloud Functions (Option B) · App Check (advisory) |
+| **Backend** | Firebase Spark plan: Auth (email + Google) · Cloud Firestore · Hosting · App Check (advisory). Cloud Functions (Option B) written and tested, not deployed |
 | **Shared (KMP)** | Models, serializers, repositories, day-rollover / streak / spend math |
 | **Build** | Gradle 9.8 · AGP 9.4 · Java 17 bytecode · minSdk 26 · targetSdk 35 · compileSdk 37 |
 | **Toolchain** | Node 22.23.2 ([`.nvmrc`](.nvmrc)) · npm 10.9.8 (`packageManager`) |
@@ -120,7 +122,7 @@ flowchart TB
   subgraph firebase [Firebase]
     Auth["Auth<br/>email · Google"]
     FS["Firestore<br/>users/{uid}"]
-    CF["Cloud Functions<br/>financial ops · migration · account deletion"]
+    CF["Cloud Functions (Option B)<br/>not deployed · Blaze only"]
     AC["App Check"]
   end
 
@@ -131,9 +133,9 @@ flowchart TB
   Repos --> Auth
   Repos --> FS
   Android --> AC
-  Web -->|"callable"| CF
-  Repos -->|"callable"| CF
-  CF -->|"Admin SDK"| FS
+  Web -. "callable (Option B accounts)" .-> CF
+  Repos -. "callable (Option B accounts)" .-> CF
+  CF -. "Admin SDK" .-> FS
 
   FS --> Profile["profile · settings"]
   FS --> Configs["configs/* (target, baseline, price)"]
@@ -221,8 +223,10 @@ In short:
   `aggregateCredit` remain owner-writable within rule-validated shape and bounds (see [Data model](#data-model)).
 - Every write path is covered by rules tests that run against the real Firestore emulator in CI.
 
-Increments are written directly by the client and are not re-verified by Cloud Functions,
+On Spark, increments are written directly by the client and no server re-checks them,
 so Firestore Security Rules are the primary boundary protecting cross-user isolation.
+A determined owner can still edit their own numbers. Stats are for self-tracking,
+not an audit trail.
 
 Engineering controls behind those claims:
 
@@ -296,7 +300,13 @@ adding `google-services.json`, or install a signed APK from
 | Unit + coverage | `npm run coverage` | Web app behavior and domain math |
 | Cross-platform contract | `npm run test:contract` | Semantic parity between the JS and Kotlin ports of the domain math |
 | Firestore rules | `npm run test:rules` | Real authorization rules, executed against the Firestore emulator |
+| PWA offline + freshness | `npm run test:pwa` (after `npm run build`) | Offline navigation and deploy freshness of the production build |
+| Kotlin unit | `./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest` | KMP domain math, repositories, view models, Compose UI (includes the Kotlin side of the contract fixtures) |
+| Cloud Functions | `cd functions && npm test` | Option B financial math and input validation |
+| Functions integration | see the `functions` job in [`ci.yml`](.github/workflows/ci.yml) | Option B callables end-to-end against the Auth/Firestore/Functions emulators |
 | Android instrumentation | `./gradlew :androidApp:connectedDebugAndroidTest` | Android/KMP behavior against a real emulator |
+
+The `npm run …` commands run from `webApp/`.
 
 The contract fixtures in [`shared-tests/`](shared-tests/) are the important one:
 the JS and Kotlin domain implementations are hand-mirrored rather than code-shared,
@@ -319,12 +329,14 @@ tabakpp/
 ├── composeApp/        Compose Multiplatform UI shared across targets
 ├── androidApp/        Android application module
 ├── iosApp/            iOS shell — intentionally a non-release "unsupported" gate
+├── functions/         Option B Cloud Functions (written and CI-tested, not deployed)
 ├── shared-tests/      Cross-platform domain contract fixtures (JS ⇄ Kotlin)
+├── docs/              Financial semantics, migration/recovery, release-hardening notes
 ├── assets/screenshots/ README showcase images and per-theme captures
-├── scripts/           Android screenshot capture + showcase builder (web: webApp/scripts)
-├── .github/           Workflows, action-pin validator, release notes
+├── scripts/           Android screenshot capture, showcase builder, staging migration CLI (web: webApp/scripts)
+├── .github/           Workflows, CI guard scripts, release notes
 │   ├── workflows/     ci.yml · android-integration.yml · release-android.yml
-│   └── scripts/       validate-action-pins.py · test-validate-action-pins.py · validate-lockfile.py
+│   └── scripts/       action-pin, lockfile and release-safety validators (+ self-tests)
 ├── firestore.rules    Authorization + validation (the primary security boundary)
 ├── firebase.json      Emulator / hosting configuration
 └── build.gradle.kts · settings.gradle.kts · gradle/libs.versions.toml
