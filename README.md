@@ -1,22 +1,20 @@
-<p align="center">
-  <a href="https://tabakpp.web.app"><strong>tabakpp.web.app</strong></a>
-</p>
-
 <h1 align="center">tabak++</h1>
 
 <p align="center">
-  A private, cross-platform tobacco-use tracker that keeps the numbers that matter
-  today — how many, how much left, how much spent, and whether you're still on streak.
+  A private, cross-platform tobacco-use tracker built around the numbers that matter today:<br/>
+  <strong>how many, how much left, how much spent, and whether you're still on streak.</strong>
 </p>
 
 <p align="center">
   <a href="https://tabakpp.web.app"><strong>Open the web app</strong></a>
   ·
-  <a href="https://github.com/shareef01/tabakpp/releases/latest"><strong>Download Android APK</strong></a>
+  <a href="https://github.com/shareef01/tabakpp/releases/latest"><strong>Download the Android APK</strong></a>
   ·
   <a href="SETUP_GUIDE.md">Setup</a>
   ·
   <a href="PRIVACY.md">Privacy</a>
+  ·
+  <a href="SECURITY.md">Security</a>
 </p>
 
 <p align="center">
@@ -25,43 +23,50 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
 </p>
 
+<p align="center">
+  <img src="assets/screenshots/showcase/web-track.png" width="900" alt="tabak++ web app: two tracker cards with cigarette gauges above a strip of today's metrics" />
+</p>
+
 ---
+
+**Contents:** [Features](#features) · [Screenshots](#screenshots) · [Design principles](#design-principles) · [Stack](#stack) · [Data model](#data-model) · [Security & privacy](#security--privacy) · [Getting started](#getting-started) · [Testing](#testing)
+
+## Features
+
+Most quit apps bury you in tips. **tabak++** stays on today's numbers.
+
+- **One-tap logging** with undo, and a gauge per tracker that burns down as you use your daily allowance
+- **Daily limits that always land on the right day**, even if the app was closed over midnight (see [Data model](#data-model))
+- **Spend, savings and streaks at a glance.** Life-expectancy figures are population-level estimates and are labeled that way, not presented as personal facts.
+- **Optional baseline tracking**, so reduction and money saved are measured against your own history, not against today's target
+- **Editable history** with backfill for days you forgot to log
+- **Realtime sync** between the web PWA and the Android app
+- **Bookmarkable routes** (`/track`, `/history`, `/settings`), accent colors and layout density you can tune
 
 ## Screenshots
 
-### Web
+<table>
+  <tr>
+    <th>Web: History</th>
+    <th>Web: Settings</th>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/showcase/web-history.png" alt="Web history: usage trend chart, at-a-glance stats and session log" /></td>
+    <td><img src="assets/screenshots/showcase/web-settings.png" alt="Web settings: profile, accent colors and trackers" /></td>
+  </tr>
+</table>
 
 <p align="center">
-  <img src="assets/screenshots/showcase/web-track.png" width="900" alt="Web — Track" />
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/showcase/web-history.png" width="440" alt="Web — History" />
-</p>
-
-### Android
-
-<p align="center">
-  <img src="assets/screenshots/showcase/android-track.png" width="220" alt="Android — Track" />
+  <img src="assets/screenshots/showcase/android-track.png" width="240" alt="Android Track screen with cigarette gauge and today's metrics" />
   &nbsp;
-  <img src="assets/screenshots/showcase/android-history.png" width="220" alt="Android — History" />
+  <img src="assets/screenshots/showcase/android-history.png" width="240" alt="Android History screen with usage chart and stat cards" />
+  &nbsp;
+  <img src="assets/screenshots/showcase/android-settings.png" width="240" alt="Android Settings screen with accent colors and card density" />
+  <br/>
+  <sub>Android: Track · History · Settings</sub>
 </p>
 
-## Why it exists
-
-Most quit apps bury you in tips. **tabak++** stays on the numbers that matter today: how many, how much left, how much spent, and whether you’re still on streak.
-
-- One-tap logging with undo  
-- Daily limits that always land on the right day — see [Data model](#data-model)  
-- Optional baseline tracking, so reduction and money saved are measured against
-  your own history, not today's target  
-- Spend / save / streaks at a glance, with population-level life-expectancy
-  estimates clearly labeled as estimates, not personal facts  
-- History you can edit and backfill  
-- Bookmarkable `/track`, `/history`, `/settings` routes  
-- Accent colors and layout density you can tune  
-
-## Highlights
+## Design principles
 
 - **One product, two clients.** An installable web PWA and a native Android app
   share one Firebase backend, so counters stay in sync across devices in realtime.
@@ -69,19 +74,18 @@ Most quit apps bury you in tips. **tabak++** stays on the numbers that matter to
   tracking date decided when it is written, so a rollover is never lost because
   the app was closed or a timer didn't fire.
 - **History you can't silently rewrite.** Once a day is closed, its stamped
-  tracker snapshot is frozen by Firestore rules — repricing a tracker today can
+  tracker snapshot is frozen by Firestore rules. Repricing a tracker today can
   never rewrite what an old day cost.
 - **Baseline ≠ target.** Money saved and reduction are measured against an
   optional personal baseline, never against a goal, because those are different claims.
 - **Owner-only by construction.** Firestore Security Rules are the primary
   authorization boundary: default-deny, scoped to `users/{uid}`.
-- **Trusted Option-B Architecture.** In addition to legacy direct client writes,
-  the production architecture incorporates a trusted Firebase Cloud Functions
-  boundary (`executeFinancialOperation`, `migrateAccount`, `deleteAccountData`)
-  operating with the Admin SDK. In Option B mode, financial state is server-authoritative,
-  guaranteeing atomic four-metric canonical ledger reconciliation (`saved`, `wasted`,
-  `baselineSaved`, `smokingUnits`), strict count ownership preventing double counting,
-  and immutable historical snapshots.
+- **Server-authoritative money (Option B).** Alongside legacy direct client writes,
+  production runs a trusted Cloud Functions boundary (`executeFinancialOperation`,
+  `migrateAccount`, `deleteAccountData`) on the Admin SDK. In this mode financial
+  state is reconciled atomically on the server across the four canonical ledger
+  metrics (`saved`, `wasted`, `baselineSaved`, `smokingUnits`), with strict count
+  ownership to prevent double counting and immutable historical snapshots.
 
 ## Stack
 
@@ -116,6 +120,7 @@ flowchart TB
   subgraph firebase [Firebase]
     Auth["Auth<br/>email · Google"]
     FS["Firestore<br/>users/{uid}"]
+    CF["Cloud Functions<br/>financial ops · migration · account deletion"]
     AC["App Check"]
   end
 
@@ -126,6 +131,9 @@ flowchart TB
   Repos --> Auth
   Repos --> FS
   Android --> AC
+  Web -->|"callable"| CF
+  Repos -->|"callable"| CF
+  CF -->|"Admin SDK"| FS
 
   FS --> Profile["profile · settings"]
   FS --> Configs["configs/* (target, baseline, price)"]
@@ -158,21 +166,25 @@ users/{uid}/meta/profile           avatar — kept off the profile document so
                                     along on every counter tap
 ```
 
-Historical days are anchored at the rules level once closed: the `validDayUpdate`
-helper in [`firestore.rules`](firestore.rules) rejects any write that would change a
-closed day's stamped `trackerSnapshots`, so raising or lowering a tracker's target today
-can never retroactively change whether an old day was a success, and repricing
-a tracker can never rewrite what an old day cost. `status`, `date`,
-`foldedIntoLifetime`, and `legacyMigrationApplied` are also one-way or
-identity-locked on closed days. `counts` and `aggregateCredit` remain writable
-by the authenticated owner — the Firestore rules validate shape and bounds but
-do not restrict writes to the application-layer `updateHistoricalDay` path.
-That application path additionally reconciles `lifetimeAggregates` on the user
-profile by the delta; a direct Firestore write can bypass that reconciliation.
-Money saved and reduction are always computed
-against a tracker's **baseline** (an optional, separate "previous average"
-field), never against its target — hitting a goal and reducing from a
-personal baseline are different claims and are never conflated.
+What the rules guarantee once a day is closed (see `validDayUpdate` in
+[`firestore.rules`](firestore.rules)):
+
+- **Frozen snapshot.** Any write that would change a closed day's stamped
+  `trackerSnapshots` is rejected. Changing a tracker's target today can never
+  retroactively change whether an old day was a success, and repricing a tracker
+  can never rewrite what an old day cost.
+- **Locked identity.** `status`, `date`, `foldedIntoLifetime` and
+  `legacyMigrationApplied` are one-way or identity-locked.
+- **Still editable by the owner.** `counts` and `aggregateCredit` stay writable
+  by the authenticated owner. The rules validate shape and bounds, but they do
+  not force writes through the application-layer `updateHistoricalDay` path.
+  That path also reconciles `lifetimeAggregates` on the profile by the delta, so
+  a direct Firestore write can bypass that reconciliation.
+
+Money saved and reduction are always computed against a tracker's **baseline**
+(an optional, separate "previous average" field), never against its target.
+Hitting a goal and reducing from a personal baseline are different claims and
+are never conflated.
 
 Accounts created before this schema keep working: a one-time, idempotent
 migration folds any leftover live counter state into the correct dated
@@ -180,7 +192,7 @@ document (using the same day-start-hour rule "End day" always used), and
 moves the avatar out of the profile document, the first time an updated
 client opens the account.
 
-## Security & Privacy
+## Security & privacy
 
 See [SECURITY.md](SECURITY.md) for the full threat model and
 [PRIVACY.md](PRIVACY.md) for data handling and retention.
@@ -201,7 +213,16 @@ flowchart LR
   AC["App Check<br/>integrated · not enforced"] -. advisory .-> Auth
 ```
 
-Owner-only access under `users/{uid}`. Settings updates cannot touch counters; counter/archive writes cannot touch identity or pricing; once a `days/{date}` document is closed, its stamped `trackerSnapshots` can never be rewritten (while `counts` and `aggregateCredit` remain writable by the authenticated owner — subject only to Firestore rule shape/bounds validation, and reconciled with `lifetimeAggregates` only when written through the application-layer `updateHistoricalDay` path). Every write path is covered by rules tests run against the real Firestore emulator in CI. As a client-side self-tracking app that uses no Cloud Functions to re-verify every increment, Firestore Security Rules are the primary authorization and validation boundary protecting cross-user isolation.
+In short:
+
+- Access is owner-only under `users/{uid}`, and everything else is denied by default.
+- Settings updates cannot touch counters, and counter/archive writes cannot touch identity or pricing.
+- A closed `days/{date}` document's `trackerSnapshots` can never be rewritten. Its `counts` and
+  `aggregateCredit` remain owner-writable within rule-validated shape and bounds (see [Data model](#data-model)).
+- Every write path is covered by rules tests that run against the real Firestore emulator in CI.
+
+Increments are written directly by the client and are not re-verified by Cloud Functions,
+so Firestore Security Rules are the primary boundary protecting cross-user isolation.
 
 Engineering controls behind those claims:
 
@@ -223,19 +244,19 @@ Enforcing becomes the right call once Android can attest for real — that means
 
 ## Platforms
 
-| | |
+| Platform | Status |
 |---|---|
 | **Android** | Native app (Kotlin · Compose Multiplatform) — install the latest APK from [GitHub Releases](https://github.com/shareef01/tabakpp/releases/latest) |
 | **Web** | Installable PWA at [tabakpp.web.app](https://tabakpp.web.app) |
 | **iOS** | Not a release target. The Compose shell is present but shows an explicit unsupported gate (see [SETUP_GUIDE.md](SETUP_GUIDE.md)) |
 
-## Getting Started
+## Getting started
 
 Full Firebase, signing, and App Check notes: **[SETUP_GUIDE.md](SETUP_GUIDE.md)**
 
 ### Prerequisites
 
-| | |
+| For | You need |
 |---|---|
 | **Web** | Node **22.23.2** ([`.nvmrc`](.nvmrc)) and npm **10.9.8** (pinned via `packageManager`) |
 | **Android** | JDK 17+ and Android Studio, plus `google-services.json` (see [SETUP_GUIDE.md](SETUP_GUIDE.md)) |
@@ -282,20 +303,14 @@ the JS and Kotlin domain implementations are hand-mirrored rather than code-shar
 so a shared set of semantic vectors is what catches drift between them. See
 [shared-tests/README.md](shared-tests/README.md).
 
+The rules suite boots a local Firestore emulator, so no live Firebase project is
+needed (`cd webApp && npm run test:rules`; requires the Firebase CLI).
+
 Android instrumentation runs in CI for every pull request and every push to
 `main`, and preserves emulator logs, logcat, and per-run test metadata as a
 downloadable artifact for each attempt — including failed ones.
 
-## Firebase / Local Emulator Development
-
-Firestore rules tests boot a local emulator, so no live project is needed:
-
-```bash
-cd webApp
-npm run test:rules
-```
-
-## Repository Structure
+## Repository structure
 
 ```
 tabakpp/
@@ -305,8 +320,8 @@ tabakpp/
 ├── androidApp/        Android application module
 ├── iosApp/            iOS shell — intentionally a non-release "unsupported" gate
 ├── shared-tests/      Cross-platform domain contract fixtures (JS ⇄ Kotlin)
-├── assets/screenshots/ Showcase and themed screenshots used by the README
-├── scripts/           Screenshot/demo tooling
+├── assets/screenshots/ README showcase images and per-theme captures
+├── scripts/           Android screenshot capture + showcase builder (web: webApp/scripts)
 ├── .github/           Workflows, action-pin validator, release notes
 │   ├── workflows/     ci.yml · android-integration.yml · release-android.yml
 │   └── scripts/       validate-action-pins.py · test-validate-action-pins.py · validate-lockfile.py
@@ -315,7 +330,7 @@ tabakpp/
 └── build.gradle.kts · settings.gradle.kts · gradle/libs.versions.toml
 ```
 
-## Development Notes
+## Development notes
 
 **Firestore gRPC dependency override.** `webApp/package.json` carries a scoped
 npm override pinning the Node-only `@grpc/grpc-js` dependency of
