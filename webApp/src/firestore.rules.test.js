@@ -751,17 +751,55 @@ describe('OPTION B / MIGRATING trusted-write lock (Phase 3)', () => {
     await assertSucceeds(batch.commit());
   });
 
+  // The full UserProfile shape as the Kotlin serializer emits it. The retired
+  // eco keys (ecoMode/retailPrice/retailQty/ryoPrice/ryoYield) were dropped
+  // from this fixture on purpose: Kotlin's UserProfile has never declared them
+  // and web ensureUserDocument never writes them, so create now rejects them.
+  const fullProfileShape = () => ({
+    name: 'Test User', accent: '#FF8800', widgetSize: 'MEDIUM', purchaseType: 'PACK',
+    unitPrice: 0.5, unitsPerPack: 20, pouchPrice: 5, estimatedYield: 30, dayStartHour: 4,
+    schemaVersion: 1,
+    lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 },
+    activeCounts: {},
+    createdAt: new Date(), updatedAt: new Date(),
+  });
+
   it('REGRESSION: authenticated LEGACY create of the full UserProfile shape is allowed', async () => {
     const db = testEnv.authenticatedContext('bob').firestore();
+    await assertSucceeds(setDoc(doc(db, 'users/bob'), fullProfileShape()));
+  });
+
+  it('REGRESSION: web ensureUserDocument create shape is allowed', async () => {
+    const db = testEnv.authenticatedContext('bob').firestore();
     await assertSucceeds(setDoc(doc(db, 'users/bob'), {
-      name: 'Test User', accent: '#FF8800', widgetSize: 'MEDIUM', purchaseType: 'PACK',
-      unitPrice: 0.5, unitsPerPack: 20, pouchPrice: 5, estimatedYield: 30, dayStartHour: 4,
-      ecoMode: false, retailPrice: 0, retailQty: 0, ryoPrice: 0, ryoYield: 0,
-      schemaVersion: 1,
+      name: '', accent: '#FF5F5F', widgetSize: 'MEDIUM', purchaseType: 'PACK',
+      unitPrice: 0.5, pouchPrice: 0, estimatedYield: 0, dayStartHour: 6,
       lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 },
-      activeCounts: {},
-      createdAt: new Date(), updatedAt: new Date(),
+      smokingUnitsMigrated: true, schemaVersion: 2,
     }));
+  });
+
+  describe('F-07: retired eco keys are rejected on profile create', () => {
+    for (const [key, value] of [
+      ['ecoMode', false], ['retailPrice', 0], ['retailQty', 0], ['ryoPrice', 0], ['ryoYield', 0],
+    ]) {
+      it(`rejects ${key} even with a zero/false value`, async () => {
+        const db = testEnv.authenticatedContext('bob').firestore();
+        await assertFails(setDoc(doc(db, 'users/bob'), { ...fullProfileShape(), [key]: value }));
+      });
+    }
+
+    it('rejects an unbounded payload smuggled in a retired key', async () => {
+      const db = testEnv.authenticatedContext('bob').firestore();
+      await assertFails(setDoc(doc(db, 'users/bob'), { ...fullProfileShape(), ecoMode: 'x'.repeat(500000) }));
+    });
+
+    it('rejects the old all-zero eco block that the previous fixture carried', async () => {
+      const db = testEnv.authenticatedContext('bob').firestore();
+      await assertFails(setDoc(doc(db, 'users/bob'), {
+        ...fullProfileShape(), ecoMode: false, retailPrice: 0, retailQty: 0, ryoPrice: 0, ryoYield: 0,
+      }));
+    });
   });
 
   it('REGRESSION: a ledger with an UNKNOWN extra key is still REJECTED', async () => {
