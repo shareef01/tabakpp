@@ -476,7 +476,13 @@ service cloud.firestore {
         && (!changed.hasAny(['avatar'])
           || !('avatar' in d)
           || d.avatar == null
-          || (d.avatar is string && d.avatar.size() <= 100000));
+          || (d.avatar is string && d.avatar.size() <= 100000))
+        // Retired eco keys are allowlisted in isSettingsOnlyUpdate only so
+        // clients can strip them (deleteField()); a changed one must be gone
+        // afterwards, so they cannot be used as unbounded free-form storage.
+        // Unchanged copies on older profiles stay untouched and do not block saves.
+        && !changed.intersection(['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'].toSet())
+          .hasAny(d.keys());
     }
 
     // Spark-safe defense (no Cloud Functions): settings writes cannot touch

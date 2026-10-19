@@ -251,6 +251,60 @@ describe('Firestore ownership and write paths', () => {
     }));
   });
 
+  describe('legacy eco fields are delete-only', () => {
+    const LEGACY_VALUES = {
+      ecoMode: true, retailPrice: 8, retailQty: 20, ryoPrice: 30, ryoYield: 60,
+    };
+
+    it('rejects writing a value to any legacy eco field', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice'), emptyProfile);
+      });
+      const db = testEnv.authenticatedContext('alice').firestore();
+      for (const [key, value] of Object.entries(LEGACY_VALUES)) {
+        await assertFails(updateDoc(doc(db, 'users/alice'), { [key]: value }));
+        await assertFails(updateDoc(doc(db, 'users/alice'), { name: 'Alice', [key]: 'x'.repeat(5000) }));
+      }
+    });
+
+    it('rejects overwriting a legacy eco field that already holds a value', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice'), { ...emptyProfile, ...LEGACY_VALUES });
+      });
+      const db = testEnv.authenticatedContext('alice').firestore();
+      await assertFails(updateDoc(doc(db, 'users/alice'), { retailPrice: 9 }));
+      // Deleting one key while rewriting another is still a write.
+      await assertFails(updateDoc(doc(db, 'users/alice'), {
+        ecoMode: deleteField(),
+        ryoYield: 61,
+      }));
+    });
+
+    it('allows deleting a single legacy eco field', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice'), { ...emptyProfile, ...LEGACY_VALUES });
+      });
+      const db = testEnv.authenticatedContext('alice').firestore();
+      await assertSucceeds(updateDoc(doc(db, 'users/alice'), { ryoPrice: deleteField() }));
+    });
+
+    it('keeps settings saves working on profiles that still hold legacy eco fields', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice'), { ...emptyProfile, ...LEGACY_VALUES });
+      });
+      const db = testEnv.authenticatedContext('alice').firestore();
+      // A client that does not strip them (e.g. an older build) leaves them unchanged.
+      await assertSucceeds(updateDoc(doc(db, 'users/alice'), {
+        name: 'Alice',
+        purchaseType: 'POUCH',
+        pouchPrice: 30,
+        estimatedYield: 60,
+        dayStartHour: 5,
+        updatedAt: new Date(),
+      }));
+    });
+  });
+
   it('refuses to let a settings write rewrite createdAt', async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), 'users/alice'), {

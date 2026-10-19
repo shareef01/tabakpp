@@ -12,6 +12,18 @@ updates:
         dependency-type: "production"
     open-pull-requests-limit: 3
 
+  # Cloud Functions dependencies (functions/package.json).
+  - package-ecosystem: "npm"
+    directory: "/functions"
+    schedule:
+      interval: "monthly"
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+      production-dependencies:
+        dependency-type: "production"
+    open-pull-requests-limit: 3
+
   # Kotlin/Android/Gradle dependencies (gradle/libs.versions.toml).
   - package-ecosystem: "gradle"
     directory: "/"

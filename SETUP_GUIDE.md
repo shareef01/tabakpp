@@ -413,7 +413,8 @@ Production builds register a service worker via `vite-plugin-pwa`:
 - `NetworkOnly` for Google/Firebase API hosts (never caches Auth/Firestore)
 - `NetworkFirst` for navigations so deploys win quickly
 
-Deploy hosting after `npm run build` from `webApp/`.
+Run `npm run build` in `webApp/`, then deploy hosting from the repository root
+(`firebase deploy --only hosting`); the root `firebase.json` serves `webApp/dist`.
 
 ---
 **Tip**: If you encounter a "Checksum mismatch" or Gradle errors, try deleting the `.gradle/` and `build/` directories and syncing again.
