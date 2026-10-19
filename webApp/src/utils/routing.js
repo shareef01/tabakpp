@@ -7,7 +7,7 @@
  * destinations and no nested/dynamic routes, so a full router would add
  * bundle weight and abstraction for no behavioral gain. Firebase Hosting's
  * existing SPA rewrite (`"source": "**" -> "/index.html"`, see
- * webApp/firebase.json) already serves index.html for any path, so direct
+ * the root firebase.json) already serves index.html for any path, so direct
  * navigation and refresh on `/history` or `/settings` require no hosting
  * config change — only client-side state needs to read the URL.
  */

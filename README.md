@@ -29,7 +29,7 @@
 
 ---
 
-**Contents:** [Features](#features) · [Screenshots](#screenshots) · [Design principles](#design-principles) · [Stack](#stack) · [Data model](#data-model) · [Security & privacy](#security--privacy) · [Getting started](#getting-started) · [Testing](#testing)
+**Contents:** [Features](#features) · [Screenshots](#screenshots) · [Design principles](#design-principles) · [Stack](#stack) · [Data model](#data-model) · [Security & privacy](#security--privacy) · [Getting started](#getting-started) · [Testing](#testing) · [Known limitations](#known-limitations)
 
 ## Features
 
@@ -302,6 +302,7 @@ adding `google-services.json`, or install a signed APK from
 | Firestore rules | `npm run test:rules` | Real authorization rules, executed against the Firestore emulator |
 | PWA offline + freshness | `npm run test:pwa` (after `npm run build`) | Offline navigation and deploy freshness of the production build |
 | Kotlin unit | `./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest` | KMP domain math, repositories, view models, Compose UI (includes the Kotlin side of the contract fixtures) |
+| Android app unit | `./gradlew :androidApp:testDebugUnitTest` | App Check provider selection guard (no debug provider in release builds) |
 | Cloud Functions | `cd functions && npm test` | Option B financial math and input validation |
 | Functions integration | see the `functions` job in [`ci.yml`](.github/workflows/ci.yml) | Option B callables end-to-end against the Auth/Firestore/Functions emulators |
 | Android instrumentation | `./gradlew :androidApp:connectedDebugAndroidTest` | Android/KMP behavior against a real emulator |
@@ -319,6 +320,18 @@ needed (`cd webApp && npm run test:rules`; requires the Firebase CLI).
 Android instrumentation runs in CI for every pull request and every push to
 `main`, and preserves emulator logs, logcat, and per-run test metadata as a
 downloadable artifact for each attempt — including failed ones.
+
+## Known limitations
+
+- **Logging needs a network connection** on both the web app and Android: counts are
+  written in Firestore transactions, which do not queue offline. The PWA shell still
+  opens offline.
+- **Up to 8 trackers** at once.
+- **Amounts are shown in euros.** There is no currency setting.
+- **Totals are client-computed and owner-editable.** On the Firebase Spark plan the
+  rules validate shape and ownership but cannot recompute spend/savings aggregates,
+  so an account owner can rewrite their own totals. The Option B Cloud Functions in
+  `functions/` move this to a trusted server but are not deployed.
 
 ## Repository structure
 
@@ -338,7 +351,7 @@ tabakpp/
 │   ├── workflows/     ci.yml · android-integration.yml · release-android.yml
 │   └── scripts/       action-pin, lockfile and release-safety validators (+ self-tests)
 ├── firestore.rules    Authorization + validation (the primary security boundary)
-├── firebase.json      Emulator / hosting configuration
+├── firebase.json      Rules, hosting, emulator and functions config (run firebase from the repo root)
 └── build.gradle.kts · settings.gradle.kts · gradle/libs.versions.toml
 ```
 
