@@ -11,10 +11,22 @@ const config = (id, name, type, limit, price, order) => ({
   isFinanciallyTracked: true, isPrimaryTracked: true,
 });
 
-const configs = [
+const allConfigs = [
   config('cig', 'Cigarettes', 'CIGARETTE', 20, 0.55, 0),
   config('ryo', 'Roll-ups', 'RYO_ROLL', 8, 0.22, 1),
 ];
+
+// `?trackers=1` previews the single-tracker layout.
+const demoTrackerCount = () => {
+  if (typeof window === 'undefined') return allConfigs.length;
+  try {
+    const n = Number(new URLSearchParams(window.location.search).get('trackers'));
+    if (Number.isInteger(n) && n >= 1) return Math.min(n, allConfigs.length);
+  } catch { /* ignore */ }
+  return allConfigs.length;
+};
+
+const configs = allConfigs.slice(0, demoTrackerCount());
 
 const activeCounts = { cig: 7, ryo: 3 };
 const dayDocs = [];
