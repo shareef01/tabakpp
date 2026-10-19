@@ -74,8 +74,9 @@ jobs:
       # :shared:testDebugUnitTest — the same shared-tests/domain-fixtures.json
       # the web job checks below, so this job fails on its own if the Kotlin
       # port drifts from the JS one (item 11).
+      # :androidApp:testDebugUnitTest holds the App Check provider guard tests.
       - name: Test shared code, Compose UI, and build Android
-        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
 
   web-and-rules:
     runs-on: ubuntu-latest
@@ -146,6 +147,9 @@ jobs:
       - name: Install locked function dependencies
         working-directory: functions
         run: npm ci
+      - name: Audit function production dependencies
+        working-directory: functions
+        run: npm audit --omit=dev --audit-level=high
       - name: Function unit tests
         working-directory: functions
         run: npm test
