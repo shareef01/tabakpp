@@ -9,7 +9,8 @@
  * + lifetime + receipt atomically — and that a direct client write is denied.
  */
 import assert from 'node:assert/strict';
-import fbAdmin from 'firebase-admin';
+import { initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 
 process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
@@ -197,8 +198,8 @@ const main = async () => {
 
   // 7) Phase-8 migration: legacy folded €15 → canonical €5, applied ONCE (never €20)
   const adminUser = await (await fetch(AUTH, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ returnSecureToken: true }) })).json();
-  fbAdmin.initializeApp({ projectId: PROJECT });
-  await fbAdmin.auth().setCustomUserClaims(adminUser.localId, { admin: true });
+  initializeApp({ projectId: PROJECT });
+  await getAuth().setCustomUserClaims(adminUser.localId, { admin: true });
   // Exchange the refresh token for a fresh idToken carrying the new claim.
   const tokRes = await (await fetch('http://127.0.0.1:9099/securetoken.googleapis.com/v1/token?key=fake', {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
