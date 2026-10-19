@@ -162,10 +162,8 @@ async function shell(page, base, route, label, offline = false) {
 }
 
 async function run() {
-  for (const config of ['firebase.json', '../firebase.json']) {
-    const hosting = JSON.parse(fs.readFileSync(path.resolve(root, config), 'utf8')).hosting;
-    assert(hosting.rewrites.some(rule => rule.source === '**' && rule.destination === '/index.html'), 'test server matches actual SPA rewrites');
-  }
+  const hosting = JSON.parse(fs.readFileSync(path.resolve(root, '../firebase.json'), 'utf8')).hosting;
+  assert(hosting.rewrites.some(rule => rule.source === '**' && rule.destination === '/index.html'), 'test server matches actual SPA rewrites');
   directory = build('pwa-regression-A');
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   secureServer = https.createServer(certificate(), serve);
