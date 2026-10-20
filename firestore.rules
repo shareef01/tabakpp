@@ -403,6 +403,12 @@ service cloud.firestore {
         && (!('schemaVersion' in d) || (isWholeNumber(d.schemaVersion) && d.schemaVersion >= 0 && d.schemaVersion <= 1000))
         && (!('migratingLegacyDate' in d) || d.migratingLegacyDate == null || isDateString(d.migratingLegacyDate))
         && (!('avatar' in d) || d.avatar == null || (d.avatar is string && d.avatar.size() <= 100000))
+        // Retired eco keys (F-07) are never accepted on create. No client has
+        // ever sent them here: the Kotlin UserProfile has never declared them
+        // (absent since the initial snapshot) and web ensureUserDocument writes
+        // a fixed shape without them. They stay in validUserKeys only so the
+        // settings update path can deleteField() them off older documents.
+        && !d.keys().hasAny(['ecoMode', 'retailPrice', 'retailQty', 'ryoPrice', 'ryoYield'])
         // A client-created profile always starts LEGACY. MIGRATING/OPTION_B are
         // set only by the trusted migration function (Admin SDK); accepting them
         // here would let a client self-assign a mode — together with deleting
