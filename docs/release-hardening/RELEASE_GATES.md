@@ -14,7 +14,7 @@ PASS · OPEN · BLOCKED · APPROVAL_REQUIRED · PARKED
 | UI/UX preserved, no unapproved visual change | **PASS (so far)** | no UI files touched this engagement |
 | Security: authorization intact, no weakening | **PASS** | rules 108/108; `financialLocked`, ownership, ledger/receipt validation, 50-entry contract all intact |
 | Dependency vulnerabilities | **OPEN (low risk)** | Web prod 0; Web dev 19H/1C/14M (build tooling only); functions prod 8 moderate (GCP SDK transitives) — no high/critical shipped |
-| Production Firebase | **PARTIAL (rules only)** | Firestore rules deployed to `tabakpp-ff036` (LEGACY-preserving; OPTION_B/MIGRATING gates live but inert). Functions/hosting NOT deployed; no migration; no Option-B activation |
+| Production Firebase | **PARTIAL (rules + hosting)** | Firestore rules and LEGACY hosting (ledger off) deployed to `tabakpp-ff036` from `main` 32312ff on 2026-10-20 (OPTION_B/MIGRATING gates live but inert). Functions NOT deployed; no migration; no Option-B activation |
 | Production actions (deploy/migrate/activate Option B) | **PARKED (owner decision, 2026-10-11)** | The project stays on the Spark plan. Option-B needs Cloud Functions (Blaze), so it stays dormant: the code is kept, tested in CI against the emulators, and inert in production |
 
 ## Previously-fail-closed Option-B gaps — RESOLVED (2026)
@@ -45,12 +45,14 @@ Production **Option-B is intentionally disabled**: `tabakpp-ff036` is on the Fir
 Spark, no account can be migrated to OPTION_B and no account can mutate canonical financial
 state, so production runs as the original **LEGACY** app, which is fully functional.
 
-Deployed to production:
+Deployed to production (latest: `main` 32312ff, 2026-10-20, `firebase deploy --only hosting,firestore:rules`):
 - ✅ Firestore Security Rules (LEGACY-preserving; the `financialLocked` gate is live but inert
   because no account is MIGRATING/OPTION_B).
+- ✅ Hosting at https://tabakpp.web.app — LEGACY build with `VITE_OPTION_B_LEDGER` unset (ledger off).
+  Previous hosting release: 2026-10-12.
 
 Not deployed (Spark):
-- ❌ Cloud Functions · ❌ Hosting (re-deploy) · ❌ Migration / Option-B activation.
+- ❌ Cloud Functions · ❌ Ledger-enabled hosting · ❌ Migration / Option-B activation.
 
 Activation path (only if the project ever moves to Blaze — not planned): deploy functions → deploy hosting (ledger
 enabled) → run `migrateAccount` per account with an operator credential.
