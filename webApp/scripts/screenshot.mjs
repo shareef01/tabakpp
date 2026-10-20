@@ -114,7 +114,6 @@ async function run() {
         await page.screenshot({ path: dest, fullPage: false });
         if (copyShowcase) {
           copySafe(dest, path.join(showcaseDir, `web-${shot.name}.png`));
-          copySafe(dest, path.join(outDir, file));
         }
         console.log(`  captured ${file}`);
       }
