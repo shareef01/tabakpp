@@ -4,12 +4,34 @@ import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { Card } from '../Common';
 import { Target, Zap, Activity, Wallet, Award, TrendingUp, Sun, Loader2 } from 'lucide-react';
 
-// Word values ("Within today's targets", "Apprentice") use a smaller, wrapping
-// type ramp so they never clip a column sized for short numbers.
+// Approximate advance width of a glyph in the display face, in em. Used to pick
+// a font size that lets a value fit its tile instead of clipping or wrapping
+// to three lines.
+const GLYPH_EM = 0.62;
+
+// Font size for a tile value, scaled to the tile's own width (cqi) so the same
+// value fits a narrow phone column and a wide desktop one. Single tokens
+// ("13", "3,85 €", "Apprentice") stay on one line at display size; sentences
+// ("Within today's targets") use a smaller ramp and may balance onto two lines.
+// A currency amount ("3,85 €") is a single token, not a sentence.
+const isSentence = (text) => text.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length > 1;
+
+const valueFontSize = (value) => {
+  const text = String(value ?? '').trim();
+  if (isSentence(text)) {
+    const words = text.split(/\s+/);
+    const longest = Math.max(...words.map((w) => w.length));
+    const fit = Math.min(100 / (longest * GLYPH_EM), 200 / (text.length * GLYPH_EM));
+    return `clamp(0.95rem, min(10cqi, ${fit.toFixed(2)}cqi), 1.6rem)`;
+  }
+  const fit = 100 / (Math.max(text.length, 4) * GLYPH_EM);
+  return `clamp(1.25rem, min(24cqi, ${fit.toFixed(2)}cqi), 2.35rem)`;
+};
+
 const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success, className, title }) => {
-  const isText = typeof value === 'string' && /[a-z]/i.test(value) && value.length > 6;
+  const sentence = isSentence(String(value ?? '').trim());
   return (
-  <div title={title} className={cn("min-w-0 flex flex-col items-center justify-center gap-1.5 px-3 py-4 md:px-4 md:py-5 text-center transition-colors duration-300 group/metric", className)}>
+  <div title={title} className={cn("@container min-w-0 flex flex-col items-center justify-center gap-1.5 px-3 py-4 md:px-4 md:py-5 bg-bg-card text-center transition-colors duration-300 group/metric", className)}>
     <div className="flex items-center gap-1.5">
       <Icon
         size={13}
@@ -21,13 +43,14 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success,
       </span>
     </div>
 
-    <span className={cn(
-      'max-w-full font-black tracking-tighter tabular-nums',
-      isText
-        ? 'text-base md:text-lg lg:text-xl leading-tight break-words'
-        : 'text-2xl md:text-3xl lg:text-[2rem] xl:text-[2.35rem] leading-none whitespace-nowrap',
-      accent ? 'text-accent' : warning ? 'text-amber-300' : success ? 'text-emerald-400' : 'text-white'
-    )}>
+    <span
+      style={{ fontSize: valueFontSize(value) }}
+      className={cn(
+        'max-w-full font-black tracking-tighter tabular-nums',
+        sentence ? 'leading-tight text-balance break-words' : 'leading-none whitespace-nowrap',
+        accent ? 'text-accent' : warning ? 'text-amber-300' : success ? 'text-emerald-400' : 'text-white'
+      )}
+    >
       {value}
     </span>
 
@@ -72,7 +95,13 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
 
   return (
     <Card className="overflow-hidden bg-bg-card p-0" noPadding>
-      <div className="grid grid-cols-2 lg:grid-cols-7 divide-x divide-y lg:divide-y-0 divide-white/[0.05]">
+      {/*
+        Two columns on phones (Daily Use moves to the bar below); four on
+        tablet and up, where the goal sentence spans two columns so the seven
+        tiles fill two even rows. The 1px gap over a tinted background draws
+        the dividers without stray borders on wrapped rows.
+      */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-white/[0.05]">
         <MetricColumn
           icon={Target}
           label="Remaining"
@@ -87,6 +116,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           accent={m.goalStatus?.status === 'over'}
           warning={m.goalStatus?.status === 'at'}
           success={m.goalStatus?.status === 'under'}
+          className="md:col-span-2"
           title={
             m.goalStatus
               ? m.goalStatus.status === 'over'
@@ -129,13 +159,13 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           value={`${quotaPct}%`}
           sub={quotaSub}
           warning={quotaWarning}
-          className="hidden lg:flex lg:flex-col"
+          className="hidden md:flex"
         />
       </div>
 
       <div className="flex items-center gap-3 px-4 md:px-5 py-2.5">
         <span className={cn(
-          'shrink-0 text-[10px] font-black uppercase tracking-[0.14em] tabular-nums lg:hidden',
+          'shrink-0 text-[10px] font-black uppercase tracking-[0.14em] tabular-nums md:hidden',
           isOver ? 'text-danger' : quotaWarning ? 'text-amber-400' : 'text-neutral-400'
         )}>
           {quotaPct}%
