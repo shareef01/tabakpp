@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
-    "firebase": "^12.19.0",
+    "firebase": "^13.0.0",
     "framer-motion": "^14.3.0",
     "heic2any": "^0.0.4",
     "lucide-react": "^1.57.0",
@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@firebase/rules-unit-testing": "^5.0.2",
+    "@firebase/rules-unit-testing": "^6.0.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

@@ -100,7 +100,7 @@ Two clients, one backend. Shared domain logic on Android lives in a Kotlin Multi
 | **Backend** | Firebase Spark plan: Auth (email + Google) · Cloud Firestore · Hosting · App Check (advisory). Cloud Functions (Option B) written and tested, not deployed |
 | **Shared (KMP)** | Models, serializers, repositories, day-rollover / streak / spend math |
 | **Build** | Gradle 9.8 · AGP 9.4 · Java 17 bytecode · minSdk 26 · targetSdk 36 · compileSdk 37 |
-| **Toolchain** | Node 22.23.2 ([`.nvmrc`](.nvmrc)) · npm 10.9.8 (`packageManager`) |
+| **Toolchain** | Node 24.21.0 ([`.nvmrc`](.nvmrc)) · npm 10.9.8 (`packageManager`) |
 
 Realtime listeners keep Track / History / Settings in sync across devices. Firestore rules gate reads and writes to the signed-in owner.
 
@@ -262,7 +262,7 @@ Full Firebase, signing, and App Check notes: **[SETUP_GUIDE.md](SETUP_GUIDE.md)*
 
 | For | You need |
 |---|---|
-| **Web** | Node **22.23.2** ([`.nvmrc`](.nvmrc)) and npm **10.9.8** (pinned via `packageManager`) |
+| **Web** | Node **24.21.0** ([`.nvmrc`](.nvmrc)) and npm **10.9.8** (pinned via `packageManager`) |
 | **Android** | JDK 17+ and Android Studio, plus `google-services.json` (see [SETUP_GUIDE.md](SETUP_GUIDE.md)) |
 | **Firebase tooling** | [Firebase CLI](https://firebase.google.com/docs/cli) — only needed for the local Firestore emulator / rules tests |
 

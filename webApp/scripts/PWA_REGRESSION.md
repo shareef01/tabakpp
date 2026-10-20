@@ -1,6 +1,6 @@
 # Production PWA navigation regression
 
-Run `npm run test:pwa` after `npm ci`, using Node 22.23.2/npm 10.9.8 and
+Run `npm run test:pwa` after `npm ci`, using Node 24.21.0/npm 10.9.8 and
 an installed Chromium (`PUPPETEER_EXECUTABLE_PATH` can select it). General CI
 runs this gate with its preinstalled Chrome; no additional browser dependency
 or browser download is required.
