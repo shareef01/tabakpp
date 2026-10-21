@@ -5,6 +5,9 @@
   "hosting": {
     "site": "tabakpp",
     "public": "webApp/dist",
+    "predeploy": [
+      "node webApp/scripts/check-dist-config.mjs"
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
