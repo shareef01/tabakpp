@@ -58,25 +58,21 @@ fun HistoricalInsightsContent(
     ledgers: List<DailyFinancialRecord> = emptyList(),
     modifier: Modifier = Modifier
 ) {
-    val (completedMonths, currentMonthMtd) = SmokingCalculator.aggregateMonthlyData(
+    val (allMonths, currentMonthMtd) = SmokingCalculator.aggregateMonthlyData(
         logs = logs,
         dayDocs = dayDocs,
         trackingDay = trackingDay,
         activeCounts = activeCounts,
         ledgers = ledgers
     )
-
-    val trend = if (completedMonths.isNotEmpty()) {
-        SmokingCalculator.calculateTrend(
-            currentAvg = completedMonths.first().avgUnitsPerTrackedDay,
-            previousAvg = completedMonths.getOrNull(1)?.avgUnitsPerTrackedDay ?: 0.0
-        )
-    } else {
-        SmokingCalculator.calculateTrend(0.0, 0.0)
-    }
+    // aggregateMonthlyData's month list starts with the current month-to-date.
+    // The chart and month list show complete months only (MTD has its own
+    // card), and the trend never compares a partial month (web parity).
+    val completedMonths = allMonths.filter { !it.isCurrentMonth }
+    val trend = SmokingCalculator.monthlyTrend(completedMonths)
 
     val accentColor = LocalAccentColor.current
-    val pct = trend.percentChange
+    val pct = trend?.percentChange
 
     val directionColor = when {
         pct == null -> TextMuted
@@ -111,18 +107,27 @@ fun HistoricalInsightsContent(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                trend.text,
-                                style = TabakTypography.labelLarge,
-                                color = directionColor,
-                                fontWeight = FontWeight.Black
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                "${trend.previous} → ${trend.current} units/day",
-                                style = TabakTypography.bodySmall,
-                                color = TextMuted
-                            )
+                            if (trend == null) {
+                                Text(
+                                    "More tracking data is needed for a comparison.",
+                                    style = TabakTypography.bodySmall,
+                                    color = TextMuted
+                                )
+                            } else {
+                                Text(
+                                    trend.text,
+                                    style = TabakTypography.labelLarge,
+                                    color = directionColor,
+                                    fontWeight = FontWeight.Black
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "${SmokingCalculator.formatUnitsPerDay(trend.previous)} → " +
+                                        "${SmokingCalculator.formatUnitsPerDay(trend.current)} units/day",
+                                    style = TabakTypography.bodySmall,
+                                    color = TextMuted
+                                )
+                            }
                         }
                         if (pct != null) {
                             Icon(
@@ -182,7 +187,7 @@ fun HistoricalInsightsContent(
                                 modifier = Modifier.weight(1f)
                             )
                             InsightMetricBlock(
-                                value = SmokingCalculator.formatCurrency(mtd.units.toDouble()),
+                                value = "${mtd.units}",
                                 label = "units",
                                 subLabel = "CONSUMED",
                                 icon = Icons.Rounded.TrendingUp,

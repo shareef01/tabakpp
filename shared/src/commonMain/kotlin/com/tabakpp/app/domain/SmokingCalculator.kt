@@ -1149,6 +1149,25 @@ object SmokingCalculator {
     }
 
     /**
+     * Month-over-month trend for Insights, from the two most recent COMPLETE
+     * months. The current month-to-date is never compared: a partial month is
+     * not comparable to a full one. With fewer than two complete months there
+     * is nothing to compare, so this returns null and callers show "more data
+     * needed" instead of a misleading "increased from zero".
+     */
+    fun monthlyTrend(months: List<MonthSummary>): TrendResult? {
+        val complete = months.filter { !it.isCurrentMonth }.sortedByDescending { it.month }
+        if (complete.size < 2) return null
+        return calculateTrend(complete[0].avgUnitsPerTrackedDay, complete[1].avgUnitsPerTrackedDay)
+    }
+
+    /** Units per day with one decimal, rounded half-up (the web shows `toFixed(1)`). */
+    fun formatUnitsPerDay(value: Double): String {
+        val tenths = kotlin.math.floor(max(0.0, value) * 10 + 0.5).toLong()
+        return "${tenths / 10}.${tenths % 10}"
+    }
+
+    /**
      * Aggregate daily tracking data into monthly summaries for historical insights.
      *
      * Manual and legacy records remain additive. For the open current day, active
