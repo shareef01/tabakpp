@@ -182,6 +182,14 @@ What the rules guarantee once a day is closed (see `validDayUpdate` in
   not force writes through the application-layer `updateHistoricalDay` path.
   That path also reconciles `lifetimeAggregates` on the profile by the delta, so
   a direct Firestore write can bypass that reconciliation.
+- **Taps still count after closing.** Closing a day (with "Close Tracking Day",
+  or automatically by another device whose clock or time zone is ahead) does not
+  stop logging it. A +/− on a closed day updates its `counts` and
+  `aggregateCredit` from the frozen snapshot and moves `lifetimeAggregates` by
+  the same delta. A tracker with no snapshot that day can't be added this way,
+  because the snapshot is frozen; log it with a manual entry in History instead.
+  This applies to the current Spark (`LEGACY`) path; the undeployed Option B
+  callable still rejects closed days.
 
 Money saved and reduction are always computed against a tracker's **baseline**
 (an optional, separate "previous average" field), never against its target.
