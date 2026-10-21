@@ -119,3 +119,63 @@ describe('MetricBanner — canonical OPTION_B financial rendering (Task B)', () 
     expect(screen.queryByText(/NaN/)).toBeNull();
   });
 });
+
+describe('MetricBanner — mobile layout hierarchy and responsive ordering', () => {
+  it('applies mobile-first ordering classes to ensure balanced cards at narrow widths', () => {
+    render(
+      <MetricBanner
+        m={makeMetrics({
+          count: 5,
+          limit: 15,
+          spentToday: 3.5,
+          todayAvailable: true,
+          goalStatus: { status: 'under', belowTarget: 10, aboveTarget: 0, overTrackers: 0, atTrackers: 0, underTrackers: 1, totalTrackers: 1 },
+        })}
+        onEndDay={vi.fn()}
+      />
+    );
+
+    // Remaining card has order-1
+    const remainingEl = screen.getByText('Remaining').closest('div[class*="order-1"]');
+    expect(remainingEl).toBeTruthy();
+    expect(remainingEl.className).toContain('order-1');
+
+    // Spent Today card has order-2
+    const spentEl = screen.getByText('Spent Today').closest('div[class*="order-2"]');
+    expect(spentEl).toBeTruthy();
+    expect(spentEl.className).toContain('order-2');
+
+    // Goal Status card has order-3 on mobile and col-span-2
+    const goalEl = screen.getByText("TODAY'S GOAL").closest('div[class*="order-3"]');
+    expect(goalEl).toBeTruthy();
+    expect(goalEl.className).toContain('order-3');
+    expect(goalEl.className).toContain('col-span-2');
+  });
+
+  it('maintains clear visual hierarchy between primary counts and secondary badges', () => {
+    render(
+      <MetricBanner
+        m={makeMetrics({
+          count: 8,
+          limit: 20,
+          spentToday: 5.2,
+          todayAvailable: true,
+          streak: 5,
+          trackingStreak: 10,
+        })}
+        onEndDay={vi.fn()}
+      />
+    );
+
+    // Primary hero metric: Remaining (20 - 8 = 12)
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('Remaining')).toBeInTheDocument();
+
+    // Primary budget metric: Spent Today
+    expect(screen.getByText('5,20 €')).toBeInTheDocument();
+
+    // Secondary tracking metrics
+    expect(screen.getByText('Goal Streak')).toBeInTheDocument();
+    expect(screen.getByText('Tracking')).toBeInTheDocument();
+  });
+});

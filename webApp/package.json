@@ -47,6 +47,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "@vitest/coverage-v8": "^5.0.5",
     "autoprefixer": "^10.6.1",
+    "axe-core": "^4.14.0",
     "eslint": "^10.13.0",
     "firebase-tools": "^15.34.0",
     "globals": "^17.13.0",

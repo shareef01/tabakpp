@@ -120,5 +120,20 @@ describe('ProtocolFormOverlay', () => {
       );
       expect(screen.getByLabelText(/baseline \(before/i)).toHaveValue(25);
     });
+
+    it('dismisses modal on Escape key press', () => {
+      const onClose = vi.fn();
+      render(
+        <ProtocolFormOverlay
+          isOpen
+          onClose={onClose}
+          onApply={vi.fn()}
+          title="Configure Counter"
+        />
+      );
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
   });
 });
