@@ -28,48 +28,73 @@ const valueFontSize = (value) => {
   return `clamp(1.25rem, min(24cqi, ${fit.toFixed(2)}cqi), 2.35rem)`;
 };
 
-const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success, className, title }) => {
+const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success, className, title, isPrimary = false }) => {
   const sentence = isSentence(String(value ?? '').trim());
   return (
-  <div title={title} className={cn("@container min-w-0 flex flex-col items-center justify-center gap-1.5 px-3 py-4 md:px-4 md:py-5 bg-bg-card text-center transition-colors duration-300 group/metric", className)}>
-    <div className="flex items-center gap-1.5">
-      <Icon
-        size={13}
-        className={cn(accent ? 'text-accent' : warning ? 'text-amber-400' : 'text-neutral-400')}
-        strokeWidth={2.75}
-      />
-      <span className="text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 whitespace-nowrap">
-        {label}
-      </span>
-    </div>
-
-    <span
-      style={{ fontSize: valueFontSize(value) }}
+    <div
+      title={title}
       className={cn(
-        'max-w-full font-black tracking-tighter tabular-nums',
-        sentence ? 'leading-tight text-balance break-words' : 'leading-none whitespace-nowrap',
-        accent ? 'text-accent' : warning ? 'text-amber-300' : success ? 'text-emerald-400' : 'text-white'
+        "@container min-w-0 flex flex-col items-center justify-center gap-1 px-3 py-3.5 md:px-4 md:py-4.5 bg-bg-card text-center transition-colors duration-200 group/metric",
+        isPrimary && "bg-bg-card/90",
+        className
       )}
     >
-      {value}
-    </span>
+      <div className="flex items-center gap-1.5 max-w-full">
+        <Icon
+          size={isPrimary ? 14 : 12}
+          className={cn(
+            'shrink-0',
+            accent ? 'text-accent' : warning ? 'text-amber-400' : success ? 'text-emerald-400' : 'text-neutral-400'
+          )}
+          strokeWidth={2.5}
+          aria-hidden="true"
+        />
+        <span className={cn(
+          "font-bold uppercase tracking-wider text-neutral-400 whitespace-nowrap truncate",
+          isPrimary ? "text-[11px]" : "text-[10px]"
+        )}>
+          {label}
+        </span>
+      </div>
 
-    {sub && (
-      <span className="text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400">
-        {sub}
+      <span
+        style={{ fontSize: isPrimary ? valueFontSize(value) : `clamp(1.1rem, 16cqi, 1.8rem)` }}
+        className={cn(
+          'max-w-full font-black tracking-tight tabular-nums',
+          sentence ? 'leading-tight text-balance break-words' : 'leading-none whitespace-nowrap',
+          accent ? 'text-accent' : warning ? 'text-amber-300' : success ? 'text-emerald-400' : 'text-white'
+        )}
+      >
+        {value}
       </span>
-    )}
-  </div>
+
+      {sub && (
+        <span className={cn(
+          "font-semibold text-neutral-400/90 leading-none truncate max-w-full",
+          isPrimary ? "text-[11px] uppercase tracking-wider" : "text-[10px]"
+        )}>
+          {sub}
+        </span>
+      )}
+    </div>
   );
 };
 
 /**
  * MetricBanner — status strip with End Day as an integrated footer action.
  *
- * Quota status uses the same zero-target-safe three-state logic as
- * TrackerCard (items 4/5): a target of 0 never renders as a meaningless 0%,
- * and "at" is a distinct (amber) state from "over" (red) rather than both
- * being lumped into one "over limit" flag.
+ * Information Hierarchy:
+ * Tier 1 (Primary Tracking):
+ * - Recorded Today: how much was recorded today
+ * - Remaining: how much remains against daily target
+ * - Today's Goal: whether within, at, or above target
+ * - Spent Today: financial cost recorded today
+ *
+ * Tier 2 (Supporting Consistency):
+ * - Goal Streak: consecutive days within target
+ * - Tracking Streak: consecutive days active
+ * - Engagement: consistency XP & tier
+ * - Daily Use: percentage quota utilization
  */
 export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
   const { status, aboveTarget } = SmokingCalculator.getLimitStatus(m.count || 0, m.limit || 0);
@@ -81,8 +106,6 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
   const quotaWarning = isOver || isAtLimit || progress >= 0.8;
 
   // Today's aggregate goal state — per-tracker worst state, neutral copy (item 5).
-  // Tracker-count semantics: "N tracker(s) above target" not pooled deltas.
-  // "Within today's targets" covers both "all at" and "mixed at+under" states.
   const gs = m.goalStatus;
   let goalText = 'No target';
   if (gs) {
@@ -93,21 +116,44 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
     }
   }
 
+  const remainingUnits = Math.max(0, (m.limit || 0) - (m.count || 0));
+
   return (
-    <Card className="overflow-hidden bg-bg-card p-0" noPadding>
-      {/*
-        Two columns on phones (Daily Use moves to the bar below); four on
-        tablet and up, where the goal sentence spans two columns so the seven
-        tiles fill two even rows. The 1px gap over a tinted background draws
-        the dividers without stray borders on wrapped rows.
-      */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-white/[0.05]">
+    <Card className="overflow-hidden bg-bg-card p-0 border border-white/[0.08]" noPadding>
+      {/* SECTION HEADER: Live Status & Quota */}
+      <div className="flex items-center justify-between px-4 md:px-6 py-2.5 bg-white/[0.02] border-b border-white/[0.06]">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+          <span className="text-[11px] font-bold text-neutral-300 uppercase tracking-wider">
+            Today's Overview
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn(
+            'text-[11px] font-bold tabular-nums',
+            isOver ? 'text-danger' : quotaWarning ? 'text-amber-400' : 'text-neutral-300'
+          )}>
+            {m.count || 0} / {m.limit || 0} units
+          </span>
+          <span className={cn(
+            'text-[10px] font-bold px-1.5 py-0.5 rounded-sm ring-1 ring-inset',
+            isOver ? 'bg-rose-500/10 text-rose-400 ring-rose-500/20' : isAtLimit ? 'bg-amber-500/10 text-amber-300 ring-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 ring-emerald-500/20'
+          )}>
+            {quotaPct}% quota
+          </span>
+        </div>
+      </div>
+
+      {/* TIER 1: PRIMARY TRACKING METRICS */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-white/[0.06]">
         <MetricColumn
           icon={Target}
           label="Remaining"
-          value={Math.max(0, (m.limit || 0) - (m.count || 0))}
+          value={remainingUnits}
           sub="Units"
           accent
+          isPrimary
+          className="order-1 md:order-1"
         />
         <MetricColumn
           icon={Target}
@@ -116,7 +162,8 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           accent={m.goalStatus?.status === 'over'}
           warning={m.goalStatus?.status === 'at'}
           success={m.goalStatus?.status === 'under'}
-          className="md:col-span-2"
+          className="order-3 col-span-2 md:order-2 md:col-span-2"
+          isPrimary
           title={
             m.goalStatus
               ? m.goalStatus.status === 'over'
@@ -131,7 +178,13 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           value={m.todayAvailable === false || m.todayUnresolved?.spent ? '—' : SmokingCalculator.formatCurrency(m.spentToday || 0)}
           sub={m.todayAvailable === false ? 'Unavailable' : m.todayUnresolved?.spent ? 'Unresolved' : 'Cost'}
           warning={m.todayAvailable !== false && !m.todayUnresolved?.spent && (m.spentToday || 0) > 0}
+          isPrimary
+          className="order-2 md:order-3"
         />
+      </div>
+
+      {/* TIER 2: SECONDARY BEHAVIORAL CONSISTENCY METRICS */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-white/[0.04] border-t border-white/[0.06]">
         <MetricColumn
           icon={Zap}
           label="Goal Streak"
@@ -159,19 +212,19 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           value={`${quotaPct}%`}
           sub={quotaSub}
           warning={quotaWarning}
-          className="hidden md:flex"
         />
       </div>
 
-      <div className="flex items-center gap-3 px-4 md:px-5 py-2.5">
+      {/* VISUAL QUOTA PROGRESS BAR */}
+      <div className="flex items-center gap-3 px-4 md:px-5 py-2.5 bg-black/30 border-t border-white/[0.04]">
         <span className={cn(
-          'shrink-0 text-[10px] font-black uppercase tracking-[0.14em] tabular-nums md:hidden',
+          'shrink-0 text-[11px] font-bold tabular-nums',
           isOver ? 'text-danger' : quotaWarning ? 'text-amber-400' : 'text-neutral-400'
         )}>
           {quotaPct}%
         </span>
         <div
-          className="h-1 flex-1 rounded-full bg-white/[0.06] overflow-hidden"
+          className="h-1.5 flex-1 rounded-full bg-white/[0.08] overflow-hidden"
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
@@ -188,21 +241,25 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
         </div>
       </div>
 
+      {/* CLOSE TRACKING DAY FOOTER ACTION */}
       {m.hasOpenSession && (
         <button
           type="button"
           onClick={onEndDay}
           disabled={isEnding}
           aria-label="Close tracking day"
-          className="group w-full h-11 flex items-center justify-center gap-2.5 border-t border-amber-500/15 bg-amber-500/[0.05] hover:bg-amber-500/[0.09] transition-colors duration-300 disabled:opacity-40"
+          className="group w-full h-12 flex items-center justify-center gap-2.5 border-t border-white/[0.08] bg-white/[0.02] hover:bg-amber-500/[0.08] hover:border-amber-500/20 transition-all duration-200 disabled:opacity-40 outline-hidden focus-visible:ring-2 focus-visible:ring-amber-400"
         >
           {isEnding ? (
             <Loader2 className="animate-spin text-amber-400" size={16} />
           ) : (
-            <Sun className="text-amber-400 group-hover:rotate-90 transition-transform duration-700" size={16} />
+            <Sun className="text-amber-400 group-hover:rotate-45 transition-transform duration-500" size={16} />
           )}
-          <span className="text-[10px] font-black uppercase tracking-[0.24em] text-amber-100/85">
-            {isEnding ? 'Closing…' : 'Close Tracking Day'}
+          <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-300 group-hover:text-amber-200 transition-colors">
+            {isEnding ? 'Closing session…' : 'Close tracking day'}
+          </span>
+          <span className="hidden sm:inline text-[11px] text-neutral-400 font-normal">
+            (saves milestone · you can keep logging)
           </span>
         </button>
       )}

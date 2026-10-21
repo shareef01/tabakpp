@@ -22,8 +22,6 @@ export const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message, confi
       await Promise.resolve(onConfirm?.());
       onClose?.();
     } catch (e) {
-      // Keep the modal open so the user can retry; the parent's error banner
-      // (e.g. registryError from useRegistry) surfaces the failure.
       console.error('[ConfirmModal] onConfirm failed', e);
     } finally {
       setBusy(false);
@@ -55,35 +53,38 @@ export const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message, confi
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 16 }}
             transition={{ type: 'spring', damping: 30, stiffness: 450 }}
-            className="custom-scrollbar relative w-full max-w-[400px] z-10000 max-h-[min(92dvh,92vh)] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-0"
+            className="custom-scrollbar relative w-full max-w-[420px] z-10000 max-h-[min(92dvh,92vh)] overflow-y-auto pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-0"
           >
-            <Card className={cn("p-10 border-white/10 shadow-[0_40px_100px_rgba(0,0,0,0.9)] overflow-hidden bg-[#111111]", danger && "bg-red-950/20")}>
-              <div className="flex flex-col items-center text-center space-y-8">
+            <Card className={cn(
+              "p-8 md:p-10 border-white/10 shadow-[0_40px_100px_rgba(0,0,0,0.9)] overflow-hidden bg-[#111111]",
+              danger ? "bg-red-950/20 border-red-500/25" : "bg-[#141416] border-white/10"
+            )}>
+              <div className="flex flex-col items-center text-center space-y-6">
                 <div className={cn(
                   "flex items-center justify-center p-5 rounded-[28px] shadow-inner border",
-                  danger ? 'bg-danger/10 text-danger border-danger/20' : 'bg-accent/10 text-accent border-accent/20'
+                  danger ? 'bg-danger/10 text-danger border-danger/20' : 'bg-amber-400/10 text-amber-300 border-amber-400/20'
                 )}>
-                  <AlertCircle size={40} strokeWidth={2.5} />
+                  <AlertCircle size={36} strokeWidth={2.5} />
                 </div>
 
-                <div className="space-y-3">
-                  <h3 id={titleId} className="text-2xl font-black uppercase tracking-tight text-white leading-none">
+                <div className="space-y-2.5">
+                  <h3 id={titleId} className="text-2xl font-black tracking-tight text-white leading-tight">
                     {title}
                   </h3>
-                  <p id={descId} className="px-4 text-xs font-bold uppercase tracking-[0.16em] text-neutral-400 leading-relaxed">
+                  <p id={descId} className="px-2 text-sm font-medium text-neutral-300 leading-relaxed">
                     {message}
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 w-full pt-4">
-                  <Button variant="secondary" onClick={onClose} disabled={busy} className="h-14 text-xs border-white/5 shadow-none">
+                <div className="grid grid-cols-2 gap-3.5 w-full pt-2">
+                  <Button variant="secondary" onClick={onClose} disabled={busy} className="h-13 text-xs border-white/10 shadow-none">
                     Cancel
                   </Button>
                   <Button
                     variant={danger ? 'danger' : 'primary'}
                     onClick={handleConfirm}
                     disabled={busy}
-                    className="h-14 text-xs shadow-lg"
+                    className="h-13 text-xs shadow-lg"
                   >
                     {confirmText}
                   </Button>

@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -247,14 +248,26 @@ fun BottomNavPillDock(navController: NavHostController, accentColor: Color) {
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        // Icon-only dock to match the web BottomNav (label lives in
-                        // the accessible name; active icon is slightly larger).
-                        Icon(
-                            imageVector = screen.icon,
-                            contentDescription = screen.label,
-                            tint = if (selected) accentColor else TextMuted,
-                            modifier = Modifier.size(if (selected) 24.dp else 22.dp)
-                        )
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = screen.icon,
+                                contentDescription = null,
+                                tint = if (selected) accentColor else TextMuted,
+                                modifier = Modifier.size(if (selected) 22.dp else 20.dp)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = screen.label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium
+                                ),
+                                color = if (selected) Color.White else TextMuted
+                            )
+                        }
                     }
                 }
             }

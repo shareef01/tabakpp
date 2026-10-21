@@ -86,14 +86,14 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
 
       <div className={cn('flex flex-col w-full', density.stack)}>
         <div className="w-full flex items-center justify-between gap-2">
-          <span className="text-[11px] md:text-xs font-black uppercase tracking-[0.16em] text-white/85 truncate">
+          <span className="text-xs md:text-sm font-bold text-white tracking-tight truncate">
             {config?.name || 'Tracker'}
           </span>
-          <div className="shrink-0 flex items-center gap-1">
+          <div className="shrink-0 flex items-center gap-1.5">
             {isPending && (
-              <Loader2 size={12} className="animate-spin text-accent" strokeWidth={2.5} aria-label="Syncing…" />
+              <Loader2 size={13} className="animate-spin text-accent" strokeWidth={2.5} aria-label="Syncing…" title="Syncing with cloud" />
             )}
-            <span className="text-[10px] md:text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400 px-2 py-0.5 rounded-sm bg-white/[0.04] border border-white/[0.06]">
+            <span className="text-[11px] font-semibold text-neutral-300 px-2 py-0.5 rounded-md bg-white/[0.05] border border-white/[0.08] tabular-nums">
               {limit}/day
             </span>
           </div>
@@ -117,7 +117,8 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
             onClick={decAction}
             aria-label={`Decrease ${config?.name || 'counter'}`}
             className={cn(
-              'rounded-full flex items-center justify-center transition-transform duration-75 active:scale-90 border box-border aspect-square shrink-0 touch-manipulation',
+              'rounded-full flex items-center justify-center transition-transform duration-75 active:scale-90 border box-border aspect-square shrink-0 touch-manipulation outline-hidden',
+              'focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card',
               density.btn,
               tone.dec
             )}
@@ -126,14 +127,14 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
           </button>
 
           <div className="flex flex-col items-center justify-center px-0.5 min-w-[4.25rem] md:min-w-[5rem] gap-1">
-            <span className={cn('font-black tabular-nums leading-none tracking-tighter transition-colors duration-150', density.count, tone.count)}>
+            <span className={cn('font-black tabular-nums leading-none tracking-tight transition-colors duration-150', density.count, tone.count)}>
               {count}
             </span>
             <div className="flex items-center gap-1.5">
-              <span className={cn('text-[10px] md:text-[11px] font-black uppercase tracking-[0.14em] leading-none', tone.label)}>
+              <span className={cn('text-[11px] font-semibold leading-none', tone.label)}>
                 {statusLabel}
               </span>
-              <div className="w-8 md:w-10 h-[2px] rounded-full bg-white/[0.08] overflow-hidden shrink-0">
+              <div className="w-8 md:w-10 h-[3px] rounded-full bg-white/[0.1] overflow-hidden shrink-0">
                 <div
                   className={cn('h-full rounded-full transition-all duration-200', tone.bar)}
                   style={{ width: `${Math.round(progress * 100)}%` }}
@@ -141,7 +142,7 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
               </div>
             </div>
             {reduction && (
-              <span className="text-[9px] font-bold uppercase tracking-[0.1em] text-accent/80 leading-none">
+              <span className="text-[10px] font-semibold text-accent/90 leading-none">
                 {reduction.avoided} under baseline
               </span>
             )}
@@ -152,7 +153,8 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
             onClick={incAction}
             aria-label={`Increase ${config?.name || 'counter'}`}
             className={cn(
-              'rounded-full flex items-center justify-center transition-transform duration-75 active:scale-95 box-border aspect-square shrink-0 touch-manipulation',
+              'rounded-full flex items-center justify-center transition-transform duration-75 active:scale-95 box-border aspect-square shrink-0 touch-manipulation outline-hidden',
+              'focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card',
               density.btn,
               tone.inc,
               status === 'under' ? 'text-black' : status === 'at' ? 'text-black' : 'text-white'

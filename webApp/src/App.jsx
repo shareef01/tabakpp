@@ -452,6 +452,7 @@ const AppContent = () => {
                   )}
                   {activeTab === 'settings' && (
                     <motion.div key="settings" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+                      <h1 className="sr-only">Settings</h1>
                       {!isHydrated || isRegistryLoading ? <DashboardSkeleton widgetSize={settings.widgetSize} /> : <SettingsScreen
                         configs={configs}
                         user={user}
@@ -535,8 +536,9 @@ const AppContent = () => {
                 } catch { /* registryError set in hook */ }
               }}
               title="Close tracking day?"
-              message="Your counts are already saved. Closing adds today to your lifetime totals now. You can keep logging today and edit this day in History."
+              message="Your counts are already safely saved. Closing finalizes today's milestone to your lifetime totals. You can continue logging anytime today, and edit any day in History."
               confirmText="Close Day"
+              danger={false}
             />
             <ConfirmModal
               isOpen={!!protocolToDelete}

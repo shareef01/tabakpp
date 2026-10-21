@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { X, Plus, Minus, Database } from 'lucide-react';
+import { X, Plus, Minus, Check } from 'lucide-react';
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { UI, Button, Input } from '../Common';
 import { cn } from '../../utils/utils';
@@ -70,16 +70,21 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
         style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 24)}px)` }}
         role="dialog"
         aria-modal="true"
-        aria-label="Historical entry"
+        aria-label="Add past day"
       >
         <div className="flex justify-between items-center mb-10">
           <div className="space-y-1">
             <h3 className={UI.LABEL}>Historical Entry</h3>
             <span className="text-2xl font-black tracking-tighter uppercase text-white block leading-none">
-              Backfill Log
+              Add Past Day
             </span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close historical entry form" className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-400 hover:text-white transition-all">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close historical entry form"
+            className="min-w-11 min-h-11 w-11 h-11 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-400 hover:text-white outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all touch-manipulation"
+          >
             <X size={20} strokeWidth={3} />
           </button>
         </div>
@@ -117,7 +122,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
                   type="button"
                   onClick={() => adjust(c.id, -1)}
                   aria-label={`Decrease ${c.name}`}
-                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-neutral-900/50 flex items-center justify-center text-neutral-400 hover:text-white transition-all active:scale-90 touch-manipulation"
+                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-neutral-900/50 flex items-center justify-center text-neutral-400 hover:text-white outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all active:scale-90 touch-manipulation"
                 >
                   <Minus size={16} strokeWidth={3} />
                 </button>
@@ -128,7 +133,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
                   type="button"
                   onClick={() => adjust(c.id, 1)}
                   aria-label={`Increase ${c.name}`}
-                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-accent text-black flex items-center justify-center transition-all active:scale-90 touch-manipulation"
+                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-accent text-black flex items-center justify-center outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all active:scale-90 touch-manipulation"
                 >
                   <Plus size={16} strokeWidth={4} />
                 </button>
@@ -148,8 +153,8 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
             disabled={!isDateValid || saving}
             className="w-full h-18 text-[11px]"
           >
-            <Database size={16} className="mr-3" strokeWidth={3} />
-            {saving ? 'Logging…' : 'Log Entry'}
+            <Check size={16} className="mr-3" strokeWidth={3} />
+            {saving ? 'Saving…' : 'Save Entry'}
           </Button>
         </div>
       </motion.div>
