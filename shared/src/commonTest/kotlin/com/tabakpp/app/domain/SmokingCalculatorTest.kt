@@ -970,4 +970,44 @@ class SmokingCalculatorTest {
         assertEquals(true, hasEmptyOther.hasTrackingEvidence)
         assertEquals(false, hasEmptyOther.showGettingStarted)
     }
+
+    private fun monthLog(date: String, units: Double) = LogEntry(
+        id = "${date}_M", logDate = date, counts = mapOf("cig" to units), origin = "MANUAL_ENTRY"
+    )
+
+    @Test
+    fun monthlyTrend_needsTwoCompleteMonths_andIgnoresCurrentMonth() {
+        // Only the current month: no trend (previously "increased from zero").
+        val (onlyCurrent, _) = SmokingCalculator.aggregateMonthlyData(listOf(monthLog("2026-09-10", 30.0)), emptyList(), "2026-09-15")
+        assertEquals(null, SmokingCalculator.monthlyTrend(onlyCurrent))
+
+        // One complete month plus the current month: still no trend.
+        val (oneComplete, _) = SmokingCalculator.aggregateMonthlyData(
+            listOf(monthLog("2026-09-10", 30.0), monthLog("2026-08-10", 10.0)), emptyList(), "2026-09-15"
+        )
+        assertEquals(null, SmokingCalculator.monthlyTrend(oneComplete))
+    }
+
+    @Test
+    fun monthlyTrend_comparesTheTwoNewestCompleteMonths() {
+        // The 30-unit month-to-date must not take part in the comparison.
+        val (months, _) = SmokingCalculator.aggregateMonthlyData(
+            listOf(monthLog("2026-09-10", 30.0), monthLog("2026-08-10", 10.0), monthLog("2026-07-10", 5.0)),
+            emptyList(), "2026-09-15"
+        )
+        val trend = SmokingCalculator.monthlyTrend(months)!!
+        assertEquals(10.0, trend.current, 1e-9)
+        assertEquals(5.0, trend.previous, 1e-9)
+        assertEquals("up", trend.direction)
+        assertEquals("100% more units", trend.text)
+    }
+
+    @Test
+    fun formatUnitsPerDay_usesOneDecimalHalfUp() {
+        assertEquals("3.3", SmokingCalculator.formatUnitsPerDay(10.0 / 3.0))
+        assertEquals("2.3", SmokingCalculator.formatUnitsPerDay(2.25))
+        assertEquals("12.0", SmokingCalculator.formatUnitsPerDay(12.0))
+        assertEquals("0.0", SmokingCalculator.formatUnitsPerDay(0.0))
+        assertEquals("0.0", SmokingCalculator.formatUnitsPerDay(-1.0))
+    }
 }
