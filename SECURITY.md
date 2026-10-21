@@ -11,11 +11,13 @@ Only the latest release of `tabak++` is actively maintained and supported with s
 
 ## Threat Model & Security Architecture
 
-`tabak++` operates under a dual-mode security architecture designed for complete financial integrity and owner data isolation:
+**What is deployed today:** production runs on the Firebase Spark plan in **Legacy mode** only. Clients write directly to Firestore, and Firestore Security Rules are the security boundary. Rules guarantee owner isolation and bound the shape of every write, but they cannot recompute money, so an account owner can rewrite their own totals. The Option B Cloud Functions described below are written and tested in CI but **not deployed**, and App Check is integrated but **not enforced**.
+
+`tabak++` is built for two financial modes. Owner data isolation holds in both; server-verified financial integrity exists only in Option B:
 
 1. **Dual Financial Modes (Legacy vs Option B)**:
    - **Legacy Mode**: Operates on direct client Firestore writes constrained by Firestore Security Rules (`firestore.rules`). On closed days, rules freeze `trackerSnapshots`, `status`, `date`, `foldedIntoLifetime`, and `legacyMigrationApplied`.
-   - **Option B Trusted Mode**: Financial mutations for migrated accounts route exclusively through trusted server-side Cloud Functions (`executeFinancialOperation`). Firestore Security Rules enforce a strict `financialLocked` fence denying all direct client writes to financial collections (`days`, `logs`, `dailyFinancials`, `financialOperations`, and profile `lifetimeAggregates`).
+   - **Option B Trusted Mode (not deployed)**: Financial mutations for migrated accounts route exclusively through trusted server-side Cloud Functions (`executeFinancialOperation`). Firestore Security Rules enforce a strict `financialLocked` fence denying all direct client writes to financial collections (`days`, `logs`, `dailyFinancials`, `financialOperations`, and profile `lifetimeAggregates`).
 2. **Zero-Trust Client Boundary & Admin Transactions**:
    - In Option B, client-supplied financial totals and price derivations are never trusted. All calculations (`calculateDailyFinancials`, `computeDayCredit`) execute server-side in Cloud Functions using immutable historical snapshots and server-verified profile configurations.
    - Operations execute in atomic Firestore transactions that atomically persist the source document mutation, canonical daily ledger, updated lifetime aggregates, and an idempotency receipt (`trustedOperations/{operationId}`).
@@ -31,7 +33,7 @@ Only the latest release of `tabak++` is actively maintained and supported with s
 6. **Public Firebase Configuration**:
    - In accordance with standard Firebase architecture, client identifiers (`apiKey`, `projectId`, `appId`) embedded in web or mobile binaries are identifiers, not secrets. Security is enforced through Firestore Security Rules, verified Firebase Authentication tokens, and Cloud Function callable context.
 7. **App Check**:
-   - Web uses reCAPTCHA Enterprise (`ReCaptchaEnterpriseProvider`). Android release builds use `PlayIntegrityAppCheckProviderFactory`. App Check reduces abuse and automated traffic; it complements but does not replace Firestore rules and server validation.
+   - Web uses reCAPTCHA Enterprise (`ReCaptchaEnterpriseProvider`). Android release builds use `PlayIntegrityAppCheckProviderFactory`. Enforcement is currently **off** for Firestore, Authentication and Storage, so App Check is advisory and not part of the security boundary. Once enforced it reduces abuse and automated traffic; it complements but does not replace Firestore rules and server validation.
 
 ## Reporting a Vulnerability
 

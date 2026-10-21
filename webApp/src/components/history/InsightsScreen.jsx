@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { TrendingUp, TrendingDown, Minus, Calendar, BarChart3 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
@@ -6,11 +6,6 @@ import {
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
-
-const HISTORY_SUBVIEWS = [
-  { key: 'velocity', label: 'Usage trend', title: 'Usage trend' },
-  { key: 'insights', label: 'Insights', title: 'History insights' },
-];
 
 const RECENT_PERIOD_DAYS = 7;
 
@@ -78,8 +73,6 @@ const TrendBadge = ({ trend }) => {
 export const InsightsScreen = React.memo(({
   logs = [], dayDocs = [], m, today, unitPrice = 0.5, _canonical = null, ledgers = []
 }) => {
-  const [subView, setSubView] = useState('insights');
-
   const insightData = useMemo(
     () => SmokingCalculator.aggregateMonthlyData(
       logs, dayDocs, today, m.activeCounts || {}, unitPrice, 6, ledgers
@@ -87,43 +80,20 @@ export const InsightsScreen = React.memo(({
     [logs, dayDocs, today, m.activeCounts, unitPrice, ledgers]
   );
 
-  // Recent trend: last 7 tracked days vs previous 7
+  // Recent trend: the 7 calendar days before today vs the 7 before those
+  // (today's partial day excluded; untracked days are not counted as zero).
   const recentTrend = useMemo(() => {
-    const merged = SmokingCalculator.mergeDayDocsIntoLogged(
-      SmokingCalculator.aggregateLoggedCounts(logs), dayDocs
-    );
-    const trackedDates = Object.keys(merged).sort().reverse();
-    if (trackedDates.length < 2) {
+    const result = SmokingCalculator.recentWindowTrend(logs, dayDocs, today, RECENT_PERIOD_DAYS);
+    if (!result) {
       return { currentAvg: null, previousAvg: null, trend: null, label: 'More tracking data is needed for a comparison.' };
     }
-
-    // Get last 7 tracked days (current period) and previous 7 (before that)
-    const currentPeriod = trackedDates.slice(0, RECENT_PERIOD_DAYS);
-    const previousPeriod = trackedDates.slice(RECENT_PERIOD_DAYS, RECENT_PERIOD_DAYS * 2);
-
-    const currentAvg = currentPeriod.reduce((sum, date) =>
-      sum + Object.values(merged[date] || {}).reduce((s, v) => s + Math.max(0, v || 0), 0), 0) / currentPeriod.length;
-    const previousAvg = previousPeriod.length > 0
-      ? previousPeriod.reduce((sum, date) =>
-        sum + Object.values(merged[date] || {}).reduce((s, v) => s + Math.max(0, v || 0), 0), 0) / previousPeriod.length
-      : null;
-
-    if (previousAvg == null) {
-      return {
-        currentAvg,
-        previousAvg: null,
-        trend: null,
-        label: 'More tracking data is needed for a comparison.',
-      };
-    }
-
-    const trend = SmokingCalculator.calculateTrend(currentAvg, previousAvg);
-    return { currentAvg, previousAvg, trend, label: trend.text };
+    return { ...result, label: result.trend.text };
   }, [logs, dayDocs, today]);
 
-  // Chart data for monthly consumption
+  // Chart data for monthly consumption. completedMonths is newest-first (the
+  // detail list keeps that order); the chart reads oldest -> newest, left to right.
   const monthlyChartData = useMemo(() => {
-    return insightData.completedMonths.map((month) => ({
+    return [...insightData.completedMonths].reverse().map((month) => ({
       monthKey: month.month,
       monthLabel: month.label,
       units: month.units,
@@ -165,7 +135,6 @@ export const InsightsScreen = React.memo(({
 
   return (
     <div className="space-y-5 md:space-y-7">
-      {/* Header with sub-view selector */}
       <div className="flex items-end justify-between gap-4 mb-3 md:mb-4">
         <div className="flex flex-col gap-1 min-w-0">
           <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Insights</span>
@@ -173,41 +142,8 @@ export const InsightsScreen = React.memo(({
             History insights
           </h2>
         </div>
-        <div
-          role="group"
-          aria-label="History sub-view"
-          className="inline-flex p-1 rounded-full bg-white/[0.03] border border-white/[0.06] gap-0.5"
-        >
-          {HISTORY_SUBVIEWS.map((view) => {
-            const selected = subView === view.key;
-            return (
-              <button
-                key={view.key}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => setSubView(view.key)}
-                className={cn(
-                  'h-10 min-w-[2.75rem] px-4 rounded-full text-[10px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
-                  selected
-                    ? 'bg-white text-black shadow-xs'
-                    : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
-                )}
-              >
-                {view.label}
-              </button>
-            );
-          })}
-        </div>
       </div>
 
-      {subView === 'velocity' ? (
-        // Existing velocity chart would go here (rendered by HistoryScreen)
-        <Card className="p-5 md:p-8 overflow-hidden bg-bg-card">
-          <p className="text-neutral-500 text-sm">
-            Usage trend is on the main History view. Switch to Insights for monthly summaries.
-          </p>
-        </Card>
-      ) : (
         <div className="space-y-5 md:space-y-7">
           {/* Recent trend card */}
           <Card className="p-5 md:p-6 bg-bg-card">
@@ -217,6 +153,7 @@ export const InsightsScreen = React.memo(({
                 <h3 className="text-xl font-black tracking-tight text-white leading-none">
                   Last {RECENT_PERIOD_DAYS} days
                 </h3>
+                <span className="text-[11px] text-neutral-500">Before today, vs the {RECENT_PERIOD_DAYS} days before</span>
               </div>
               <TrendBadge trend={recentTrend.trend} />
             </div>
@@ -390,7 +327,6 @@ export const InsightsScreen = React.memo(({
             </Card>
           )}
         </div>
-      )}
     </div>
   );
 });

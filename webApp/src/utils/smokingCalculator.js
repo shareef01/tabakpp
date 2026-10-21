@@ -1070,6 +1070,33 @@ export const SmokingCalculator = {
   },
 
   /**
+   * Recent trend for web Insights: the `windowDays` calendar days before
+   * `today` against the `windowDays` days before those. Today's partial day is
+   * excluded, and a day with no record is untracked (not a zero), so it is left
+   * out of its window's average. Returns null when either window has no
+   * tracked day, so the UI says more data is needed instead of inventing a trend.
+   */
+  recentWindowTrend: (logs, dayDocs, today, windowDays = 7) => {
+    if (!today) return null;
+    const merged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs);
+    const windowAvg = (firstOffset) => {
+      let total = 0;
+      let tracked = 0;
+      for (let i = firstOffset; i < firstOffset + windowDays; i++) {
+        const counts = merged[shiftDate(today, -i)];
+        if (!counts) continue;
+        tracked++;
+        total += Object.values(counts).reduce((sum, v) => sum + Math.max(0, v || 0), 0);
+      }
+      return tracked > 0 ? total / tracked : null;
+    };
+    const currentAvg = windowAvg(1);
+    const previousAvg = windowAvg(1 + windowDays);
+    if (currentAvg == null || previousAvg == null) return null;
+    return { currentAvg, previousAvg, trend: SmokingCalculator.calculateTrend(currentAvg, previousAvg) };
+  },
+
+  /**
    * Derives onboarding state from real product state (item 10). Kotlin + JS parity.
    *
    * Stages (item 10):
