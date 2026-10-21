@@ -152,7 +152,7 @@ jobs:
             "firestore": {
               "rules": "firestore.rules"
             },
-            "functions": { "source": "functions", "runtime": "nodejs22" },
+            "functions": { "source": "functions", "runtime": "nodejs24" },
             "emulators": {
               "firestore": { "port": 8080, "host": "0.0.0.0" },
               "auth": { "port": 9099, "host": "0.0.0.0" },
