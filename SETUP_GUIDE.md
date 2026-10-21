@@ -416,5 +416,12 @@ Production builds register a service worker via `vite-plugin-pwa`:
 Run `npm run build` in `webApp/`, then deploy hosting from the repository root
 (`firebase deploy --only hosting`); the root `firebase.json` serves `webApp/dist`.
 
+Build from a checkout that has `webApp/.env.local`. A build without it still
+succeeds but only shows "CONFIG MISSING" (git worktrees don't have the
+gitignored file). A hosting `predeploy` hook
+(`webApp/scripts/check-dist-config.mjs`) blocks the deploy when the build has
+no Firebase config, or a config for a different project than the one you're
+deploying to.
+
 ---
 **Tip**: If you encounter a "Checksum mismatch" or Gradle errors, try deleting the `.gradle/` and `build/` directories and syncing again.
