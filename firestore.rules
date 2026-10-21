@@ -288,16 +288,10 @@ service cloud.firestore {
     }
 
     /**
-     * True when the account is in OPTION B mode (default LEGACY for legacy/
-     * unset accounts). Reads the pre-commit user document. `database`/`userId`
-     * are passed in because rules functions cannot see the enclosing match's
-     * wildcards.
+     * 'LEGACY' | 'MIGRATING' | 'OPTION_B' — authoritative server-side state.
+     * Reads the pre-commit user document. `database`/`userId` are passed in
+     * because rules functions cannot see the enclosing match's wildcards.
      */
-    function optionBMode(database, userId) {
-      return financialModeOf(database, userId) == 'OPTION_B';
-    }
-
-    /** 'LEGACY' | 'MIGRATING' | 'OPTION_B' — authoritative server-side state. */
     function financialModeOf(database, userId) {
       return get(/databases/$(database)/documents/users/$(userId)).data.get('financialMode', 'LEGACY');
     }
@@ -373,24 +367,11 @@ service cloud.firestore {
         && (d.get('migratingLegacyUnitPrice', null) == null
           || (isNumber(d.migratingLegacyUnitPrice) && d.migratingLegacyUnitPrice >= 0 && d.migratingLegacyUnitPrice <= 1000));
     }
-    function validUserProfile() {
-      let d = request.resource.data;
-      return validUserKeys(d) && validLegacyClaimMetadata(d) && validSmokingLease(d)
-        && d.get('deleting', false) == false
-        && validSettingsShape(d)
-        && (!('lifetimeAggregates' in d) || validLifetimeAggregates(d.lifetimeAggregates))
-        && (!('activeCounts' in d) || validCountMap(d.activeCounts))
-        && (!('smokingUnitsMigrated' in d) || d.smokingUnitsMigrated is bool)
-        && (!('schemaVersion' in d) || (isWholeNumber(d.schemaVersion) && d.schemaVersion >= 0 && d.schemaVersion <= 1000))
-        && (!('migratingLegacyCounts' in d) || validCountMap(d.migratingLegacyCounts))
-        && (!('migratingLegacyDate' in d) || isDateString(d.migratingLegacyDate));
-    }
-
     function validCreateProfile() {
       let d = request.resource.data;
-      // Inline validUserProfile() but replace the expensive validCountMap
-      // (50 unrolled entries each) with cheap size()==0 checks — activeCounts
-      // and migratingLegacyCounts must always be empty on a fresh create.
+      // Full profile validation, except that activeCounts and
+      // migratingLegacyCounts use cheap size()==0 checks instead of the
+      // 50-entry unrolled validCountMap: both must be empty on a fresh create.
       // This avoids exceeding Firestore's 1000-expression evaluation budget
       // for the 17-field UserProfile bootstrap document.
       return validUserKeys(d) && validLegacyClaimMetadata(d) && validSmokingLease(d)
