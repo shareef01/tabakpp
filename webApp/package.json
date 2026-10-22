@@ -7,6 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:staging": "vite build --mode staging",
+    "deploy:staging:hosting": "node scripts/deploy-staging.mjs hosting",
+    "deploy:staging:rules": "node scripts/deploy-staging.mjs firestore:rules",
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
