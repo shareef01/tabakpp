@@ -1,5 +1,8 @@
 {
   "firestore": {
-    "rules": "firestore.rules"
+    "rules": "firestore.rules",
+    "predeploy": [
+      "node webApp/scripts/check-rules-project.mjs --expected-project tabakpp-staging --forbid-project tabakpp-ff036"
+    ]
   }
 }

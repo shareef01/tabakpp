@@ -68,6 +68,9 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       // 1. MUST define firestore rules
       expect(firestoreConfig.firestore).toBeDefined();
       expect(firestoreConfig.firestore.rules).toBe('firestore.rules');
+      expect(firestoreConfig.firestore.predeploy).toEqual([
+        'node webApp/scripts/check-rules-project.mjs --expected-project tabakpp-staging --forbid-project tabakpp-ff036'
+      ]);
 
       // 2. MUST NOT define hosting or functions
       expect(firestoreConfig.hosting).toBeUndefined();
