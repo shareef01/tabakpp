@@ -33,6 +33,8 @@ assets/screenshots/*.png
 .env
 .env.*
 !.env.example
+!.env.staging.example
+!webApp/.env.staging.example
 
 # Local diagnostics may contain account identifiers or App Check tokens.
 signin*.txt
