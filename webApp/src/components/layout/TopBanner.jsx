@@ -24,6 +24,7 @@ const AvatarFace = ({ user, size = 'md', className }) => {
   const initials = initialsFrom(user?.displayName, user?.email);
   return (
     <div
+      aria-hidden="true"
       className={cn(
         'relative flex items-center justify-center overflow-hidden rounded-full bg-[#0a0a0c] ring-1 ring-inset ring-white/[0.08]',
         dims,
@@ -130,7 +131,6 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
               onClick={() => setIsOpen((v) => !v)}
               aria-haspopup="menu"
               aria-expanded={isOpen}
-              aria-label="Account menu"
               className={cn(
                 "group relative flex items-center gap-2 min-h-11 h-11 pl-1 pr-2 md:pr-2.5 rounded-full outline-hidden transition-all duration-200 touch-manipulation",
                 "bg-white/[0.03] ring-1 ring-inset ring-white/[0.08]",
@@ -146,6 +146,7 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
                   {shortName}
                 </span>
               )}
+              <span className="sr-only">Account menu</span>
               <ChevronDown
                 size={13}
                 strokeWidth={2.5}

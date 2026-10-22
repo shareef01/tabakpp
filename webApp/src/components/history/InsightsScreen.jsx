@@ -262,14 +262,14 @@ export const InsightsScreen = React.memo(({
                       dataKey="monthLabel"
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: '#737373', fontSize: 10, fontWeight: 800 }}
+                      tick={{ fill: '#A1A1AA', fontSize: 10, fontWeight: 700 }}
                       dy={10}
                     />
                     <YAxis
                       axisLine={false}
                       tickLine={false}
                       width={36}
-                      tick={{ fill: '#525252', fontSize: 9, fontWeight: 700 }}
+                      tick={{ fill: '#A1A1AA', fontSize: 9, fontWeight: 600 }}
                       allowDecimals={false}
                       domain={[0, (max) => Math.max(4, Math.ceil((max || 0) * 1.15))]}
                     />

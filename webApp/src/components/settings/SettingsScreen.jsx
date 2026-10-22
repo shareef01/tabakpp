@@ -53,7 +53,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           onClick={() => onReo(config.id, 'up')}
           disabled={idx === 0}
           aria-label="Move up"
-          className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.06] disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
+          className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.06] outline-hidden focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
         >
           <ArrowUp size={14} strokeWidth={2.75} />
         </button>
@@ -62,7 +62,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           onClick={() => onReo(config.id, 'down')}
           disabled={idx === total - 1}
           aria-label="Move down"
-          className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.06] disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
+          className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.06] outline-hidden focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
         >
           <ArrowDown size={14} strokeWidth={2.75} />
         </button>
@@ -92,7 +92,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           type="button"
           onClick={() => onEdit(config)}
           aria-label={`Edit ${config.name}`}
-          className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.07] transition-all active:scale-90 touch-manipulation"
+          className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.07] outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all active:scale-90 touch-manipulation"
         >
           <Edit2 size={15} strokeWidth={2.5} />
         </button>
@@ -100,7 +100,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           type="button"
           onClick={() => onDel(config.id)}
           aria-label={`Delete ${config.name}`}
-          className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
+          className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all active:scale-90 touch-manipulation"
         >
           <Trash2 size={15} strokeWidth={2.5} />
         </button>
@@ -403,9 +403,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
             <div className="flex items-end justify-between gap-4 mb-5">
               <div className="flex flex-col gap-1 min-w-0">
                 <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Profile</span>
-                <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
+                <h2 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
                   Identity
-                </h3>
+                </h2>
               </div>
               {user?.email && (
                 <span className="text-[10px] font-medium text-neutral-400 truncate max-w-[50%] text-right">
@@ -422,7 +422,6 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={isUploading}
-                  aria-label="Change avatar"
                   className="group relative flex items-center justify-center w-28 h-28 md:w-32 md:h-32 rounded-full bg-white/[0.03] ring-1 ring-inset ring-white/[0.08] overflow-hidden transition-all hover:ring-accent/40 focus-visible:ring-2 focus-visible:ring-accent/50 outline-hidden disabled:opacity-60"
                 >
                   {isUploading && (
@@ -441,9 +440,10 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                     return initials ? (
                       <span className="text-2xl font-black tracking-tight text-accent">{initials}</span>
                     ) : (
-                      <User size={36} className="text-neutral-600" strokeWidth={1.75} />
+                      <User aria-hidden="true" size={36} className="text-neutral-600" strokeWidth={1.75} />
                     );
                   })()}
+                  <span className="sr-only">Change avatar</span>
                   <span className="absolute inset-0 bg-black/0 group-hover:bg-black/35 group-active:bg-black/35 transition-colors" />
                 </button>
                 <button
@@ -494,9 +494,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           <Card className="p-6 md:p-8 bg-bg-card">
             <div className="flex flex-col gap-1 mb-5 min-w-0">
               <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Appearance</span>
-              <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
+              <h2 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
                 Look & density
-              </h3>
+              </h2>
             </div>
 
             <div className="space-y-6">
@@ -628,9 +628,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                   <Moon size={11} className="text-accent" strokeWidth={2.5} />
                   Schedule
                 </span>
-                <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
+                <h2 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
                   Day start
-                </h3>
+                </h2>
               </div>
               <div className="flex flex-col items-end gap-1 shrink-0">
                 <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400">Resets at</span>
@@ -652,13 +652,14 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 step={1}
                 value={pendingDayStart}
                 aria-label="Day start hour"
+                aria-valuetext={formatDayStart(pendingDayStart)}
                 // Commit is handled by the settle effect above, so every input
                 // method — drag, any arrow key, or assistive tech — saves.
                 onChange={(e) => setPendingDayStart(Number(e.target.value))}
                 // h-11 keeps the drag target at 44px even though the painted
                 // track stays 8px tall (background-size/position below). An
                 // 8px-tall range input is close to unusable on a touch screen.
-                className="w-full h-11 bg-transparent rounded-full appearance-none cursor-pointer touch-manipulation accent-(--accent)
+                className="w-full h-11 bg-transparent rounded-full appearance-none cursor-pointer touch-manipulation accent-(--accent) outline-hidden focus-visible:ring-2 focus-visible:ring-accent
                   [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full
                   [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:-mt-1
                   [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:shadow-[0_0_0_3px_rgba(0,0,0,0.45)]
@@ -723,9 +724,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
             <div className="flex items-end justify-between gap-4 mb-6">
               <div className="flex flex-col gap-1 min-w-0">
                 <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Trackers</span>
-                <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
+                <h2 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
                   {sortedConfigs.length} {sortedConfigs.length === 1 ? 'counter' : 'counters'}
-                </h3>
+                </h2>
               </div>
               <button
                 type="button"
@@ -768,9 +769,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           <Card className="p-6 md:p-8 bg-bg-card">
             <div className="flex flex-col gap-1 mb-5 min-w-0">
               <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Privacy</span>
-              <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
+              <h2 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
                 Export data
-              </h3>
+              </h2>
             </div>
 
             <p className="text-[11px] text-neutral-400 leading-relaxed mb-5">
@@ -822,9 +823,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
           <Card className="p-6 md:p-8 bg-bg-card">
             <div className="flex flex-col gap-1 mb-5 min-w-0">
               <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Economics</span>
-              <h3 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
+              <h2 className="text-xl md:text-2xl font-black tracking-tight text-white leading-none">
                 Unit price
-              </h3>
+              </h2>
             </div>
             <div className="flex p-1 bg-black/60 rounded-full border border-white/5 mb-6 shadow-inner" role="radiogroup" aria-label="Purchase type">
               <button type="button" role="radio" aria-checked={ecoMode === 'PACK'} onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Package size={14} /> Pack</button>
@@ -855,9 +856,9 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               </div>
               <div className="flex flex-col gap-1 min-w-0">
                 <span className={cn(UI.LABEL, 'mb-0 ml-0 text-rose-400/80')}>Danger zone</span>
-                <h3 className="text-xl font-black tracking-tight text-white leading-none">
+                <h2 className="text-xl font-black tracking-tight text-white leading-none">
                   Delete account
-                </h3>
+                </h2>
               </div>
             </div>
 

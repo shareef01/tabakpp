@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { X, Plus, Minus, Database } from 'lucide-react';
+import { X, Plus, Minus, Check } from 'lucide-react';
 import { UI, Button } from '../Common';
 import { cn } from '../../utils/utils';
 import { formatDateDisplay } from '../../utils/formatters';
@@ -69,16 +69,21 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
         style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom), ${Math.max(keyboardInset, 24)}px)` }}
         role="dialog"
         aria-modal="true"
-        aria-label="History override"
+        aria-label="Edit past day"
       >
         <div className="flex justify-between items-center mb-10">
           <div className="space-y-1">
-            <h3 className={UI.LABEL}>History Override</h3>
+            <h3 className={UI.LABEL}>Edit Session</h3>
             <span className="text-2xl font-black tracking-tighter uppercase text-white block leading-none">
               {formatDateDisplay(log.logDate)}
             </span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close history editor" className="min-w-11 min-h-11 w-11 h-11 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-400 hover:text-white transition-all touch-manipulation">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close history editor"
+            className="min-w-11 min-h-11 w-11 h-11 rounded-2xl bg-white/5 flex items-center justify-center text-neutral-400 hover:text-white outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all touch-manipulation"
+          >
             <X size={20} strokeWidth={3} />
           </button>
         </div>
@@ -88,14 +93,16 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
             <div key={c.id} className="flex items-center justify-between p-5 bg-black/40 border border-white/5 rounded-2xl hover:border-white/10 transition-colors">
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-bold text-white uppercase tracking-wider">{c.name}</span>
-                <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Protocol {c.id.slice(0,4)}</span>
+                <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">
+                  {c.type ? (c.type === 'CIGARETTE' ? 'Cigarette' : c.type === 'RYO_ROLL' ? 'RYO' : 'Custom') : 'Counter'}
+                </span>
               </div>
               <div className="flex items-center gap-3 bg-black/60 p-1.5 rounded-xl border border-white/5 shadow-inner">
                 <button
                   type="button"
                   onClick={() => adjust(c.id, -1)}
                   aria-label={`Decrease ${c.name}`}
-                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-neutral-900/50 flex items-center justify-center text-neutral-400 hover:text-white transition-all active:scale-90 touch-manipulation"
+                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-neutral-900/50 flex items-center justify-center text-neutral-400 hover:text-white outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all active:scale-90 touch-manipulation"
                 >
                   <Minus size={16} strokeWidth={3} />
                 </button>
@@ -106,7 +113,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
                   type="button"
                   onClick={() => adjust(c.id, 1)}
                   aria-label={`Increase ${c.name}`}
-                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-accent text-black flex items-center justify-center transition-all active:scale-90 touch-manipulation"
+                  className="min-w-11 min-h-11 w-11 h-11 rounded-lg bg-accent text-black flex items-center justify-center outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all active:scale-90 touch-manipulation"
                 >
                   <Plus size={16} strokeWidth={4} />
                 </button>
@@ -126,8 +133,8 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
             disabled={saving}
             className="w-full h-18 text-[11px]"
           >
-            <Database size={16} className="mr-3" strokeWidth={3} />
-            {saving ? 'Committing…' : 'Commit Overrides'}
+            <Check size={16} className="mr-3" strokeWidth={3} />
+            {saving ? 'Saving…' : 'Save Changes'}
           </Button>
         </div>
       </motion.div>

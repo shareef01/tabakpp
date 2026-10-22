@@ -20,6 +20,8 @@ coverage/
 playwright-report/
 test-results/
 *.log
+assets/screenshots/before/
+assets/screenshots/*.png
 
 # Keystores and signing credentials
 *.jks

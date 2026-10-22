@@ -206,6 +206,7 @@ export const HistoryScreen = React.memo(({
   const velocityPeriod = VELOCITY_PERIODS.find((p) => p.days === velocityDays) || VELOCITY_PERIODS[0];
   const hasAnyBaseline = (configs || []).some((c) => c.baseline != null);
   const [subView, setSubView] = useState('history');
+  const [showTable, setShowTable] = useState(false);
 
   const handleDelete = async (snapshot) => {
     if (!snapshot || !userId) return;
@@ -430,31 +431,69 @@ export const HistoryScreen = React.memo(({
           </div>
         </div>
 
-        <div
-          role="group"
-          aria-label="Usage trend period"
-          className="mb-4 md:mb-5 inline-flex p-1 rounded-full bg-white/[0.03] border border-white/[0.06] gap-0.5"
-        >
-          {VELOCITY_PERIODS.map((period) => {
-            const selected = period.days === velocityDays;
-            return (
-              <button
-                key={period.days}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => setVelocityDays(period.days)}
-                className={cn(
-                  'h-11 min-w-[2.75rem] px-3 rounded-full text-[10px] font-black tracking-[0.14em] transition-all duration-200 touch-manipulation',
-                  selected
-                    ? 'bg-white text-black shadow-xs'
-                    : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
-                )}
-              >
-                {period.label}
-              </button>
-            );
-          })}
+        <div className="flex items-center justify-between gap-3 mb-4 md:mb-5 flex-wrap">
+          <div
+            role="group"
+            aria-label="Usage trend period"
+            className="inline-flex p-1 rounded-full bg-white/[0.03] border border-white/[0.06] gap-0.5"
+          >
+            {VELOCITY_PERIODS.map((period) => {
+              const selected = period.days === velocityDays;
+              return (
+                <button
+                  key={period.days}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setVelocityDays(period.days)}
+                  className={cn(
+                    'h-11 min-w-[2.75rem] px-3 rounded-full text-[10px] font-black tracking-[0.14em] transition-all duration-200 outline-hidden focus-visible:ring-2 focus-visible:ring-accent touch-manipulation',
+                    selected
+                      ? 'bg-white text-black shadow-xs'
+                      : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
+                  )}
+                >
+                  {period.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowTable((v) => !v)}
+            aria-expanded={showTable}
+            aria-controls="usage-trend-table"
+            className="text-[11px] font-bold text-neutral-400 hover:text-white underline underline-offset-4 outline-hidden focus-visible:ring-2 focus-visible:ring-accent rounded-sm py-1 touch-manipulation"
+          >
+            {showTable ? 'Hide data table' : 'View as table'}
+          </button>
         </div>
+
+        {showTable && (
+          <div id="usage-trend-table" className="mb-4 overflow-x-auto rounded-xl border border-white/[0.08] bg-black/40 p-3 max-h-48 overflow-y-auto custom-scrollbar">
+            <table className="w-full text-left text-xs">
+              <caption className="sr-only">Usage data for {velocityPeriod.title}</caption>
+              <thead>
+                <tr className="border-b border-white/[0.08] text-[10px] font-black uppercase tracking-wider text-neutral-400">
+                  <th scope="col" className="py-2 px-3">Date</th>
+                  <th scope="col" className="py-2 px-3 text-right">Units</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/[0.04]">
+                {chartData.map((point) => (
+                  <tr key={point.date} className="hover:bg-white/[0.02]">
+                    <td className="py-1.5 px-3 font-medium text-neutral-300">
+                      {point.isNow ? 'Today (live)' : point.dateLabel}
+                    </td>
+                    <td className="py-1.5 px-3 text-right font-black tabular-nums text-white">
+                      {point.val}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         <div className="h-40 md:h-52 w-full -mx-1">
           <p className="sr-only">
@@ -482,7 +521,7 @@ export const HistoryScreen = React.memo(({
                   dataKey="name"
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#737373', fontSize: velocityPeriod.days > 30 ? 8 : 10, fontWeight: 800 }}
+                  tick={{ fill: '#A1A1AA', fontSize: velocityPeriod.days > 30 ? 8 : 10, fontWeight: 700 }}
                   dy={10}
                   interval={velocityPeriod.days <= 7 ? 0 : velocityPeriod.days <= 14 ? 1 : 'preserveStartEnd'}
                   minTickGap={velocityPeriod.days > 30 ? 12 : 4}
@@ -491,7 +530,7 @@ export const HistoryScreen = React.memo(({
                   axisLine={false}
                   tickLine={false}
                   width={36}
-                  tick={{ fill: '#525252', fontSize: 9, fontWeight: 700 }}
+                  tick={{ fill: '#A1A1AA', fontSize: 9, fontWeight: 600 }}
                   allowDecimals={false}
                   domain={[0, (max) => Math.max(4, Math.ceil((max || 0) * 1.15))]}
                 />
@@ -600,7 +639,7 @@ export const HistoryScreen = React.memo(({
               tone="neutral"
             />
           </div>
-          <p className="flex items-start gap-1.5 px-1 pt-1 text-[10px] leading-relaxed text-neutral-500">
+          <p className="flex items-start gap-1.5 px-1 pt-1 text-[10px] leading-relaxed text-neutral-400">
             <Info size={12} className="shrink-0 mt-0.5" strokeWidth={2} />
             "Est. Recovered"/"lost" are population-level life-expectancy
             estimates (≈11 min per unit, from published smoking-mortality
@@ -671,8 +710,8 @@ export const HistoryScreen = React.memo(({
                     <button
                       type="button"
                       onClick={() => onEdit(log)}
-                      aria-label="Edit entry"
-                      className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.07] transition-all active:scale-90 touch-manipulation"
+                      aria-label={`Edit entry for ${isToday ? 'today' : formatDateDisplay(log.logDate)}`}
+                      className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.07] outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all active:scale-90 touch-manipulation"
                     >
                       <Edit2 size={15} strokeWidth={2.5} />
                     </button>
@@ -682,8 +721,8 @@ export const HistoryScreen = React.memo(({
                       <button
                         type="button"
                         onClick={() => requestDelete(log)}
-                        aria-label="Delete entry"
-                        className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all active:scale-90 touch-manipulation"
+                        aria-label={`Delete entry for ${isToday ? 'today' : formatDateDisplay(log.logDate)}`}
+                        className="flex items-center justify-center min-w-11 min-h-11 w-11 h-11 rounded-lg text-neutral-400 hover:text-rose-400 hover:bg-rose-500/10 outline-hidden focus-visible:ring-2 focus-visible:ring-accent transition-all active:scale-90 touch-manipulation"
                       >
                         <Trash2 size={15} strokeWidth={2.5} />
                       </button>

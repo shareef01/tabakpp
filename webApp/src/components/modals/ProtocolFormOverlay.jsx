@@ -104,26 +104,46 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
       >
-        <div className="flex justify-between items-center mb-10">
+        <div className="flex justify-between items-center mb-8">
           <div className="space-y-1">
-            <h3 className={UI.LABEL}>Registry</h3>
-            <span className="text-2xl font-black tracking-tighter uppercase text-white block leading-none">{title}</span>
+            <h3 className={cn(UI.LABEL, "mb-0 ml-0")}>Counter Details</h3>
+            <span className="text-2xl font-black tracking-tight text-white block leading-none">{title}</span>
           </div>
-          <button type="button" onClick={() => { if (!saving) onClose(); }} aria-label="Close counter form" className={`w-12 h-12 rounded-2xl flex items-center justify-center text-neutral-400 hover:text-white transition-all ${saving ? 'opacity-50 pointer-events-none' : ''}`}>
-            <X size={20} strokeWidth={3} />
+          <button
+            type="button"
+            onClick={() => { if (!saving) onClose(); }}
+            aria-label="Close counter form"
+            className={cn(
+              "w-11 h-11 rounded-xl flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/[0.06] transition-all outline-hidden focus-visible:ring-2 focus-visible:ring-accent",
+              saving && "opacity-50 pointer-events-none"
+            )}
+          >
+            <X size={20} strokeWidth={2.5} />
           </button>
         </div>
 
-        <form className="space-y-10" onSubmit={handleSubmit}>
+        <form className="space-y-7" onSubmit={handleSubmit}>
           <div>
-            <Input label="Counter name" value={name} onChange={(value) => { setName(value); if (error) setError(''); }} isDark placeholder="e.g. Cigarettes" autoComplete="off" name="counter-name" maxLength={MAX_TRACKER_NAME} enterKeyHint="next" aria-invalid={!!error} aria-describedby={error ? 'counter-form-error' : undefined} />
-            {error && <p id="counter-form-error" role="alert" className="mt-2 text-[10px] font-bold text-rose-400">{error}</p>}
+            <Input
+              label="Counter name"
+              value={name}
+              onChange={(value) => { setName(value); if (error) setError(''); }}
+              isDark
+              placeholder="e.g. Cigarettes"
+              autoComplete="off"
+              name="counter-name"
+              maxLength={MAX_TRACKER_NAME}
+              enterKeyHint="next"
+              aria-invalid={!!error}
+              aria-describedby={error ? 'counter-form-error' : undefined}
+            />
+            {error && <p id="counter-form-error" role="alert" className="mt-2 text-xs font-bold text-rose-400">{error}</p>}
           </div>
 
           <div className="flex flex-col gap-2">
-            {/* A <span> is not a label: without htmlFor this field announced as
-                "edit box, blank" to a screen reader. */}
-            <label htmlFor="counter-limit" className={UI.LABEL}>Daily Quota</label>
+            <label htmlFor="counter-limit" className={cn(UI.LABEL, "mb-0 ml-0")}>
+              Daily quota (target)
+            </label>
             <input
               id="counter-limit"
               type="number"
@@ -135,46 +155,14 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
               inputMode="numeric"
               enterKeyHint="next"
             />
+            <span className="text-[11px] text-neutral-400 font-normal ml-1">
+              Maximum units you aim to stay under each day (0 = zero-target).
+            </span>
           </div>
 
-          <div className="space-y-3 rounded-2xl border border-white/5 bg-black/40 p-5">
-            <label className="flex items-center justify-between gap-4 cursor-pointer">
-              <span className="flex flex-col gap-0.5">
-                <span className="text-xs font-black uppercase tracking-widest text-neutral-300">Track reduction</span>
-                <span className="text-[10px] font-medium normal-case tracking-normal text-neutral-500">
-                  Optional — your previous daily average, used only to show how much you've cut back.
-                </span>
-              </span>
-              <input
-                type="checkbox"
-                checked={hasBaseline}
-                onChange={(e) => setHasBaseline(e.target.checked)}
-                aria-label="Set a baseline to track reduction"
-                className="h-5 w-5 shrink-0 accent-(--accent)"
-              />
-            </label>
-            {hasBaseline && (
-              <div className="flex flex-col gap-2 pt-1">
-                <label htmlFor="counter-baseline" className={UI.LABEL}>Baseline (before you started cutting back)</label>
-                <input
-                  id="counter-baseline"
-                  type="number"
-                  min="0"
-                  max="10000"
-                  value={baseline}
-                  onChange={(e) => setBaseline(e.target.value)}
-                  placeholder="e.g. 20"
-                  className={UI.INPUT}
-                  inputMode="numeric"
-                  enterKeyHint="next"
-                />
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-5">
-            <span id="counter-type-label" className={UI.LABEL}>Visualization Engine</span>
-            <div className="grid grid-cols-2 gap-3" role="radiogroup" aria-labelledby="counter-type-label">
+          <div className="flex flex-col gap-3">
+            <span id="counter-type-label" className={cn(UI.LABEL, "mb-0 ml-0")}>Counter Display Style</span>
+            <div className="grid grid-cols-3 gap-2.5" role="radiogroup" aria-labelledby="counter-type-label">
               {TYPES.map(t => {
                 const Icon = t.icon;
                 const selected = type === t.id;
@@ -186,60 +174,117 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
                     aria-checked={selected}
                     onClick={() => setType(t.id)}
                     className={cn(
-                      "flex items-center gap-3 p-4 rounded-2xl border text-xs font-bold uppercase tracking-widest transition-all",
-                      selected ? "bg-accent border-accent text-black shadow-xl scale-[1.02]" : "bg-black/40 border-white/5 text-neutral-400 hover:border-white/10"
+                      "flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl border text-xs font-bold transition-all outline-hidden",
+                      "focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-black",
+                      selected
+                        ? "bg-accent border-accent text-black shadow-lg scale-[1.02]"
+                        : "bg-black/40 border-white/10 text-neutral-300 hover:border-white/20 hover:text-white"
                     )}
                   >
-                    <Icon size={16} strokeWidth={selected ? 3 : 2} />
-                    {t.label}
+                    <Icon size={18} strokeWidth={selected ? 2.5 : 2} />
+                    <span className="leading-none">{t.label}</span>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          <div className="space-y-4 rounded-2xl border border-white/5 bg-black/40 p-5">
-            <label className="flex items-center justify-between gap-4 cursor-pointer">
-              <span className="text-xs font-black uppercase tracking-widest text-neutral-300">Primary streak tracker</span>
-              <input
-                type="checkbox"
-                checked={isPrimary}
-                onChange={(e) => setIsPrimary(e.target.checked)}
-                className="h-5 w-5 accent-(--accent)"
-              />
-            </label>
-            <label className="flex items-center justify-between gap-4 cursor-pointer">
-              <span className="text-xs font-black uppercase tracking-widest text-neutral-300">Cost tracking</span>
-              <input
-                type="checkbox"
-                checked={isFinancial}
-                onChange={(e) => setIsFinancial(e.target.checked)}
-                className="h-5 w-5 accent-(--accent)"
-              />
-            </label>
-            {isFinancial && (
-              <div className="flex flex-col gap-2 pt-2">
-                <label htmlFor="counter-price" className={UI.LABEL}>Unit price (€)</label>
+          {/* ADVANCED TRACKING OPTIONS */}
+          <div className="pt-2 space-y-4">
+            <span className={cn(UI.LABEL, "mb-0 ml-0")}>Advanced Options</span>
+
+            {/* Baseline Reduction */}
+            <div className="space-y-3 rounded-2xl border border-white/10 bg-black/40 p-4.5">
+              <label className="flex items-center justify-between gap-4 cursor-pointer">
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-neutral-200">Track reduction vs baseline</span>
+                  <span className="text-[11px] text-neutral-400 leading-snug">
+                    Optional reference consumption from before you started cutting back.
+                  </span>
+                </span>
                 <input
-                  id="counter-price"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max="1000"
-                  value={pricePerUnit}
-                  onChange={(e) => setPricePerUnit(e.target.value)}
-                  className={UI.INPUT}
-                  inputMode="decimal"
-                  enterKeyHint="done"
+                  type="checkbox"
+                  checked={hasBaseline}
+                  onChange={(e) => setHasBaseline(e.target.checked)}
+                  aria-label="Set a baseline to track reduction"
+                  className="h-5 w-5 shrink-0 accent-(--accent) rounded cursor-pointer"
                 />
-              </div>
-            )}
+              </label>
+              {hasBaseline && (
+                <div className="flex flex-col gap-1.5 pt-2 border-t border-white/[0.06]">
+                  <label htmlFor="counter-baseline" className={cn(UI.LABEL, "mb-0 ml-0")}>Baseline (before cutback)</label>
+                  <input
+                    id="counter-baseline"
+                    type="number"
+                    min="0"
+                    max="10000"
+                    value={baseline}
+                    onChange={(e) => setBaseline(e.target.value)}
+                    placeholder="e.g. 20"
+                    className={UI.INPUT}
+                    inputMode="numeric"
+                    enterKeyHint="next"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Streak & Cost settings */}
+            <div className="space-y-4 rounded-2xl border border-white/10 bg-black/40 p-4.5">
+              <label className="flex items-center justify-between gap-4 cursor-pointer">
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-neutral-200">Include in goal streak</span>
+                  <span className="text-[11px] text-neutral-400 leading-snug">
+                    Counts toward your daily streak when kept within target.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isPrimary}
+                  onChange={(e) => setIsPrimary(e.target.checked)}
+                  className="h-5 w-5 shrink-0 accent-(--accent) rounded cursor-pointer"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-4 cursor-pointer pt-3 border-t border-white/[0.06]">
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-neutral-200">Track cost for this counter</span>
+                  <span className="text-[11px] text-neutral-400 leading-snug">
+                    Calculate spend and savings based on cost per unit.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isFinancial}
+                  onChange={(e) => setIsFinancial(e.target.checked)}
+                  className="h-5 w-5 shrink-0 accent-(--accent) rounded cursor-pointer"
+                />
+              </label>
+
+              {isFinancial && (
+                <div className="flex flex-col gap-1.5 pt-2 border-t border-white/[0.06]">
+                  <label htmlFor="counter-price" className={cn(UI.LABEL, "mb-0 ml-0")}>Unit price (€)</label>
+                  <input
+                    id="counter-price"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="1000"
+                    value={pricePerUnit}
+                    onChange={(e) => setPricePerUnit(e.target.value)}
+                    className={UI.INPUT}
+                    inputMode="decimal"
+                    enterKeyHint="done"
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           <Button
             type="submit"
             disabled={saving}
-            className="w-full h-18 text-[11px] mt-4"
+            className="w-full h-15 text-xs font-bold uppercase tracking-wider mt-4"
           >
             {saving ? 'Saving…' : 'Save counter'}
           </Button>

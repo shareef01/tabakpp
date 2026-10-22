@@ -148,7 +148,7 @@ export const AuthScreen = React.memo(({ accent = '#FF5F5F' }) => {
   };
 
   return (
-    <div
+    <main
       className="flex flex-col items-stretch min-h-screen min-h-dvh relative overflow-x-clip bg-black text-white font-inter antialiased lg:flex-row"
       style={{'--accent': accent}}
     >
@@ -170,9 +170,9 @@ export const AuthScreen = React.memo(({ accent = '#FF5F5F' }) => {
         <div className="w-full max-w-[480px]">
 
           {/* Mobile Hero (Logo) */}
-          <div className="lg:hidden flex flex-col items-center mb-16 opacity-80">
+          <div className="lg:hidden flex flex-col items-center mb-16">
             <Logo size="lg" />
-            <span className="mt-4 text-[11px] font-black uppercase tracking-[0.18em] text-white/55">Habit Tracker</span>
+            <span className="mt-4 text-[11px] font-black uppercase tracking-[0.18em] text-white/80">Habit Tracker</span>
           </div>
 
           <motion.div
@@ -325,6 +325,6 @@ export const AuthScreen = React.memo(({ accent = '#FF5F5F' }) => {
           </motion.div>
         </div>
       </div>
-    </div>
+    </main>
   );
 });
