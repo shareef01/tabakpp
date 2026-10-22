@@ -221,7 +221,7 @@ It does **not** change any repository code or external settings.
 | Cloud Firestore | Yes | Yes | Unverified externally — enforcement OFF |
 | Firebase Authentication | Yes | Yes | Unverified externally — enforcement OFF |
 | Cloud Storage | — | — | Not used (no `storage` in `firebase.json`) |
-| Cloud Functions | — | — | Not used (Spark plan, no Blaze). `functions/` holds the dormant Option-B code; it is tested in CI against the emulators but never deployed |
+| Cloud Functions | — | — | Not used (Spark plan, no Blaze). `functions/` holds the dormant Option-B code; it is tested in CI against the emulators but never deployed. A predeploy guard (`scripts/guard-functions-deploy.mjs`) stops any deploy that includes functions, including a bare `firebase deploy`, unless `TABAKPP_DEPLOY_FUNCTIONS=1` is set |
 | Realtime Database | — | — | Not used |
 | Custom backend | — | — | None (Spark-safe, client-side only) |
 

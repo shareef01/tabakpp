@@ -50,6 +50,15 @@ jobs:
           cache-provider: external
       - name: Make gradlew executable
         run: chmod +x gradlew
+      # Robolectric fetches its android-all jars into ~/.m2 at test time, outside
+      # the Gradle cache; uncached, Maven Central rate-limits (HTTP 429) and every
+      # Compose UI test class fails. Keyed on the version catalog (Robolectric version).
+      - name: Cache Robolectric android-all jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: robolectric-${{ runner.os }}-
       - name: Create compile-only Firebase configuration
         run: |
           cat > androidApp/google-services.json <<'JSON'

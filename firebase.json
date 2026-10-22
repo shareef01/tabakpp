@@ -81,6 +81,9 @@
   "functions": {
     "source": "functions",
     "codebase": "default",
-    "runtime": "nodejs24"
+    "runtime": "nodejs24",
+    "predeploy": [
+      "node scripts/guard-functions-deploy.mjs"
+    ]
   }
 }

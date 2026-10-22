@@ -1038,4 +1038,41 @@ describe('audit regressions: lease forgery, tombstone mode drop, tombstoned ledg
     await assertFails(updateDoc(doc(db, 'users/alice/dailyFinancials/2026-10-02'), { ambiguous: true }));
     await assertFails(setDoc(doc(db, 'users/alice/financialOperations/op1'), receiptData));
   });
+
+  // Every subcollection delete shares accountDeletable: a held smoking lease
+  // blocks deletes until the account is tombstoned (the wipe fences first).
+  describe('held smoking lease blocks subcollection deletes until tombstoned', () => {
+    const paths = [
+      'users/alice/configs/cig', 'users/alice/logs/log1', 'users/alice/days/2026-10-01',
+      'users/alice/meta/profile', 'users/alice/dailyFinancials/2026-10-01', 'users/alice/financialOperations/op1',
+    ];
+    const seedDocs = async (profile) => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const fs = context.firestore();
+        await setDoc(doc(fs, 'users/alice'), profile);
+        for (const p of paths) await setDoc(doc(fs, p), { placeholder: true });
+      });
+      return testEnv.authenticatedContext('alice').firestore();
+    };
+    const leased = () => ({
+      ...emptyProfile, smokingMigrationLeaseId: 'lease1', smokingMigrationLeaseUntil: leaseUntil(),
+    });
+
+    for (const path of paths) {
+      it(`${path}: delete denied while a lease is held`, async () => {
+        const db = await seedDocs(leased());
+        await assertFails(deleteDoc(doc(db, path)));
+      });
+
+      it(`${path}: delete allowed once the leased account is tombstoned`, async () => {
+        const db = await seedDocs({ ...leased(), deleting: true });
+        await assertSucceeds(deleteDoc(doc(db, path)));
+      });
+
+      it(`${path}: delete allowed without a lease`, async () => {
+        const db = await seedDocs(emptyProfile);
+        await assertSucceeds(deleteDoc(doc(db, path)));
+      });
+    }
+  });
 });

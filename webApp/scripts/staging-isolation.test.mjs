@@ -4,6 +4,7 @@ import { resolve, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { validateStagingDeployment, deployStaging } from './deploy-staging.mjs';
 import { PROD_PROJECT_ID, STAGING_PROJECT_ID } from './check-dist-config.mjs';
+import { checkFunctionsDeploy, OPT_IN_ENV } from '../../scripts/guard-functions-deploy.mjs';
 
 const rootDir = resolve(__dirname, '../..');
 const FAKE_KEY = 'AIza' + 'x'.repeat(35);
@@ -32,6 +33,16 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       expect(prodConfig.hosting.predeploy).toEqual([
         'node webApp/scripts/check-dist-config.mjs'
       ]);
+    });
+
+    it('guards production firebase.json so a bare deploy cannot ship the parked functions', () => {
+      const prodConfig = JSON.parse(readFileSync(join(rootDir, 'firebase.json'), 'utf8'));
+      expect(prodConfig.functions.predeploy).toEqual(['node scripts/guard-functions-deploy.mjs']);
+
+      expect(checkFunctionsDeploy({}).ok).toBe(false);
+      expect(checkFunctionsDeploy({}).reason).toMatch(/--only firestore:rules/);
+      expect(checkFunctionsDeploy({ [OPT_IN_ENV]: 'true' }).ok).toBe(false);
+      expect(checkFunctionsDeploy({ [OPT_IN_ENV]: '1' }).ok).toBe(true);
     });
 
     it('ensures firebase.staging.json is strictly Hosting-only (no firestore rules property)', () => {
