@@ -24,11 +24,11 @@ The primary objective of Phase 8 was to transition the extensive emulator-based 
    - The API key and Web App identifiers present in `webApp/.env.staging.local` from Phase 7 were determined to be manually generated synthetic placeholders, not authentic Firebase-issued credentials.
    - Engineering controls were refactored to separate syntax/shape validation from authentic project-identity verification:
      - Relaxed arbitrary 39-character key length regex in `check-dist-config.mjs` to standard Firebase API key pattern `/AIza[0-9A-Za-z_-]{20,}/`.
-     - Implemented `--disallow-placeholders` check and added it to the `firebase.staging.json` predeploy hook.
-     - Added live project existence verification in `webApp/scripts/deploy-staging.mjs` (`getFirebaseProjects()`), guaranteeing fail-closed behavior if `tabakpp-staging` is unprovisioned.
+     - Implemented `--disallow-placeholders` check (scoped to the inlined `apiKey` / `appId` config values) and added it to the `firebase.staging.json` predeploy hook.
+     - Added live project existence verification in `webApp/scripts/deploy-staging.mjs` (`getFirebaseProjects()`). The wrapper fails closed both when `tabakpp-staging` is absent from the account and when the `firebase projects:list` lookup itself fails; only an explicit `--skip-project-check` bypasses it.
 3. **Android Staging Build-Time Separation Implemented**:
    - Implemented a dedicated `staging` buildType in `androidApp/build.gradle.kts` (`applicationIdSuffix = ".staging"`).
-   - Added `checkStagingFirebaseConfig` Gradle task to ensure dedicated `androidApp/src/staging/google-services.json` exists and strictly rejects accidental references to production `tabakpp-ff036`.
+   - Added `checkStagingFirebaseConfig` Gradle task that requires a dedicated `androidApp/src/staging/google-services.json` for the `tabakpp-staging` project and rejects production references, the wrong package, and placeholder credentials (see §5.2).
    - Provided `androidApp/src/staging/google-services.json.example` template.
 4. **Authentication Provider Model Reconciled**:
    - Application UI code (`AuthScreen.jsx`) implements **Email/Password** and **Google OAuth** authentication.
@@ -92,22 +92,26 @@ While syntactically conforming to earlier regex patterns, these values were synt
 1. **Separation of Shape vs Authenticity**:
    - Modified `webApp/scripts/check-dist-config.mjs`:
      - Updated API key regex to `/AIza[0-9A-Za-z_-]{20,}/`, removing the arbitrary 39-character length expectation that risked false rejections on valid Google API keys.
-     - Added `PLACEHOLDER_KEY_PATTERN = /validationqa|stagingkey|dummy|mock|fake|placeholder/i`.
-     - Added CLI flag `--disallow-placeholders`.
+     - Added `PLACEHOLDER_KEY_PATTERN = /(?:stagingKeyValidation|placeholder|dummy|mock|testKey|fakeKey|FROM_FIREBASE_CONSOLE|0000000000|abcdef1234567890|abcdef0123456789)/i`.
+     - Added CLI flag `--disallow-placeholders`. The pattern is applied only to the inlined `apiKey` and `appId` values extracted from the build (`extractConfigValues()`), not to whole bundle text: real bundles legitimately contain `placeholder` (input props), `mockUserToken` (Firebase SDK), `__dummy__` (heic2any) and long zero runs (framer). If no `apiKey` value can be located, the check fails closed.
+     - *Audit correction (2026-10-22):* the first implementation scanned entire bundle chunks, which matched those vendor strings and would have blocked every staging deploy, including ones with authentic credentials. Fixed and covered by regression tests.
 2. **Guarded Deployment Configuration**:
    - Modified `firebase.staging.json`:
      ```json
      "predeploy": [
-       "node ../webApp/scripts/check-dist-config.mjs dist --expected-project tabakpp-staging --forbid-project tabakpp-ff036 --disallow-placeholders"
+       "node webApp/scripts/check-dist-config.mjs webApp/dist --expected-project tabakpp-staging --forbid-project tabakpp-ff036 --target staging-app --require-actual-project --require-target --disallow-placeholders"
      ]
      ```
    - Modified `webApp/scripts/deploy-staging.mjs`:
      - Added `getFirebaseProjects()` check: verifies that the target project actually exists in the account's active Firebase project list before building or deploying.
      - Halts execution with an informative error if `tabakpp-staging` is unprovisioned, preventing phantom deployments.
+     - Also halts if the project lookup fails (not logged in, CLI error, 15 s timeout). *Audit correction:* the first implementation silently skipped the check in that case.
+     - `--allow-placeholders` is accepted only together with `--dry-run`; live deploys always enforce the placeholder check (the predeploy hook enforces it regardless).
 3. **Automated Regression Suite**:
    - Added unit and isolation tests in `check-dist-config.test.mjs` and `staging-isolation.test.mjs`.
    - Verified that placeholder keys pass local syntax-only tests but fail preflight with `--disallow-placeholders`.
-   - Verified that attempting to deploy against an unprovisioned project immediately halts execution fail-closed.
+   - Verified that attempting to deploy against an unprovisioned project, or when the project lookup fails, halts execution fail-closed.
+   - Verified that a config with authentic-looking values passes even when other chunks contain vendor strings such as `placeholder` and `mockUserToken`, and that the real `webApp/dist` passes once its synthetic key is replaced.
 
 ---
 
@@ -118,28 +122,25 @@ To allow Android QA to connect to the staging Firebase environment without risk 
 
 ```kotlin
 buildTypes {
-    release {
-        isMinifyEnabled = true
-        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-    }
-    debug {
-        applicationIdSuffix = ".debug"
-        isDebuggable = true
-    }
+    getByName("release") { /* minify + shrink, release signing (unchanged) */ }
+    getByName("debug") { }
     create("staging") {
         initWith(getByName("debug"))
-        applicationIdSuffix = ".staging"
         matchingFallbacks += listOf("debug")
+        applicationIdSuffix = ".staging" // package: com.tabakpp.app.staging
     }
 }
 ```
 
 ### 5.2 Build Guard Task (`checkStagingFirebaseConfig`)
 To prevent accidental connection to production `tabakpp-ff036`, a custom task was implemented:
-- Inspects `androidApp/src/staging/google-services.json`.
-- Fails the build immediately if the file is missing when invoking `assembleStaging` or `checkStagingFirebaseConfig`.
-- Parses the file and fails if `project_id` equals `tabakpp-ff036` or if placeholder/dummy project IDs are detected.
-- Task is fully configuration-cache compliant for Gradle 9+ / AGP 9.0 using `@InputDirectory` / `DirectoryProperty`.
+- Inspects `androidApp/src/staging/google-services.json`. It runs before `preStagingBuild`, `processStagingGoogleServices*` and `compileStaging*`, or directly via `:androidApp:checkStagingFirebaseConfig`.
+- Fails if the file is missing or is not valid JSON.
+- Fails if the file mentions `tabakpp-ff036` anywhere, or if `project_info.project_id` is not exactly `tabakpp-staging`.
+- Fails if no client has package `com.tabakpp.app.staging`.
+- Fails if that client's `api_key[].current_key` is missing, or if it or `mobilesdk_app_id` matches the same placeholder pattern as the web guard. A verbatim copy of `google-services.json.example` is rejected.
+- Configuration-cache compliant (`@InputFiles` `ConfigurableFileCollection` plus `@Input` properties; verified with `--configuration-cache`).
+- *Audit correction (2026-10-22):* the first implementation passed silently when the file was missing and only searched for the `tabakpp-ff036` string. The "Task executed successfully" result previously recorded in §7 reflected that silent no-op.
 
 ---
 
@@ -164,12 +165,12 @@ All local unit, component, contract, PWA, script, and security rules tests were 
 | :--- | :--- | :--- | :--- | :--- |
 | **ESLint** | Static Analysis | `webApp/` | **PASS** | 0 errors, 0 warnings |
 | **Vitest Unit & Component** | Core Application Logic | `webApp/src/` | **PASS** | 34 files, 550 tests passed |
-| **Staging Script Regressions** | Preflight & Deployment Guards | `webApp/scripts/` | **PASS** | 50 tests passed |
+| **Staging Script Regressions** | Preflight & Deployment Guards | `webApp/scripts/` | **PASS** | 54 tests passed (50 + 4 audit regressions) |
 | **Domain Contract Parity** | Web vs Kotlin Multiplatform | Shared Schemas | **PASS** | 76 tests passed |
 | **PWA Lifecycle & Precache** | Service Worker & Offline Cache | `webApp/` | **PASS** | 27 tests passed |
 | **Firestore Security Rules** | Client Permission & Isolation | Emulator | **PASS** | 88 assertions passed |
 | **Android Unit Tests** | Shared & Android App | `:androidApp`, `:shared` | **PASS** | Gradle BUILD SUCCESSFUL |
-| **Staging Config Guard** | Staging Firebase Checker | `:androidApp:checkStagingFirebaseConfig` | **PASS** | Task executed successfully |
+| **Staging Config Guard** | Staging Firebase Checker | `:androidApp:checkStagingFirebaseConfig` | **PASS** | Exercised with missing file, example copy, production project and wrong package (each rejected) and a realistic staging config (accepted) |
 
 ---
 
@@ -177,11 +178,11 @@ All local unit, component, contract, PWA, script, and security rules tests were 
 
 | Gate | Category | Evaluation | Basis / Status |
 | :--- | :--- | :--- | :--- |
-| **Gate 1** | Code Verification | **PASS** | 550 unit tests, 76 contract tests, 50 script tests, Gradle builds all green; 0 lint issues. |
+| **Gate 1** | Code Verification | **PASS** | 550 unit tests, 76 contract tests, 54 script tests, Gradle builds all green; 0 lint issues. |
 | **Gate 2** | Firebase Staging Readiness | **BLOCKED** | Project creation quota exhausted on Google Cloud account `shareef2189@gmail.com`. |
 | **Gate 3** | Web Integration Readiness | **PASS (Emulator)**<br>**BLOCKED (Cloud)** | 65 emulator integration tests passing; Real cloud web hosting blocked by Gate 2. |
 | **Gate 4** | Android Integration Readiness | **PASS (Emulator)**<br>**BLOCKED (Cloud)** | 31 emulator instrumentation tests passing; dedicated `staging` buildType created; Cloud blocked by Gate 2. |
-| **Gate 5** | Security Readiness | **PASS** | 88/88 Firestore security rules, client-isolation verified, `--disallow-placeholders` preflight active. |
+| **Gate 5** | Security Readiness | **PASS** | 88/88 Firestore security rules, client-isolation verified, `--disallow-placeholders` preflight active (scoped to Firebase config values; verified not to false-positive on real bundles). |
 | **Gate 6** | Production Release Readiness | **NO-GO** | Blocked pending unblocking of Gate 2 and live cloud staging acceptance. |
 
 ---
@@ -201,4 +202,4 @@ To unblock Real Staging Activation:
    ```bash
    firebase projects:create tabakpp-staging --display-name "tabakpp-staging"
    ```
-4. Register Web and Android apps, obtain authentic credentials, and run `npm --prefix webApp run deploy:staging`.
+4. Register Web and Android apps, obtain authentic credentials, and run `npm --prefix webApp run deploy:staging:rules` and `npm --prefix webApp run deploy:staging:hosting`. Android: place the real config at `androidApp/src/staging/google-services.json` (the Gradle guard validates it).

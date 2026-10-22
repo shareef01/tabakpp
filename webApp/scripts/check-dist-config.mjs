@@ -22,7 +22,27 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const API_KEY = /AIza[0-9A-Za-z_-]{20,}/;
-export const PLACEHOLDER_KEY_PATTERN = /(?:stagingKeyValidation|placeholder|dummy|mock|testKey|fakeKey|0000000000|abcdef1234567890)/i;
+export const PLACEHOLDER_KEY_PATTERN = /(?:stagingKeyValidation|placeholder|dummy|mock|testKey|fakeKey|FROM_FIREBASE_CONSOLE|0000000000|abcdef1234567890|abcdef0123456789)/i;
+// Firebase config fields whose literal values are inspected for placeholders. Only these values are
+// scanned: bundles legitimately contain words like "placeholder" (input props) or "mock" (SDK internals).
+export const CONFIG_VALUE_FIELDS = ['apiKey', 'appId'];
+
+/**
+ * Extracts the inlined string values of the given Firebase config fields from a bundle chunk,
+ * e.g. apiKey:"AIza..." or appId:`1:123:web:abc`.
+ *
+ * @param {string} chunk
+ * @param {string[]} [fields]
+ * @returns {string[]}
+ */
+export function extractConfigValues(chunk, fields = CONFIG_VALUE_FIELDS) {
+  const values = [];
+  for (const field of fields) {
+    const re = new RegExp(String.raw`["']?\b${field}["']?\s*:\s*(["'\x60])([^"'\x60]+)\1`, 'g');
+    for (const m of chunk.matchAll(re)) values.push(m[2]);
+  }
+  return values;
+}
 export const PROD_PROJECT_ID = 'tabakpp-ff036';
 export const PROD_SITE_ID = 'tabakpp';
 export const PROD_FUNCTION_ENDPOINT = 'europe-west1-tabakpp-ff036.cloudfunctions.net';
@@ -213,7 +233,15 @@ export function checkDistConfig(distDir, options = null) {
 
   // Check for synthetic/placeholder credentials when disallowPlaceholders is active
   if (disallowPlaceholders) {
-    const hasPlaceholder = chunks.some((c) => PLACEHOLDER_KEY_PATTERN.test(c));
+    const configValues = chunks.flatMap((c) => extractConfigValues(c));
+    if (!configValues.some((v) => API_KEY.test(v))) {
+      return {
+        ok: false,
+        reason: 'Could not locate the inlined Firebase config (apiKey) in build chunks, so placeholder '
+          + 'credentials cannot be ruled out. Refusing to deploy.',
+      };
+    }
+    const hasPlaceholder = configValues.some((v) => PLACEHOLDER_KEY_PATTERN.test(v));
     if (hasPlaceholder) {
       return {
         ok: false,

@@ -82,8 +82,16 @@ export function validateStagingDeployment(operation, options = {}) {
     };
   }
 
-  // 1b. Project provisioning validation
-  if (options.availableProjects && Array.isArray(options.availableProjects)) {
+  // 1b. Project provisioning validation. `null` means the Firebase CLI lookup ran and failed
+  // (not logged in, timeout, CLI error): fail closed rather than skipping the check.
+  if (options.availableProjects === null) {
+    return {
+      ok: false,
+      reason: `Could not verify that "${STAGING_PROJECT_ID}" exists: \`firebase projects:list\` failed or timed out. `
+        + 'Run `firebase login`, or pass --skip-project-check to bypass deliberately.',
+    };
+  }
+  if (Array.isArray(options.availableProjects)) {
     if (!options.availableProjects.includes(STAGING_PROJECT_ID)) {
       return {
         ok: false,
@@ -360,8 +368,13 @@ if (isMain) {
 
   console.log(`\n🔍 Verifying staging deployment prerequisites for [${operation}]...`);
 
-  // Query authenticated projects from Firebase CLI if not skipped
-  const availableProjects = skipProjectCheck ? null : getFirebaseProjects();
+  if (allowPlaceholders && !dryRun) {
+    console.error('\n✖ --allow-placeholders is only valid with --dry-run; live deploys always reject placeholder config.\n');
+    process.exit(1);
+  }
+
+  // Query authenticated projects from Firebase CLI unless explicitly skipped (undefined = not checked)
+  const availableProjects = skipProjectCheck ? undefined : getFirebaseProjects();
 
   const result = deployStaging(operation, {
     project,

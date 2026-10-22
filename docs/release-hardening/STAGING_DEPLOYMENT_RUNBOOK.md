@@ -98,7 +98,7 @@ Download the Firebase-issued `google-services.json` for package `com.tabakpp.app
 ```bash
 androidApp/src/staging/google-services.json
 ```
-> **Android Production Isolation**: The `:androidApp:checkStagingFirebaseConfig` Gradle task verifies that `src/staging/google-services.json` does not reference production project `tabakpp-ff036`, ensuring staging builds can never silently connect to production.
+> **Android Production Isolation**: The `:androidApp:checkStagingFirebaseConfig` Gradle task requires `src/staging/google-services.json` to exist and belong to `tabakpp-staging` (package `com.tabakpp.app.staging`), rejects any reference to production project `tabakpp-ff036`, and rejects placeholder credentials. Staging builds can never silently connect to production.
 
 ---
 

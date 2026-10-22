@@ -233,6 +233,21 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       }
     });
 
+    it('8b. fails closed when the Firebase project lookup failed (availableProjects === null)', () => {
+      const dist = makeDist([VALID_STAGING_CONFIG]);
+      try {
+        const result = validateStagingDeployment('hosting', {
+          project: STAGING_PROJECT_ID,
+          distDir: dist,
+          availableProjects: null,
+        });
+        expect(result.ok).toBe(false);
+        expect(result.reason).toMatch(/Could not verify that "tabakpp-staging" exists/);
+      } finally {
+        rmSync(dist, { recursive: true, force: true });
+      }
+    });
+
     it('9. blocks staging deployment when build artifacts contain synthetic/placeholder credentials', () => {
       const placeholderChunk = 'const c={apiKey:"AIzaSyB_stagingKeyValidationQA001234567",projectId:"tabakpp-staging",appId:"1:100000000001:web:abcdef1234567890"};';
       const dist = makeDist([placeholderChunk]);
