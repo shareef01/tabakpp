@@ -298,5 +298,34 @@ describe('checkDistConfig (hosting predeploy guard)', () => {
       expect(result.ok).toBe(false);
       expect(result.reason).toMatch(/Conflicting authDomain/);
     });
+
+    it('accepts Firebase API keys of varying non-arbitrary lengths matching standard format', () => {
+      // 28-char and 42-char keys
+      const key28 = 'AIza' + 'y'.repeat(24);
+      const key42 = 'AIza' + 'z'.repeat(38);
+      const dist28 = makeDist([`const c={apiKey:"${key28}",projectId:"tabakpp-staging"}`]);
+      const dist42 = makeDist([`const c={apiKey:"${key42}",projectId:"tabakpp-staging"}`]);
+
+      expect(checkDistConfig(dist28, { expectedProject: 'tabakpp-staging', actualProject: 'tabakpp-staging' }).ok).toBe(true);
+      expect(checkDistConfig(dist42, { expectedProject: 'tabakpp-staging', actualProject: 'tabakpp-staging' }).ok).toBe(true);
+    });
+
+    it('rejects synthetic/placeholder credentials when disallowPlaceholders is true', () => {
+      const placeholderConfig = 'const c={apiKey:"AIzaSyB_stagingKeyValidationQA001234567",projectId:"tabakpp-staging",appId:"1:100000000001:web:abcdef1234567890"};';
+      const dist = makeDist([placeholderConfig]);
+
+      // When disallowPlaceholders is false (default shape-only check), shape check passes
+      expect(checkDistConfig(dist, { expectedProject: 'tabakpp-staging', actualProject: 'tabakpp-staging' }).ok).toBe(true);
+
+      // When disallowPlaceholders is true (live deployment preflight), placeholder is blocked
+      const result = checkDistConfig(dist, {
+        expectedProject: 'tabakpp-staging',
+        actualProject: 'tabakpp-staging',
+        disallowPlaceholders: true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/Synthetic or placeholder Firebase configuration detected/);
+    });
   });
 });
+

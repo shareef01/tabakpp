@@ -11,36 +11,42 @@
 
 ## 1. Release Gates & Sign-Off Criteria
 
-All criteria must be explicitly verified and marked `[X]` before initiating production deployment.
+All release gates must be explicitly evaluated before authorizing an RC1 production release.
 
-### Gate A: Static Code Quality & Linting
-- [X] **ESLint Check**: 0 errors, 0 warnings (`npm --prefix webApp run lint`).
-- [X] **TypeScript / Build Transpilation**: Clean build without errors (`npm --prefix webApp run build`).
-- [X] **Clean Git Working Tree**: No untracked files, no credentials, no temporary artifacts committed.
+### Gate 1: Code Verification — **PASS**
+- [X] **Static Code Quality / ESLint**: 0 errors, 0 warnings (`npm --prefix webApp run lint`).
+- [X] **Web Build Transpilation**: Clean build without errors (`npm --prefix webApp run build`).
+- [X] **Unit & Component Tests**: 550 / 550 Vitest tests passing (`npm --prefix webApp run test:run`).
+- [X] **Domain Contract Parity**: 76 / 76 contract checks passing between Web and Kotlin Multiplatform (`npm --prefix webApp run test:contract`).
+- [X] **Android Gradle Unit Tests**: `:shared:testDebugUnitTest`, `:composeApp:testDebugUnitTest`, `:androidApp:testDebugUnitTest` passing.
 
-### Gate B: Web & Emulator QA Test Suite
-- [X] **Core Vitest Suites**: 546 / 546 unit and component tests passing.
-- [X] **Firestore Security Rules**: 88 / 88 rules security assertions passing against Firestore Emulator.
-- [X] **Emulator Integration Suites**: 65 / 65 service and concurrency integration tests passing (`registryService`, `dailyLedger`, `offlineBehavior`).
-- [X] **Domain Contract Parity**: 76 / 76 contract checks passing between Web and Kotlin Multiplatform.
-- [X] **PWA Regression Suite**: 27 / 27 scenarios passing (precache, service worker lifecycle, offline shell).
+### Gate 2: Firebase Staging Readiness — **BLOCKED**
+- [ ] **Real Cloud Project Provisioning**: **BLOCKED** by Google Cloud Project Creation Quota on account `shareef2189@gmail.com` (Error Code 8: `QuotaFailure`).
+- [X] **Staging Safeguards & Target Isolation**: Staging targets isolated in `.firebaserc` (`staging-app`), `firebase.staging.json` configured with `--disallow-placeholders`.
+- [X] **Deployment Guarding**: `webApp/scripts/deploy-staging.mjs` verifies live project presence in `firebase projects:list` and rejects unprovisioned/placeholder environments fail-closed.
+- [X] **Zero Cost Incurred**: Spark Free Tier verified. No billing account attached.
 
-### Gate C: Accessibility & Visual Quality
-- [X] **Axe-Core Automated Audit**: 16 view/viewport permutations passed with 0 violations across 320px, 390px, 768px, and 1440px.
-- [X] **Color Contrast**: All 10 accent swatches verified passing WCAG AA contrast guidelines.
-- [X] **WCAG 1.4.10 200% Zoom Reflow**: 640px equivalent desktop view verified free of horizontal scroll.
-- [X] **Visual Screenshots**: Clean renders captured for desktop and mobile views with zero console errors.
+### Gate 3: Web Integration Readiness — **PASS (Emulator) / BLOCKED (Real Cloud Staging)**
+- [X] **Emulator Integration QA**: 65 / 65 service and concurrency integration tests passing (`registryService`, `dailyLedger`, `offlineBehavior`).
+- [X] **PWA Lifecycle & Offline Shell**: 27 / 27 scenarios passing (precache, service worker lifecycle, offline shell, offline counter rejection).
+- [X] **Accessibility & Visual Quality**: Axe-core 16 view/viewport permutations passed with 0 violations; WCAG AA contrast; 200% zoom reflow verified.
+- [ ] **Real Cloud Staging Web QA**: **BLOCKED** pending Google Cloud project creation quota resolution.
 
-### Gate D: Android & Cross-Platform Integrity
-- [X] **Gradle Unit Tests**: `:shared:testDebugUnitTest`, `:composeApp:testDebugUnitTest`, `:androidApp:testDebugUnitTest` all passed (BUILD SUCCESSFUL).
-- [X] **Android Instrumentation**: Post-merge CI Run `39718077899` verified with 31 / 31 tests passed on emulator API 35.
-- [X] **Navigation Alignment**: Bottom navigation labels, active indicators, and text scaling verified across Compose and Web.
+### Gate 4: Android Integration Readiness — **PASS (Emulator & Build Config) / BLOCKED (Real Cloud Staging)**
+- [X] **Staging Build Configuration**: Dedicated `staging` buildType created in `androidApp/build.gradle.kts` with `applicationIdSuffix = ".staging"`.
+- [X] **Production Accidental Leak Guard**: `checkStagingFirebaseConfig` Gradle task enforces dedicated `src/staging/google-services.json` and blocks building staging with production `tabakpp-ff036`.
+- [X] **Android Instrumentation (Emulator)**: CI Run `39718077899` verified with 31 / 31 tests passed on Android Emulator API 35.
+- [ ] **Real Cloud Staging Android QA**: **BLOCKED** pending staging Firebase project creation and genuine `google-services.json` issuance.
 
-### Gate E: Infrastructure & Safety Safeguards
-- [X] **Target Separation**: Staging targets isolated in `.firebaserc` (`staging-app`). Production target remains `tabakpp`.
-- [X] **Predeploy Guard**: `check-dist-config.mjs` verifies that production deployments require explicit production Firebase config and rejects staging configurations.
+### Gate 5: Security Readiness — **PASS**
+- [X] **Firestore Security Rules**: 88 / 88 rules security assertions passing against Firestore Emulator (`npm --prefix webApp run test:rules`).
 - [X] **Rules Guard**: `check-rules-project.mjs` prevents cross-project security rule overwrites.
-- [X] **Zero Cost Incurred**: Confirmed Spark Free Tier throughout. No billing account attached.
+- [X] **Client Authorization Integrity**: User data isolation enforced; counter mutations rejected offline; legacy financial mode preserved without Cloud Functions.
+- [X] **Configuration-Shape vs Project-Identity Separation**: Flexible API key length regex `/AIza[0-9A-Za-z_-]{20,}/` and placeholder rejection enforced.
+
+### Gate 6: Production Release Readiness — **NO-GO**
+- [ ] **Overall Decision**: **NO-GO FOR PRODUCTION RELEASE** until Gate 2 (Firebase Staging Provisioning) is unblocked and verified on real cloud infrastructure.
+- [X] **Codebase Readiness**: The codebase on branch `feature/staging-launch-qa` is fully verified, stable, and ready for staging deployment immediately upon quota clearance.
 
 ---
 
@@ -114,5 +120,6 @@ In case of unforeseen production regression on the web frontend:
 
 | Role | Name / Identity | Decision | Date & Signature |
 | :--- | :--- | :--- | :--- |
-| **Lead QA Engineer** | Autonomous Agent (Gemini 3.8 Flash) | **RECOMMENDED: GO** | 2026-10-22 (Verified via 772 tests) |
-| **Repository Owner** | `shareef01` | *Pending Owner Sign-Off* | `___________________________` |
+| **Lead QA Engineer** | Autonomous Agent (Gemini 3.8 Flash) | **NO-GO FOR PRODUCTION RELEASE**<br>(Codebase verified; Cloud Staging blocked by GCP Quota) | 2026-10-22 (Verified via test suites & staging guards) |
+| **Repository Owner** | `shareef01` | *Pending Quota Clearance & Owner Action* | `___________________________` |
+

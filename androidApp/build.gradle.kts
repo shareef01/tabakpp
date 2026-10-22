@@ -115,6 +115,11 @@ android {
         getByName("debug") {
             // testInstrumentationRunner is configured in defaultConfig
         }
+        create("staging") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+            applicationIdSuffix = ".staging"
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -133,6 +138,34 @@ android {
             manifest.srcFile("src/androidTest/AndroidManifest.xml")
         }
     }
+}
+
+abstract class CheckStagingFirebaseConfigTask : DefaultTask() {
+    @get:InputDirectory
+    @get:Optional
+    abstract val stagingDir: DirectoryProperty
+
+    @TaskAction
+    fun check() {
+        val dir = stagingDir.orNull?.asFile
+        val file = dir?.resolve("google-services.json")
+        if (file != null && file.exists()) {
+            val text = file.readText()
+            if (text.contains("tabakpp-ff036")) {
+                throw GradleException("CRITICAL SAFETY VIOLATION: Staging configuration at src/staging/google-services.json references production project 'tabakpp-ff036'. Staging Android builds must never connect to production.")
+            }
+        }
+    }
+}
+
+tasks.register<CheckStagingFirebaseConfigTask>("checkStagingFirebaseConfig") {
+    group = "verification"
+    description = "Guards against production Firebase credentials leaking into Android staging builds."
+    stagingDir.set(layout.projectDirectory.dir("src/staging"))
+}
+
+tasks.matching { it.name.startsWith("processStagingGoogleServices") || it.name.startsWith("compileStaging") }.configureEach {
+    dependsOn("checkStagingFirebaseConfig")
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

@@ -157,10 +157,8 @@ node webApp/scripts/check-dist-config.mjs webApp/dist --expected-project tabakpp
 - **Target Project ID**: `tabakpp-staging`
 - **GCP Account**: `shareef2189@gmail.com`
 - **Error Code**: `8` (`QuotaFailure`)
-- **API Error Message**: `The project cannot be created because you have exceeded your allotted project quota.`
-- **Existing Projects on Account**: 8 projects (`app-tabak`, `firmus-f2038`, `gemini-api-test-439517`, `portfolio-319918`, `shareef-99`, `shareef-cloud`, `tabakpp-ff036`, `tbbk-8ff39`).
 - **Remediation Required**: The account owner must log into the Google Cloud Console (Resource Manager) and either:
   1. Delete one or more obsolete / unused test projects, OR
   2. Request a Google Cloud project quota increase via https://support.google.com/code/contact/project_quota_increase.
 
-Once a project slot is available, staging provisioning can be completed in under 5 minutes using the included `STAGING_DEPLOYMENT_RUNBOOK.md`.
+Once a project slot is available, staging provisioning can proceed following `STAGING_DEPLOYMENT_RUNBOOK.md` using authentic configuration issued from the newly registered Firebase Web App. Note: Local emulator success validates codebase functional readiness, but real cloud staging validation remains pending quota resolution.

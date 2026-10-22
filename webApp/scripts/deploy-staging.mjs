@@ -82,6 +82,16 @@ export function validateStagingDeployment(operation, options = {}) {
     };
   }
 
+  // 1b. Project provisioning validation
+  if (options.availableProjects && Array.isArray(options.availableProjects)) {
+    if (!options.availableProjects.includes(STAGING_PROJECT_ID)) {
+      return {
+        ok: false,
+        reason: `Staging project "${STAGING_PROJECT_ID}" has not been provisioned in the authenticated Firebase account. Cloud deployment is BLOCKED.`,
+      };
+    }
+  }
+
   // 2. Environment variable validation (GCLOUD_PROJECT / PROJECT_ID)
   const envProject = env?.GCLOUD_PROJECT || env?.PROJECT_ID || null;
   if (envProject) {
@@ -174,6 +184,7 @@ export function validateStagingDeployment(operation, options = {}) {
       target,
       firebaserc,
       forbidProjectId: PROD_PROJECT_ID,
+      disallowPlaceholders: options.allowPlaceholders !== true,
     });
 
     if (!distCheck.ok) {
@@ -301,6 +312,31 @@ export function deployStaging(operation, options = {}) {
   };
 }
 
+/**
+ * Retrieves the list of active Firebase project IDs from the Firebase CLI.
+ * Returns null if CLI query fails or times out.
+ *
+ * @returns {string[]|null}
+ */
+export function getFirebaseProjects() {
+  try {
+    const proc = spawnSync('firebase', ['projects:list', '--json'], {
+      encoding: 'utf8',
+      timeout: 15000,
+      shell: process.platform === 'win32',
+    });
+    if (proc.status === 0 && proc.stdout) {
+      const parsed = JSON.parse(proc.stdout);
+      if (Array.isArray(parsed.result)) {
+        return parsed.result.map((p) => p.projectId);
+      }
+    }
+  } catch {
+    // CLI query failed or timed out
+  }
+  return null;
+}
+
 const isMain = process.argv[1] && resolve(process.argv[1]) === __filename;
 if (isMain) {
   const args = process.argv.slice(2);
@@ -314,6 +350,8 @@ if (isMain) {
   const project = getFlag('--project');
   const target = getFlag('--target');
   const dryRun = hasFlag('--dry-run');
+  const allowPlaceholders = hasFlag('--allow-placeholders');
+  const skipProjectCheck = hasFlag('--skip-project-check');
 
   if (!operation) {
     console.error('\n✖ Usage: node webApp/scripts/deploy-staging.mjs <hosting|firestore:rules> --project tabakpp-staging [--dry-run]\n');
@@ -321,7 +359,17 @@ if (isMain) {
   }
 
   console.log(`\n🔍 Verifying staging deployment prerequisites for [${operation}]...`);
-  const result = deployStaging(operation, { project, target, dryRun });
+
+  // Query authenticated projects from Firebase CLI if not skipped
+  const availableProjects = skipProjectCheck ? null : getFirebaseProjects();
+
+  const result = deployStaging(operation, {
+    project,
+    target,
+    dryRun,
+    allowPlaceholders,
+    availableProjects,
+  });
 
   if (!result.ok) {
     console.error(`\n✖ Deployment rejected: ${result.reason}\n`);

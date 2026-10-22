@@ -64,15 +64,22 @@ gcloud firestore databases create --project=tabakpp-staging --location=eur3 --ty
 
 ### 3.5 Configure Authentication Providers
 In the Firebase Console for `tabakpp-staging`:
-- Enable **Anonymous** authentication.
-- Enable **Email/Password** authentication.
+- Enable **Email/Password** authentication (12-char minimum password recommended).
+- Enable **Google** provider if testing Google OAuth on staging.
+- (Optional for test harnesses): Enable **Anonymous** authentication if running Android instrumentation tests against staging.
 - Verify authorized domains include `tabakpp-staging.firebaseapp.com` and `tabakpp-staging.web.app`.
 
 ---
 
 ## 4. Local Environment Configuration
 
-Create the local configuration file: `webApp/.env.staging.local` (this file is ignored by git).
+### 4.1 Web Staging Configuration
+Retrieve authentic configuration from the registered Web app:
+```bash
+firebase apps:sdkconfig WEB <ACTUAL_STAGING_APP_ID> --project tabakpp-staging
+```
+
+Populate the local configuration file: `webApp/.env.staging.local` (this file is git-ignored):
 
 ```bash
 # webApp/.env.staging.local
@@ -84,7 +91,14 @@ VITE_FIREBASE_MESSAGING_SENDER_ID=<ACTUAL_SENDER_ID>
 VITE_FIREBASE_APP_ID=<ACTUAL_APP_ID>
 ```
 
-> **API Key Guard**: Ensure the API key begins with `AIza` and is exactly 39 characters in length to pass preflight validation.
+> **Authentic Configuration Guard**: Staging deployments strictly enforce `--disallow-placeholders`. Synthetic or dummy keys (e.g. containing `stagingKeyValidationQA` or `placeholder`) fail preflight checks immediately. A deployment-ready build must use real Firebase configuration issued from the registered staging application.
+
+### 4.2 Android Staging Configuration
+Download the Firebase-issued `google-services.json` for package `com.tabakpp.app.staging` from Firebase Console and place it at:
+```bash
+androidApp/src/staging/google-services.json
+```
+> **Android Production Isolation**: The `:androidApp:checkStagingFirebaseConfig` Gradle task verifies that `src/staging/google-services.json` does not reference production project `tabakpp-ff036`, ensuring staging builds can never silently connect to production.
 
 ---
 
@@ -97,12 +111,16 @@ npm --prefix webApp run build:staging
 This builds the client in staging mode and outputs into `webApp/dist`.
 
 ### 5.2 Validate Build Artifacts
-Run the distribution predeploy check:
+Run the distribution predeploy check with placeholder rejection:
 ```bash
 node webApp/scripts/check-dist-config.mjs webApp/dist \
   --expected-project tabakpp-staging \
+  --actual-project tabakpp-staging \
   --target staging-app \
-  --forbid-project tabakpp-ff036
+  --forbid-project tabakpp-ff036 \
+  --require-actual-project \
+  --require-target \
+  --disallow-placeholders
 ```
 Expected output:
 ```

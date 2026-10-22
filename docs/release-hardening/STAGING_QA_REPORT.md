@@ -112,9 +112,10 @@ A comprehensive quality assurance cycle was performed on TABAK++ across Web, Fir
 ## 4. Qualitative User Journey Verification
 
 ### 4.1 Authentication Journey
-- **Anonymous Guest Flow**: Instant guest profile initialization with default counters and local session token.
-- **Email/Password Registration**: Form field validation, password requirements, error messaging on malformed input, duplicate account prevention.
+- **Email/Password Registration**: Form field validation, 12-character minimum password enforcement, error mapping for malformed input, and duplicate account prevention.
 - **Login / Logout**: Clean token clearing, persistent session preservation across reloads, immediate UI update on auth state change.
+- **Google OAuth Sign-In**: Integration with GoogleAuthProvider (via popup / redirect) and automatic profile initialization.
+- **Test Harness Authentication**: Anonymous authentication is utilized exclusively in automated Android instrumentation tests against the Auth emulator, while client UI strictly exposes Email/Password and Google Sign-in.
 - **Unauthorized Access**: Attempting direct access to protected screens safely routes to `#auth`.
 
 ### 4.2 Tracking & Counter Journey
