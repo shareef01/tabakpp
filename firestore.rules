@@ -797,7 +797,7 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow create: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validLedgerCreate(date);
         allow update: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validLedgerUpdate(date);
-        allow delete: if isOwner(userId) && !financialLocked(database, userId);
+        allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
       }
 
       // Request-idempotency receipts (created once per logical operation).
@@ -805,7 +805,7 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow create: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validOperationReceipt();
         allow update: if false; // immutable once written
-        allow delete: if isOwner(userId) && !financialLocked(database, userId);
+        allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
       }
 
       // AUD-016: receipts written by the trusted `executeFinancialOperation`
