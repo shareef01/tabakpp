@@ -298,5 +298,69 @@ describe('checkDistConfig (hosting predeploy guard)', () => {
       expect(result.ok).toBe(false);
       expect(result.reason).toMatch(/Conflicting authDomain/);
     });
+
+    it('accepts Firebase API keys of varying non-arbitrary lengths matching standard format', () => {
+      // 28-char and 42-char keys
+      const key28 = 'AIza' + 'y'.repeat(24);
+      const key42 = 'AIza' + 'z'.repeat(38);
+      const dist28 = makeDist([`const c={apiKey:"${key28}",projectId:"tabakpp-staging"}`]);
+      const dist42 = makeDist([`const c={apiKey:"${key42}",projectId:"tabakpp-staging"}`]);
+
+      expect(checkDistConfig(dist28, { expectedProject: 'tabakpp-staging', actualProject: 'tabakpp-staging' }).ok).toBe(true);
+      expect(checkDistConfig(dist42, { expectedProject: 'tabakpp-staging', actualProject: 'tabakpp-staging' }).ok).toBe(true);
+    });
+
+    it('accepts authentic config even when other bundle code contains placeholder-like words', () => {
+      // Real bundles contain input `placeholder` props, Firebase SDK `mockUserToken`, `__dummy__`, long zero runs.
+      const realConfig = 'var Te={apiKey:`AIzaSyD4kQ7rLmN2pX9vB3cF6hJ8tW1yZ5sE0uA`,projectId:`tabakpp-staging`,appId:`1:812345678901:web:9f3c2a7b1e4d6c80`};';
+      const noise = 'jsx(b,{placeholder:`Full Name...`});throw Error(`mockUserToken`);var r={__dummy__:0},u=1.0000000000001;';
+      const dist = makeDist([realConfig, noise]);
+      const result = checkDistConfig(dist, {
+        expectedProject: 'tabakpp-staging',
+        actualProject: 'tabakpp-staging',
+        disallowPlaceholders: true,
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it('fails closed when disallowPlaceholders is true but no apiKey config value can be located', () => {
+      const dist = makeDist([`const k="AIza${'q'.repeat(35)}";`]);
+      const result = checkDistConfig(dist, {
+        expectedProject: 'tabakpp-staging',
+        actualProject: 'tabakpp-staging',
+        disallowPlaceholders: true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/Could not locate the inlined Firebase config/);
+    });
+
+    it('rejects the committed google-services.json.example key as a placeholder', () => {
+      const dist = makeDist(['const c={apiKey:"AIzaSy_STAGING_KEY_FROM_FIREBASE_CONSOLE",projectId:"tabakpp-staging"};']);
+      const result = checkDistConfig(dist, {
+        expectedProject: 'tabakpp-staging',
+        actualProject: 'tabakpp-staging',
+        disallowPlaceholders: true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/Synthetic or placeholder/);
+    });
+
+    it('rejects synthetic/placeholder credentials when disallowPlaceholders is true', () => {
+      const placeholderConfig = 'const c={apiKey:"AIzaSyB_stagingKeyValidationQA001234567",projectId:"tabakpp-staging",appId:"1:100000000001:web:abcdef1234567890"};';
+      const dist = makeDist([placeholderConfig]);
+
+      // When disallowPlaceholders is false (default shape-only check), shape check passes
+      expect(checkDistConfig(dist, { expectedProject: 'tabakpp-staging', actualProject: 'tabakpp-staging' }).ok).toBe(true);
+
+      // When disallowPlaceholders is true (live deployment preflight), placeholder is blocked
+      const result = checkDistConfig(dist, {
+        expectedProject: 'tabakpp-staging',
+        actualProject: 'tabakpp-staging',
+        disallowPlaceholders: true,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/Synthetic or placeholder Firebase configuration detected/);
+    });
   });
 });
+

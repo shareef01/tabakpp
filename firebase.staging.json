@@ -3,7 +3,7 @@
     "target": "staging-app",
     "public": "webApp/dist",
     "predeploy": [
-      "node webApp/scripts/check-dist-config.mjs webApp/dist --expected-project tabakpp-staging --forbid-project tabakpp-ff036 --target staging-app --require-actual-project --require-target"
+      "node webApp/scripts/check-dist-config.mjs webApp/dist --expected-project tabakpp-staging --forbid-project tabakpp-ff036 --target staging-app --require-actual-project --require-target --disallow-placeholders"
     ],
     "ignore": [
       "firebase.json",

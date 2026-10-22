@@ -50,7 +50,11 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       // 3. MUST NOT deploy Cloud Functions to staging (Spark parity)
       expect(stagingConfig.functions).toBeUndefined();
 
-      // 4. CSP MUST NOT allow production Cloud Functions in connect-src
+      // 4. Predeploy guard MUST enforce disallow-placeholders to fail closed on synthetic configs
+      const predeploy = stagingConfig.hosting.predeploy || [];
+      expect(predeploy.some((cmd) => cmd.includes('--disallow-placeholders'))).toBe(true);
+
+      // 5. CSP MUST NOT allow production Cloud Functions in connect-src
       const headers = stagingConfig.hosting.headers || [];
       const catchAll = headers.find((h) => h.source === '/**');
       expect(catchAll).toBeDefined();
@@ -212,6 +216,51 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       });
       expect(result.ok).toBe(false);
       expect(result.reason).toMatch(/Conflicting environment variable: GCLOUD_PROJECT is set to "unrelated-project-id"/);
+    });
+
+    it('8. blocks staging deployment when staging project has not been provisioned in Firebase account', () => {
+      const dist = makeDist([VALID_STAGING_CONFIG]);
+      try {
+        const result = validateStagingDeployment('hosting', {
+          project: STAGING_PROJECT_ID,
+          distDir: dist,
+          availableProjects: ['tabakpp-ff036', 'ledger-7c14b', 'tabakpwa'], // tabakpp-staging missing
+        });
+        expect(result.ok).toBe(false);
+        expect(result.reason).toMatch(/Staging project "tabakpp-staging" has not been provisioned in the authenticated Firebase account/);
+      } finally {
+        rmSync(dist, { recursive: true, force: true });
+      }
+    });
+
+    it('8b. fails closed when the Firebase project lookup failed (availableProjects === null)', () => {
+      const dist = makeDist([VALID_STAGING_CONFIG]);
+      try {
+        const result = validateStagingDeployment('hosting', {
+          project: STAGING_PROJECT_ID,
+          distDir: dist,
+          availableProjects: null,
+        });
+        expect(result.ok).toBe(false);
+        expect(result.reason).toMatch(/Could not verify that "tabakpp-staging" exists/);
+      } finally {
+        rmSync(dist, { recursive: true, force: true });
+      }
+    });
+
+    it('9. blocks staging deployment when build artifacts contain synthetic/placeholder credentials', () => {
+      const placeholderChunk = 'const c={apiKey:"AIzaSyB_stagingKeyValidationQA001234567",projectId:"tabakpp-staging",appId:"1:100000000001:web:abcdef1234567890"};';
+      const dist = makeDist([placeholderChunk]);
+      try {
+        const result = validateStagingDeployment('hosting', {
+          project: STAGING_PROJECT_ID,
+          distDir: dist,
+        });
+        expect(result.ok).toBe(false);
+        expect(result.reason).toMatch(/Synthetic or placeholder Firebase configuration detected/);
+      } finally {
+        rmSync(dist, { recursive: true, force: true });
+      }
     });
   });
 

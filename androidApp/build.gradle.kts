@@ -115,6 +115,11 @@ android {
         getByName("debug") {
             // testInstrumentationRunner is configured in defaultConfig
         }
+        create("staging") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+            applicationIdSuffix = ".staging"
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -133,6 +138,67 @@ android {
             manifest.srcFile("src/androidTest/AndroidManifest.xml")
         }
     }
+}
+
+abstract class CheckStagingFirebaseConfigTask : DefaultTask() {
+    // InputFiles (not InputFile) so a missing file reaches check() and fails with a clear message.
+    @get:InputFiles
+    abstract val configFile: ConfigurableFileCollection
+
+    @get:Input
+    abstract val expectedProjectId: Property<String>
+
+    @get:Input
+    abstract val forbiddenProjectId: Property<String>
+
+    @get:Input
+    abstract val expectedPackageName: Property<String>
+
+    @TaskAction
+    fun check() {
+        val file = configFile.singleFile
+        val path = "src/staging/google-services.json"
+        if (!file.exists()) {
+            throw GradleException("Missing $path. Staging builds require a dedicated config from the '${expectedProjectId.get()}' Firebase project (see google-services.json.example).")
+        }
+        val text = file.readText()
+        if (text.contains(forbiddenProjectId.get())) {
+            throw GradleException("CRITICAL SAFETY VIOLATION: $path references production project '${forbiddenProjectId.get()}'. Staging Android builds must never connect to production.")
+        }
+        val json = try {
+            groovy.json.JsonSlurper().parseText(text) as Map<*, *>
+        } catch (e: Exception) {
+            throw GradleException("$path is not valid JSON: ${e.message}")
+        }
+        val projectId = (json["project_info"] as? Map<*, *>)?.get("project_id")
+        if (projectId != expectedProjectId.get()) {
+            throw GradleException("$path has project_id '$projectId'; expected '${expectedProjectId.get()}'.")
+        }
+        val clients = (json["client"] as? List<*>).orEmpty().filterIsInstance<Map<*, *>>()
+        val client = clients.firstOrNull {
+            ((it["client_info"] as? Map<*, *>)?.get("android_client_info") as? Map<*, *>)?.get("package_name") == expectedPackageName.get()
+        } ?: throw GradleException("$path has no client for package '${expectedPackageName.get()}'.")
+        // Mirrors PLACEHOLDER_KEY_PATTERN in webApp/scripts/check-dist-config.mjs.
+        val placeholder = Regex("stagingKeyValidation|placeholder|dummy|mock|testKey|fakeKey|FROM_FIREBASE_CONSOLE|0000000000|abcdef1234567890|abcdef0123456789", RegexOption.IGNORE_CASE)
+        val appId = (client["client_info"] as? Map<*, *>)?.get("mobilesdk_app_id")?.toString().orEmpty()
+        val apiKeys = (client["api_key"] as? List<*>).orEmpty().mapNotNull { (it as? Map<*, *>)?.get("current_key")?.toString() }
+        if (apiKeys.isEmpty() || (apiKeys + appId).any { placeholder.containsMatchIn(it) }) {
+            throw GradleException("$path contains missing or placeholder credentials (api_key / mobilesdk_app_id). Download the real config from the Firebase console.")
+        }
+    }
+}
+
+tasks.register<CheckStagingFirebaseConfigTask>("checkStagingFirebaseConfig") {
+    group = "verification"
+    description = "Guards against missing, placeholder, or production Firebase config in Android staging builds."
+    configFile.from(layout.projectDirectory.file("src/staging/google-services.json"))
+    expectedProjectId.set("tabakpp-staging")
+    forbiddenProjectId.set("tabakpp-ff036")
+    expectedPackageName.set("${android.defaultConfig.applicationId}.staging")
+}
+
+tasks.matching { it.name == "preStagingBuild" || it.name.startsWith("processStagingGoogleServices") || it.name.startsWith("compileStaging") }.configureEach {
+    dependsOn("checkStagingFirebaseConfig")
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

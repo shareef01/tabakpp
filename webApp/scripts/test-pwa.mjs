@@ -169,9 +169,20 @@ async function run() {
   secureServer = https.createServer(certificate(), serve);
   await new Promise(resolve => secureServer.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const browser = await puppeteer.launch({ executablePath: executable(), headless: true, args: ['--no-sandbox',
-    '--no-proxy-server', '--ignore-certificate-errors',
-    '--host-resolver-rules=MAP tabakpp.web.app 127.0.0.1, MAP tabakpp.firebaseapp.com 127.0.0.1'] });
+  const browser = await puppeteer.launch({
+    executablePath: executable(),
+    headless: true,
+    timeout: 60000,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-proxy-server',
+      '--ignore-certificate-errors',
+      '--host-resolver-rules=MAP tabakpp.web.app 127.0.0.1, MAP tabakpp.firebaseapp.com 127.0.0.1',
+    ],
+  });
   evidence.browser = await browser.version();
   try {
     const context = await browser.createBrowserContext(); // Fresh SW/cache/IDB/local state.
