@@ -1,5 +1,15 @@
 {
   "projects": {
-    "default": "tabakpp-ff036"
+    "default": "tabakpp-ff036",
+    "staging": "tabakpp-staging"
+  },
+  "targets": {
+    "tabakpp-staging": {
+      "hosting": {
+        "staging-app": [
+          "tabakpp-staging"
+        ]
+      }
+    }
   }
 }
