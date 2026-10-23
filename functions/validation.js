@@ -254,6 +254,9 @@ export const COUNTER_GRACE_MS = 5 * 60 * 1000;
  * server has no zone to evaluate it in) admits a tap that raced the boundary.
  * Late corrections to a past day go through HISTORICAL_DAY_UPDATE.
  */
+export const counterGraceTrackingDate = (now, timeZone, dayStartHour) =>
+  (timeZone ? computeTrackingDateForZone(new Date(now.getTime() - COUNTER_GRACE_MS), timeZone, dayStartHour) : null);
+
 export const requireCounterDate = (date, currentTrackingDate, graceTrackingDate = null) => {
   if (date === currentTrackingDate || (graceTrackingDate != null && date === graceTrackingDate)) return date;
   throw new HttpsError('failed-precondition', 'COUNTER_MUST_TARGET_CURRENT_DATE');

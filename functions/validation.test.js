@@ -4,7 +4,7 @@ import {
   isCalendarDate, requireTrackingDate, requireId, sanitizeCounts, sanitizeHistoricalCounts, resolveDayStartHour,
   requireRecentLogin, resolveCurrentTrackingDate,
   isValidIanaTimeZone, getZonedDateTimeParts, computeTrackingDateForZone, resolveUserTrackingDate,
-  requireCounterDate, COUNTER_GRACE_MS,
+  requireCounterDate, COUNTER_GRACE_MS, counterGraceTrackingDate,
 } from './validation.js';
 
 const code = (fn) => {
@@ -259,4 +259,101 @@ test('requireCounterDate admits only the current date, or the date that just end
   assert.equal(code(() => requireCounterDate('2026-10-22', '2026-10-23', laterGrace)), 'COUNTER_MUST_TARGET_CURRENT_DATE');
   // No zone to evaluate the window in: only the current date.
   assert.equal(code(() => requireCounterDate('2026-10-22', '2026-10-23', null)), 'COUNTER_MUST_TARGET_CURRENT_DATE');
+});
+
+// ---- Counter date boundaries (M2). Every instant below is fixed: the server
+// clock is the `now` argument, so no test depends on the real clock. ----
+
+/** What executeFinancialOperation accepts for a counter tap at `now`. */
+const counterDatesAt = (now, { profileTimeZone = null, requestTimeZone = null, claimedDate = null, dayStartHour = 6 } = {}) => {
+  const r = resolveUserTrackingDate({ now, profileTimeZone, requestTimeZone, claimedDate, dayStartHour });
+  return { current: r.trackingDate, grace: counterGraceTrackingDate(now, r.timeZone, dayStartHour) };
+};
+const accepts = (date, at) => code(() => requireCounterDate(date, at.current, at.grace)) === null;
+
+test('counter boundary: midnight day start rolls over once, with grace for the day that just ended', () => {
+  // 00:02 Berlin (CEST) on 2026-10-24, day starts at midnight.
+  const just = counterDatesAt(new Date('2026-10-23T22:02:00Z'), { profileTimeZone: 'Europe/Berlin', dayStartHour: 0 });
+  assert.deepEqual(just, { current: '2026-10-24', grace: '2026-10-23' });
+  assert.ok(accepts('2026-10-24', just));
+  assert.ok(accepts('2026-10-23', just), 'a tap sent at 23:59:59 that lands at 00:02 still counts');
+  // Past the 5-minute window the previous day is closed to counters.
+  const later = counterDatesAt(new Date('2026-10-23T22:06:00Z'), { profileTimeZone: 'Europe/Berlin', dayStartHour: 0 });
+  assert.deepEqual(later, { current: '2026-10-24', grace: '2026-10-24' });
+  assert.ok(!accepts('2026-10-23', later));
+});
+
+test('counter boundary: DST spring-forward and fall-back keep one rollover per day', () => {
+  // 2026-03-29 Berlin jumps 02:00 CET -> 03:00 CEST at 01:00Z. Day start 03:00:
+  // at 01:02Z it is 03:02 CEST (new day); 5 min earlier was 01:57 CET (old day).
+  const spring = counterDatesAt(new Date('2026-03-29T01:02:00Z'), { profileTimeZone: 'Europe/Berlin', dayStartHour: 3 });
+  assert.deepEqual(spring, { current: '2026-03-29', grace: '2026-03-28' });
+  // 2026-10-25 Berlin repeats 02:00-03:00 (03:00 CEST -> 02:00 CET at 01:00Z).
+  // Day start 02:00 is first reached at 00:00Z; the repeated 02:xx hour must
+  // not roll the date back or forward a second time.
+  const firstPass = counterDatesAt(new Date('2026-10-25T00:30:00Z'), { profileTimeZone: 'Europe/Berlin', dayStartHour: 2 });
+  const repeat = counterDatesAt(new Date('2026-10-25T01:02:00Z'), { profileTimeZone: 'Europe/Berlin', dayStartHour: 2 });
+  assert.equal(firstPass.current, '2026-10-25');
+  assert.deepEqual(repeat, { current: '2026-10-25', grace: '2026-10-25' });
+  assert.ok(!accepts('2026-10-24', repeat), 'the repeated hour gives no extra grace to the previous day');
+  // Day start 03:00 on the same day is reached once, at 02:00Z (03:00 CET).
+  const fall = counterDatesAt(new Date('2026-10-25T02:02:00Z'), { profileTimeZone: 'Europe/Berlin', dayStartHour: 3 });
+  assert.deepEqual(fall, { current: '2026-10-25', grace: '2026-10-24' });
+});
+
+test('counter boundary: the stored zone decides "today", not the request zone or a claimed date', () => {
+  // 12:00Z: Tokyo is on 2026-10-23 (21:00); New York is on 2026-10-23 (08:00).
+  const at = counterDatesAt(new Date('2026-10-23T12:00:00Z'),
+    { profileTimeZone: 'Asia/Tokyo', requestTimeZone: 'America/New_York', claimedDate: '2026-10-22' });
+  assert.deepEqual(at, { current: '2026-10-23', grace: '2026-10-23' });
+  assert.ok(!accepts('2026-10-22', at), 'a plausible but manipulated claimed date cannot move a zoned account to yesterday');
+  // Same instant, UTC vs a zone already past midnight: 23:30Z is 08:30 next
+  // day in Tokyo, so the account's zone wins over UTC.
+  const tokyo = counterDatesAt(new Date('2026-10-23T23:30:00Z'), { profileTimeZone: 'Asia/Tokyo' });
+  const utc = counterDatesAt(new Date('2026-10-23T23:30:00Z'), { profileTimeZone: 'UTC' });
+  assert.equal(tokyo.current, '2026-10-24');
+  assert.equal(utc.current, '2026-10-23');
+});
+
+test('counter boundary: accounts without a saved zone', () => {
+  const now = new Date('2026-10-23T06:02:00Z');
+  // The shipped clients always send their zone: it is validated and becomes the
+  // account zone, with the same grace as a stored one.
+  const firstCall = counterDatesAt(now, { requestTimeZone: 'UTC' });
+  assert.deepEqual(firstCall, { current: '2026-10-23', grace: '2026-10-22' });
+  // No zone at all (an older or raw caller): a plausible claimed date is
+  // taken as "today" and there is NO grace date, so exactly one date is open.
+  const claimOnly = counterDatesAt(now, { claimedDate: '2026-10-22' });
+  assert.deepEqual(claimOnly, { current: '2026-10-22', grace: null });
+  assert.ok(accepts('2026-10-22', claimOnly));
+  assert.ok(!accepts('2026-10-23', claimOnly), 'only the one claimed date is open, not the server UTC date as well');
+  // No zone and no claim: server UTC with the account's day start.
+  assert.deepEqual(counterDatesAt(now), { current: '2026-10-23', grace: '2026-10-22' });
+});
+
+test('counter boundary: manipulated or skewed claimed dates are rejected before any date is chosen', () => {
+  const now = new Date('2026-10-23T12:00:00Z');
+  // Malformed.
+  assert.equal(code(() => counterDatesAt(now, { claimedDate: '2026-10-32' })), 'INVALID_CURRENT_TRACKING_DATE');
+  assert.equal(code(() => counterDatesAt(now, { claimedDate: '23.10.2026' })), 'INVALID_CURRENT_TRACKING_DATE');
+  // A client clock days off cannot claim a day no zone is on, and the claim is
+  // bounds-checked even when the account has a stored zone.
+  assert.equal(code(() => counterDatesAt(now, { claimedDate: '2026-10-20' })), 'IMPLAUSIBLE_CURRENT_TRACKING_DATE');
+  assert.equal(code(() => counterDatesAt(now, { claimedDate: '2026-10-26', profileTimeZone: 'Europe/Berlin' })), 'IMPLAUSIBLE_CURRENT_TRACKING_DATE');
+  // A client clock several hours behind (still plausible: UTC-12 is on the 22nd
+  // at 00:00Z-12h) yields the server's date when the zone is known: the server
+  // clock, not the client's, picks "today".
+  const skewed = counterDatesAt(now, { claimedDate: '2026-10-22', profileTimeZone: 'Europe/Berlin' });
+  assert.equal(skewed.current, '2026-10-23');
+  assert.ok(!accepts('2026-10-22', skewed));
+  // A claim one day ahead is already outside every zone at 12:00Z with a 06:00 day start.
+  assert.equal(code(() => counterDatesAt(now, { claimedDate: '2026-10-24', profileTimeZone: 'Europe/Berlin' })), 'IMPLAUSIBLE_CURRENT_TRACKING_DATE');
+});
+
+test('counterGraceTrackingDate is null without a zone and the boundary date within COUNTER_GRACE_MS', () => {
+  assert.equal(counterGraceTrackingDate(new Date('2026-10-23T06:02:00Z'), null, 6), null);
+  assert.equal(counterGraceTrackingDate(new Date('2026-10-23T06:02:00Z'), 'UTC', 6), '2026-10-22');
+  const edge = new Date(Date.parse('2026-10-23T06:00:00Z') + COUNTER_GRACE_MS);
+  assert.equal(counterGraceTrackingDate(edge, 'UTC', 6), '2026-10-23', 'exactly COUNTER_GRACE_MS after the boundary the window has closed');
+  assert.equal(counterGraceTrackingDate(new Date(edge.getTime() - 1), 'UTC', 6), '2026-10-22');
 });
