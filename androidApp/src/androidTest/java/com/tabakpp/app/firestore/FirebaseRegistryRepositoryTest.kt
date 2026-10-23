@@ -1061,7 +1061,6 @@ class FirebaseRegistryRepositoryTest {
                 "users/$testUid/configs/$TEST_TRACKER_ID",
                 """{"fields":{"name":{"stringValue":"Cigarettes"},"limit":{"integerValue":"10"},"order":{"integerValue":"0"},"type":{"stringValue":"CIGARETTE"},"pricePerUnit":{"doubleValue":1},"isFinanciallyTracked":{"booleanValue":true},"isPrimaryTracked":{"booleanValue":true}}}""",
             )
-            clearTrustedDate(date)
             try {
                 // Pre-condition: the real SDK ledger subscription sees no record yet.
                 val before = withTimeout(20_000) {
@@ -1070,10 +1069,7 @@ class FirebaseRegistryRepositoryTest {
                 kotlin.test.assertNull(before, "no canonical ledger should exist for $date before the increment")
 
                 val gateway = FirebaseTrustedFinancial(region = "europe-west1", emulatorHost = "127.0.0.1", emulatorPort = 5001)
-                gateway.execute("COUNTER_INCREMENT", mapOf(
-                    "operationId" to "opM-live-refresh", "date" to date, "trackerId" to TEST_TRACKER_ID,
-                    "delta" to 1.0, "defaultUnitPrice" to 1.0, "currentTrackingDate" to date,
-                ))
+                gateway.execute("COUNTER_INCREMENT", trustedTapPayload("opM-live-refresh", date))
 
                 // The same subscription path must now emit the server-written ledger.
                 val rec = withTimeout(30_000) {
@@ -1116,14 +1112,25 @@ class FirebaseRegistryRepositoryTest {
                 "users/$testUid/configs/$TEST_TRACKER_ID",
                 """{"fields":{"name":{"stringValue":"Cigarettes"},"limit":{"integerValue":"10"},"order":{"integerValue":"0"},"type":{"stringValue":"CIGARETTE"},"pricePerUnit":{"doubleValue":1},"isFinanciallyTracked":{"booleanValue":true},"isPrimaryTracked":{"booleanValue":true}}}""",
             )
-            clearTrustedDate(date)
-
             val gateway = FirebaseTrustedFinancial(region = "europe-west1", emulatorHost = "127.0.0.1", emulatorPort = 5001)
             val opId = "opL-tap-1"
-            val payload = mapOf(
-                "operationId" to opId, "date" to date, "trackerId" to TEST_TRACKER_ID,
-                "delta" to 1.0, "defaultUnitPrice" to 1.0, "currentTrackingDate" to date,
+            val payload = trustedTapPayload(opId, date)
+
+            // M2: a tap for any date but today is refused by the server, and
+            // the Android gateway surfaces that code instead of swallowing it.
+            // Two days back is clear of the 5-minute boundary grace at any hour.
+            val stale = java.time.LocalDate.parse(date).minusDays(2).toString()
+            val staleTap = runCatching { gateway.execute("COUNTER_INCREMENT", trustedTapPayload("opL-stale", stale)) }
+            kotlin.test.assertTrue(staleTap.isFailure, "a counter tap for $stale must be rejected")
+            kotlin.test.assertTrue(
+                staleTap.exceptionOrNull()?.message.orEmpty().contains("COUNTER_MUST_TARGET_CURRENT_DATE"),
+                "stale tap must fail with COUNTER_MUST_TARGET_CURRENT_DATE, got: ${staleTap.exceptionOrNull()?.message}",
             )
+            kotlin.test.assertFalse(
+                firestore.collection("users").document(testUid).collection("days").document(stale).get().exists,
+                "a rejected tap must not create a day",
+            )
+            kotlin.test.assertFalse(ownerGet("users/$testUid/trustedOperations/opL-stale"), "a rejected tap must leave no receipt")
 
             val r1 = gateway.execute("COUNTER_INCREMENT", payload)
             kotlin.test.assertTrue(r1.applied, "first COUNTER_INCREMENT must apply")
@@ -1154,11 +1161,23 @@ class FirebaseRegistryRepositoryTest {
             val r2 = gateway.execute("COUNTER_INCREMENT", payload)
             kotlin.test.assertFalse(r2.applied, "a duplicate operation must not re-apply")
 
-            // Conflict: same id, different payload ⇒ rejected.
+            // Conflict: same id, different payload ⇒ rejected as a CONFLICT
+            // specifically (not merely "some failure", which a date or auth
+            // error would also satisfy).
             val conflicted = runCatching {
                 gateway.execute("COUNTER_INCREMENT", payload + ("delta" to 2.0))
-            }.isFailure
-            kotlin.test.assertTrue(conflicted, "reusing an operation id with a different payload must be rejected")
+            }
+            kotlin.test.assertTrue(conflicted.isFailure, "reusing an operation id with a different payload must be rejected")
+            kotlin.test.assertTrue(
+                conflicted.exceptionOrNull()?.message.orEmpty().contains("OPERATION_CONFLICT"),
+                "conflict must fail with OPERATION_CONFLICT, got: ${conflicted.exceptionOrNull()?.message}",
+            )
+            // Exactly-once accounting across apply + duplicate + conflict: the
+            // canonical ledger (same decode path testM proves) counts one tap.
+            val ledgerAfter = firestore.collection("users").document(testUid).collection("dailyFinancials").document(date).get()
+                .data<DailyFinancialRecord>()
+            assertEquals(1.0, ledgerAfter.countsByTracker[TEST_TRACKER_ID] ?: 0.0, 0.001, "the counter must have moved exactly once")
+            assertEquals(9.0, ledgerAfter.canonicalCredit.saved, 0.01, "one tap of target 10 at €1 saves €9")
           } finally {
             // Isolation: the emulator reuses the synthetic anonymous account
             // across tests, and testL flips it to OPTION_B through the owner
@@ -1210,16 +1229,26 @@ class FirebaseRegistryRepositoryTest {
     }
 
     /**
+     * The ONLY way the owner-bypass helpers below build a URL. `Bearer owner`
+     * is the emulator's superuser channel and bypasses the rules, so it fails
+     * closed — same guard as [resetEmulatorDocuments] — unless the app under
+     * test is the demo project and the target is the loopback emulator.
+     */
+    private fun emulatorDocumentUrl(path: String): URL {
+        val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
+        check(projectId == "demo-tabakpp-test") { "Owner-bypass helpers require the demo test project, got '$projectId'" }
+        check(FIRESTORE_HOST == "127.0.0.1") { "Owner-bypass helpers require the loopback emulator" }
+        return URL("http://$FIRESTORE_HOST:$FIRESTORE_PORT/v1/projects/$projectId/databases/(default)/documents/$path")
+    }
+
+    /**
      * Emulator-only trusted seeding: PATCH via the Firestore emulator's owner
-     * bypass. The emulator namespaces data by project id, so seed the project
-     * the app under test actually uses (from its google-services.json:
-     * `demo-tabakpp-test` in CI, the real project locally) — a hardcoded id
-     * silently seeded a namespace the CI app never reads.
+     * bypass. No update mask, so the document is REPLACED by [json] — fine for
+     * fixtures, since [setup] resets the whole emulator database before every
+     * test.
      */
     private fun ownerPatch(path: String, json: String) {
-        val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
-        val url = java.net.URL("http://127.0.0.1:8080/v1/projects/$projectId/databases/(default)/documents/$path")
-        val conn = url.openConnection() as java.net.HttpURLConnection
+        val conn = emulatorDocumentUrl(path).openConnection() as HttpURLConnection
         conn.requestMethod = "PATCH"
         conn.setRequestProperty("Authorization", "Bearer owner")
         conn.setRequestProperty("Content-Type", "application/json")
@@ -1231,51 +1260,42 @@ class FirebaseRegistryRepositoryTest {
         check(code in 200..299) { "ownerPatch($path) failed: HTTP $code" }
     }
 
-    /** Emulator-only owner-bypass DELETE (same superuser channel as [ownerPatch]). */
-    private fun ownerDelete(path: String) {
-        val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
-        val url = java.net.URL("http://127.0.0.1:8080/v1/projects/$projectId/databases/(default)/documents/$path")
-        val conn = url.openConnection() as java.net.HttpURLConnection
-        conn.requestMethod = "DELETE"
-        conn.setRequestProperty("Authorization", "Bearer owner")
-        val code = conn.responseCode
-        conn.disconnect()
-        Log.d(TAG, "ownerDelete($path) -> $code")
-        check(code in 200..299 || code == 404) { "ownerDelete($path) failed: HTTP $code" }
-    }
-
     /**
      * The trusted callable only accepts counter taps for the CURRENT tracking
-     * date. This test account has no stored timeZone and the raw gateway sends
-     * none, so the server takes the payload's `currentTrackingDate` as "today"
-     * once it is plausible somewhere on Earth: the UTC day-start-6 date always is.
-     * Callers clear the date's day + ledger first (owner bypass — an OPTION_B
-     * account cannot delete them itself), since testL and testM share it.
+     * date. [trustedTapPayload] sends `timeZone = "UTC"` exactly like the app's
+     * gateway sends the device zone, so the server validates the date in that
+     * zone (with its 5-minute boundary grace) instead of trusting a bare
+     * `currentTrackingDate`. The UTC day-start-6 date matches the profile's
+     * default day start. No cleanup is needed: [setup] resets the emulator.
      */
     private fun currentTrackingDateForCallable(): String =
         java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(6).toLocalDate().toString()
 
-    private fun clearTrustedDate(date: String) {
-        ownerDelete("users/$testUid/days/$date")
-        ownerDelete("users/$testUid/dailyFinancials/$date")
-    }
+    private fun trustedTapPayload(opId: String, date: String, delta: Double = 1.0): Map<String, Any?> = mapOf(
+        "operationId" to opId, "date" to date, "trackerId" to TEST_TRACKER_ID,
+        "delta" to delta, "defaultUnitPrice" to 1.0,
+        "timeZone" to "UTC", "currentTrackingDate" to date,
+    )
 
     /**
      * Emulator-only owner-bypass GET (same superuser channel as [ownerPatch]):
-     * returns true when the document exists. Needed to observe server-only
+     * true when the document exists, false on 404. Needed to observe server-only
      * documents (trustedOperations) that the client SDK is — correctly —
-     * forbidden from reading under the shipped rules.
+     * forbidden from reading under the shipped rules. Any other status throws,
+     * so an emulator error can never read as "document absent".
      */
     private fun ownerGet(path: String): Boolean {
-        val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
-        val url = java.net.URL("http://127.0.0.1:8080/v1/projects/$projectId/databases/(default)/documents/$path")
-        val conn = url.openConnection() as java.net.HttpURLConnection
+        val conn = emulatorDocumentUrl(path).openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.setRequestProperty("Authorization", "Bearer owner")
         val code = conn.responseCode
         conn.disconnect()
         Log.d(TAG, "ownerGet($path) -> $code")
-        return code in 200..299
+        return when (code) {
+            in 200..299 -> true
+            404 -> false
+            else -> error("ownerGet($path) failed: HTTP $code")
+        }
     }
 
     private data class ContentionResult(

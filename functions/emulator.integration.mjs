@@ -1095,7 +1095,33 @@ const main = async () => {
   assert.equal(w.status, 403, `a stale token must not overwrite the tombstone (got ${w.status})`);
   assert.deepEqual(await readDoc(`users/${fdUid}`), { deleting: true });
 
-  console.log('✅ integration: ALL 24 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
+  // 25) Repeated submission across the date boundary: a tap accepted before the
+  //     rollover and retried after it (lost response, offline queue) replays
+  //     its receipt instead of failing COUNTER_MUST_TARGET_CURRENT_DATE — the
+  //     receipt lookup runs before date validation. Seeded as a receipt for a
+  //     date three days back so the clock never has to cross a real midnight.
+  const rbUser = await signIn();
+  const rbUid = rbUser.localId;
+  await seedOptionB(rbUid);
+  const rbPayload = { type: 'COUNTER_INCREMENT', date: PAST, trackerId: 'cig', delta: 1 };
+  const rbFp = fingerprintOf({ ...rbPayload, logId: undefined, counts: undefined, allowUnresolved: false });
+  const rbResult = { canonicalCredit: { saved: 9, wasted: 1, smokingUnits: 1, baselineSaved: 14 }, counts: { cig: 1 } };
+  await writeDoc(`users/${rbUid}/trustedOperations/rb1`, {
+    operationId: 'rb1', operationType: 'COUNTER_INCREMENT', trackingDate: PAST,
+    payloadFingerprint: rbFp, resultStatus: 'OK', result: rbResult,
+  });
+  r = await call(rbUser.idToken, { operationId: 'rb1', ...rbPayload });
+  assert.ok(r.ok && r.body.result.applied === false, `a retry of an accepted tap must replay after the rollover: ${JSON.stringify(r.body)}`);
+  assert.deepEqual(r.body.result.result, rbResult, 'the replay returns the original result');
+  assert.equal(await readDoc(`users/${rbUid}/days/${PAST}`), null, 'a replay must not write the stale day');
+  // The same id with a different payload is still a conflict, not a date error.
+  r = await call(rbUser.idToken, { operationId: 'rb1', ...rbPayload, delta: 2 });
+  assert.equal(r.body.error?.message, 'OPERATION_CONFLICT', `conflicting retry must be OPERATION_CONFLICT: ${JSON.stringify(r.body)}`);
+  // A NEW operation for that stale date is still refused.
+  r = await call(rbUser.idToken, { operationId: 'rb2', ...rbPayload });
+  assert.equal(r.body.error?.message, 'COUNTER_MUST_TARGET_CURRENT_DATE', `a new stale tap must be rejected: ${JSON.stringify(r.body)}`);
+
+  console.log('✅ integration: ALL 25 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });

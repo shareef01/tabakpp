@@ -20,7 +20,7 @@ import {
   stampFromConfig,
 } from './financial.js';
 import {
-  COUNTER_GRACE_MS, MAX_COUNT, MAX_DAY_TRACKERS, computeTrackingDateForZone, requireCounterDate, requireId,
+  MAX_COUNT, MAX_DAY_TRACKERS, counterGraceTrackingDate, requireCounterDate, requireId,
   requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate, resolveUserTrackingDate, isValidIanaTimeZone,
   sanitizeCounts, sanitizeHistoricalCounts,
 } from './validation.js';
@@ -158,9 +158,7 @@ export const executeFinancialOperation = onCall(async (request) => {
       dayStartHour: profileSnap.get('dayStartHour'),
     });
     // The date a boundary-racing counter tap may still target (see requireCounterDate).
-    const graceTrackingDate = resolvedZone
-      ? computeTrackingDateForZone(new Date(now.getTime() - COUNTER_GRACE_MS), resolvedZone, profileSnap.get('dayStartHour'))
-      : null;
+    const graceTrackingDate = counterGraceTrackingDate(now, resolvedZone, profileSnap.get('dayStartHour'));
 
 
     let date;
