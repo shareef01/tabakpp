@@ -111,7 +111,13 @@ jobs:
       # port drifts from the JS one (item 11).
       # :androidApp:testDebugUnitTest holds the App Check provider guard tests.
       - name: Test shared code, Compose UI, and build Android
-        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleStaging :androidApp:assembleRelease --no-daemon
+        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+      # Separate invocation: adding a third app variant to the run above
+      # exhausted the 2 GB Gradle heap (mergeStagingResources: Java heap space).
+      # Shared/compose outputs are already up to date, so this only builds the
+      # staging-specific tasks in a fresh JVM.
+      - name: Build Android staging variant
+        run: ./gradlew :androidApp:assembleStaging --no-daemon
 
   web-and-rules:
     runs-on: ubuntu-latest
