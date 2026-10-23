@@ -464,21 +464,26 @@ const main = async () => {
   const tzUid = tzUser.localId;
   await seedOptionB(tzUid);
 
+  // Counter taps must target the CURRENT tracking date, which for this account
+  // is evaluated in Berlin — between 04:00 and 06:00 UTC that is a different
+  // date from the UTC-based TODAY.
+  const { computeTrackingDateForZone } = await import('./validation.js');
+  const BERLIN_TODAY = computeTrackingDateForZone(new Date(), 'Europe/Berlin', 6);
   // Passing a valid IANA timeZone persists to the account profile
-  r = await call(tzUser.idToken, { operationId: 'tz_init', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', timeZone: 'Europe/Berlin', currentTrackingDate: TODAY });
+  r = await call(tzUser.idToken, { operationId: 'tz_init', type: 'COUNTER_INCREMENT', date: BERLIN_TODAY, trackerId: 'cig', timeZone: 'Europe/Berlin', currentTrackingDate: BERLIN_TODAY });
   assert.ok(r.ok, `call with IANA timeZone must succeed: ${JSON.stringify(r.body)}`);
   const tzProfile = await readDoc(`users/${tzUid}`);
   assert.equal(tzProfile.timeZone, 'Europe/Berlin', 'valid IANA timeZone must be persisted to profile');
 
   // Subsequent call without timeZone uses stored profile timezone
-  r = await call(tzUser.idToken, { operationId: 'tz1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', currentTrackingDate: TODAY });
+  r = await call(tzUser.idToken, { operationId: 'tz1', type: 'COUNTER_INCREMENT', date: BERLIN_TODAY, trackerId: 'cig', currentTrackingDate: BERLIN_TODAY });
   assert.ok(r.ok, `a plausible currentTrackingDate must be accepted: ${JSON.stringify(r.body)}`);
   const far = new Date(`${TODAY}T00:00:00Z`); far.setUTCDate(far.getUTCDate() - 5);
   r = await call(tzUser.idToken, { operationId: 'tz2', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', currentTrackingDate: far.toISOString().slice(0, 10) });
   assert.ok(!r.ok && r.body.error?.message === 'IMPLAUSIBLE_CURRENT_TRACKING_DATE', `implausible date must be rejected: ${JSON.stringify(r.body)}`);
-  r = await call(tzUser.idToken, { operationId: 'tz1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', currentTrackingDate: YDAY });
+  r = await call(tzUser.idToken, { operationId: 'tz1', type: 'COUNTER_INCREMENT', date: BERLIN_TODAY, trackerId: 'cig', currentTrackingDate: YDAY });
   assert.ok(r.ok && r.body.result.applied === false, `a retry with a different currentTrackingDate must be the same operation: ${JSON.stringify(r.body)}`);
-  assert.equal((await readDoc(`users/${tzUid}/days/${TODAY}`)).counts.cig, 2, 'applied exactly twice (tz_init + tz1)');
+  assert.equal((await readDoc(`users/${tzUid}/days/${BERLIN_TODAY}`)).counts.cig, 2, 'applied exactly twice (tz_init + tz1)');
 
   // 12) deleteAccountData — a locked (OPTION_B) account cannot client-wipe, so
   //     the trusted function deletes the caller's whole users/{uid} tree.
@@ -1000,7 +1005,97 @@ const main = async () => {
   assert.equal(fpConflict2.ok, false, 'Reuse of operationId with conflicting counts must be rejected');
   assert.match(JSON.stringify(fpConflict2.body), /OPERATION_CONFLICT/);
 
-  console.log('✅ integration: ALL 20 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
+  // 21) M1: a tracker with no own price is credited at the profile default.
+  //     Pre-fix the stamp carried `unitPrice: null`, which the canonical
+  //     calculation treats as UNKNOWN: 3 taps earned €0 spent / €0 saved.
+  const npUser = await signIn();
+  const npUid = npUser.localId;
+  await writeDoc(`users/${npUid}`, { name: '', financialMode: 'OPTION_B', unitPrice: 1, lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 } });
+  await writeDoc(`users/${npUid}/configs/cig`, { name: 'Cigarettes', limit: 10, order: 0, type: 'CIGARETTE', pricePerUnit: null, isFinanciallyTracked: true, isPrimaryTracked: true });
+  for (const id of ['np1', 'np2', 'np3']) {
+    r = await call(npUser.idToken, { operationId: id, type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
+    assert.ok(r.ok, `null-price increment failed: ${JSON.stringify(r.body)}`);
+  }
+  assert.equal((await readDoc(`users/${npUid}/days/${TODAY}`)).trackerSnapshots.cig.unitPrice, 1, 'stamp must carry the profile default price');
+  const npLed = await readDoc(`users/${npUid}/dailyFinancials/${TODAY}`);
+  assert.deepEqual(npLed.canonicalCredit, { saved: 7, wasted: 3, smokingUnits: 3, baselineSaved: 0 }, 'null-price tracker must be priced, not €0');
+  assert.equal(npLed.unresolvedComponents.spent, false);
+  assert.equal(npLed.unresolvedComponents.saved, false);
+
+  // 22) M2: counter taps only land on the current tracking date. A past date
+  //     would stamp today's live config as that day's historical fact and
+  //     open a day nothing closes. (Three days back: clear of the 5-minute
+  //     boundary grace whatever the hour.)
+  const pdUser = await signIn();
+  const pdUid = pdUser.localId;
+  await seedOptionB(pdUid);
+  const _past = new Date(`${TODAY}T12:00:00Z`); _past.setUTCDate(_past.getUTCDate() - 3);
+  const PAST = _past.toISOString().slice(0, 10);
+  for (const type of ['COUNTER_INCREMENT', 'COUNTER_DECREMENT']) {
+    r = await call(pdUser.idToken, { operationId: `pd_${type}`, type, date: PAST, trackerId: 'cig', delta: 1 });
+    assert.equal(r.body.error?.message, 'COUNTER_MUST_TARGET_CURRENT_DATE', `${type} on a past date must be rejected: ${JSON.stringify(r.body)}`);
+  }
+  assert.equal(await readDoc(`users/${pdUid}/days/${PAST}`), null, 'a rejected past-date tap must not create a day');
+  assert.equal(await readDoc(`users/${pdUid}/dailyFinancials/${PAST}`), null);
+  assert.equal(await readDoc(`users/${pdUid}/trustedOperations/pd_COUNTER_INCREMENT`), null, 'no receipt for a rejected op');
+  const _tomorrow = new Date(`${TODAY}T12:00:00Z`); _tomorrow.setUTCDate(_tomorrow.getUTCDate() + 1);
+  r = await call(pdUser.idToken, { operationId: 'pd_close_future', type: 'DAY_CLOSE', date: _tomorrow.toISOString().slice(0, 10) });
+  assert.equal(r.body.error?.message, 'DAY_CLOSE_FUTURE_DATE', `closing a later date must be rejected: ${JSON.stringify(r.body)}`);
+  r = await call(pdUser.idToken, { operationId: 'pd_today', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
+  assert.ok(r.ok, `a current-date tap must still succeed: ${JSON.stringify(r.body)}`);
+
+  // 23) L1: closing a date whose ledger is already folded moves lifetime by
+  //     old→new canonical credit. Seeded like a migration that folded a date
+  //     while it was still open: ledger credit €50 saved, but the day's frozen
+  //     stamp yields 5 × €1 against target 10 ⇒ €5 saved / €5 spent. Pre-fix
+  //     the ledger was overwritten to €5 while lifetime kept the €50 (100).
+  const rfUser = await signIn();
+  const rfUid = rfUser.localId;
+  await writeDoc(`users/${rfUid}`, { name: '', financialMode: 'OPTION_B', unitPrice: 1, lifetimeAggregates: { saved: 100, wasted: 20, smokingUnits: 5, baselineSaved: 0 } });
+  await writeDoc(`users/${rfUid}/configs/cig`, cigCfg);
+  const rfStamp = { cig: { target: 10, baseline: null, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true } };
+  await writeDoc(`users/${rfUid}/days/${YDAY}`, { date: YDAY, counts: { cig: 5 }, status: 'open', trackerSnapshots: rfStamp });
+  await writeDoc(`users/${rfUid}/dailyFinancials/${YDAY}`, {
+    date: YDAY, countsByTracker: { cig: 5 }, snapshots: rfStamp, foldedIntoLifetime: true, migratedFromLegacy: true,
+    canonicalCredit: { saved: 50, wasted: 5, smokingUnits: 5, baselineSaved: 0 },
+  });
+  r = await call(rfUser.idToken, { operationId: 'rf_close1', type: 'DAY_CLOSE', date: YDAY });
+  assert.ok(r.ok, `close of a folded date failed: ${JSON.stringify(r.body)}`);
+  assert.equal((await readDoc(`users/${rfUid}/dailyFinancials/${YDAY}`)).canonicalCredit.saved, 5);
+  let rfAgg = (await readDoc(`users/${rfUid}`)).lifetimeAggregates;
+  assert.equal(rfAgg.saved, 55, 'lifetime must move by the ledger delta (100 − 50 + 5)');
+  assert.equal(rfAgg.wasted, 20, 'unchanged wasted credit must leave lifetime alone (20 − 5 + 5)');
+  assert.equal(rfAgg.smokingUnits, 5);
+  // A repeat close (new operation id) of the now consistent date is a no-op.
+  r = await call(rfUser.idToken, { operationId: 'rf_close2', type: 'DAY_CLOSE', date: YDAY });
+  assert.ok(r.ok, `repeat close failed: ${JSON.stringify(r.body)}`);
+  rfAgg = (await readDoc(`users/${rfUid}`)).lifetimeAggregates;
+  assert.deepEqual(rfAgg, { saved: 55, wasted: 20, smokingUnits: 5, baselineSaved: 0 }, 'a repeat close must not move lifetime');
+
+  // 24) L2: deleteAccountData fences before it wipes, and the caller's own
+  //     (still valid) token cannot write anything back afterwards.
+  const fdUser = await signIn();
+  const fdUid = fdUser.localId;
+  await seedOptionB(fdUid);
+  r = await call(fdUser.idToken, { operationId: 'fd1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
+  assert.ok(r.ok, `seed increment failed: ${JSON.stringify(r.body)}`);
+  r = await call(fdUser.idToken, {}, 'deleteAccountData');
+  assert.ok(r.ok && r.body.result.deleted === true, `deleteAccountData failed: ${JSON.stringify(r.body)}`);
+  assert.deepEqual(await readDoc(`users/${fdUid}`), { deleting: true });
+  for (const p of [`configs/cig`, `days/${TODAY}`, `dailyFinancials/${TODAY}`, `trustedOperations/fd1`]) {
+    assert.equal(await readDoc(`users/${fdUid}/${p}`), null, `${p} must be deleted`);
+  }
+  const asCaller = (path, fields) => fetch(`${FS}/${path}`, {
+    method: 'PATCH', headers: { Authorization: `Bearer ${fdUser.idToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, toFs(v)])) }),
+  });
+  let w = await asCaller(`users/${fdUid}/configs/back`, { name: 'Back', limit: 5, order: 0 });
+  assert.equal(w.status, 403, `a stale token must not recreate configs after the wipe (got ${w.status})`);
+  w = await asCaller(`users/${fdUid}`, { name: 'Again' });
+  assert.equal(w.status, 403, `a stale token must not overwrite the tombstone (got ${w.status})`);
+  assert.deepEqual(await readDoc(`users/${fdUid}`), { deleting: true });
+
+  console.log('✅ integration: ALL 24 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });

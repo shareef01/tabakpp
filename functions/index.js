@@ -17,10 +17,12 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, migrationPlan, roundMoney,
+  stampFromConfig,
 } from './financial.js';
 import {
-  MAX_COUNT, MAX_DAY_TRACKERS, requireId, requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate,
-  resolveUserTrackingDate, isValidIanaTimeZone, sanitizeCounts, sanitizeHistoricalCounts,
+  COUNTER_GRACE_MS, MAX_COUNT, MAX_DAY_TRACKERS, computeTrackingDateForZone, requireCounterDate, requireId,
+  requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate, resolveUserTrackingDate, isValidIanaTimeZone,
+  sanitizeCounts, sanitizeHistoricalCounts,
 } from './validation.js';
 
 initializeApp();
@@ -147,13 +149,18 @@ export const executeFinancialOperation = onCall(async (request) => {
     }
 
     // Resolve user's tracking date and timezone authoritatively from server time + account/request timezone
+    const now = new Date();
     const { trackingDate: currentTrackingDate, timeZone: resolvedZone, shouldPersist } = resolveUserTrackingDate({
-      now: new Date(),
+      now,
       profileTimeZone: profileSnap.get('timeZone'),
       requestTimeZone: data.timeZone,
       claimedDate: data.currentTrackingDate,
       dayStartHour: profileSnap.get('dayStartHour'),
     });
+    // The date a boundary-racing counter tap may still target (see requireCounterDate).
+    const graceTrackingDate = resolvedZone
+      ? computeTrackingDateForZone(new Date(now.getTime() - COUNTER_GRACE_MS), resolvedZone, profileSnap.get('dayStartHour'))
+      : null;
 
 
     let date;
@@ -170,6 +177,14 @@ export const executeFinancialOperation = onCall(async (request) => {
       }
     } else {
       date = requireTrackingDate(data.date);
+    }
+    if (type === 'COUNTER_INCREMENT' || type === 'COUNTER_DECREMENT') {
+      requireCounterDate(date, currentTrackingDate, graceTrackingDate);
+    }
+    // Closing is for today (End day) or a stale past day; a later date has no
+    // finished consumption to fold.
+    if ((type === 'DAY_CLOSE' || type === 'ZERO_COUNT_DAY_CLOSE') && date > currentTrackingDate) {
+      throw new HttpsError('failed-precondition', 'DAY_CLOSE_FUTURE_DATE');
     }
 
     const { daySnap, day, logs, ledger, configs, ledgerSnap } = await readDateState(t, userRef, date);
@@ -205,7 +220,7 @@ export const executeFinancialOperation = onCall(async (request) => {
       if (Object.keys(newCounts).length > MAX_DAY_TRACKERS) throw new HttpsError('invalid-argument', 'TOO_MANY_TRACKERS');
       const trackerSnapshots = {
         ...(day?.trackerSnapshots || {}),
-        [trackerId]: snapshotFromConfig(cfg),
+        [trackerId]: stampFromConfig(cfg, defaultUnitPrice),
       };
       effectiveDay = { ...(day || {}), date, counts: newCounts, trackerSnapshots, status: 'open' };
       t.set(userRef.collection('days').doc(date), {
@@ -432,10 +447,13 @@ export const executeFinancialOperation = onCall(async (request) => {
         closedAt: new Date(),
         updatedAt: new Date(),
       }, { merge: true });
-      // Fold once: use the ledger's existing credit if already folded, else the recomputed one.
-      const creditToFold = folded ? (ledger.canonicalCredit || ZERO) : fin.canonicalCredit;
+      // Fold once: lifetime must always equal the sum of the folded ledgers'
+      // canonicalCredit. An unfolded date adds its whole credit; an already
+      // folded one (a repeat close, or a date the migration folded while it
+      // was still open) moves by old→new only. Overwriting the ledger without
+      // that delta used to leave lifetime and ledger disagreeing.
+      const alreadyFolded = folded ? (ledger.canonicalCredit || ZERO) : ZERO;
       const cur = curAgg;
-      // write ledger first without a second lifetime delta, then apply fold
       t.set(ledgerRef, {
         date,
         countsByTracker: fin.counts,
@@ -452,16 +470,15 @@ export const executeFinancialOperation = onCall(async (request) => {
         updatedAt: new Date(),
         ...(ledgerExistsAfter ? {} : { createdAt: new Date() }),
       });
-      if (!folded) {
-        t.set(userRef, {
-          lifetimeAggregates: {
-            saved: roundMoney(num(cur.saved) + num(creditToFold.saved)),
-            wasted: roundMoney(num(cur.wasted) + num(creditToFold.wasted)),
-            smokingUnits: Math.round(num(cur.smokingUnits) + num(creditToFold.smokingUnits)),
-            baselineSaved: roundMoney(num(cur.baselineSaved) + num(creditToFold.baselineSaved)),
-          },
-        }, { merge: true });
-      }
+      const credit = fin.canonicalCredit;
+      t.set(userRef, {
+        lifetimeAggregates: {
+          saved: roundMoney(num(cur.saved) - num(alreadyFolded.saved) + num(credit.saved)),
+          wasted: roundMoney(num(cur.wasted) - num(alreadyFolded.wasted) + num(credit.wasted)),
+          smokingUnits: Math.round(num(cur.smokingUnits) - num(alreadyFolded.smokingUnits) + num(credit.smokingUnits)),
+          baselineSaved: roundMoney(num(cur.baselineSaved) - num(alreadyFolded.baselineSaved) + num(credit.baselineSaved)),
+        },
+      }, { merge: true });
     } else if (!fin.eligible) {
       // The date has no remaining tracking evidence → it earns no allowance.
       // Remove any prior ledger credit and reverse its folded lifetime delta.
@@ -497,24 +514,17 @@ export const executeFinancialOperation = onCall(async (request) => {
   });
 });
 
-function snapshotFromConfig(cfg) {
-  return {
-    type: cfg.type, target: num(cfg.limit), baseline: cfg.baseline ?? null,
-    unitPrice: cfg.pricePerUnit ?? null, isFinanciallyTracked: cfg.isFinanciallyTracked !== false,
-    isPrimaryTracked: cfg.isPrimaryTracked === true,
-  };
-}
-
 /**
  * Price/target stamps for a manual log come from the server-read tracker
  * configs only — a client-supplied snapshot would let the payload choose the
- * price that a backfilled date's canonical credit is derived from.
+ * price that a backfilled date's canonical credit is derived from. The
+ * fallback price is the profile's, never the payload's.
  */
-function snapshotsForCounts(counts, configs) {
+function snapshotsForCounts(counts, configs, defaultUnitPrice) {
   const out = {};
   Object.keys(counts || {}).forEach((id) => {
     const cfg = configs.find((c) => c.id === id);
-    if (cfg) out[id] = snapshotFromConfig(cfg);
+    if (cfg) out[id] = stampFromConfig(cfg, defaultUnitPrice);
   });
   return out;
 }
@@ -704,10 +714,17 @@ export const deleteAccountData = onCall(async (request) => {
   if (!uid) throw new HttpsError('unauthenticated', 'Sign-in required.');
   requireRecentLogin(request.auth.token);
   const userRef = db.collection('users').doc(uid);
-  await db.recursiveDelete(userRef);
+  // Fence first, as the client wipes do (#83): once `deleting` is set the rules
+  // reject every client write, so another signed-in device cannot add
+  // configs/meta mid-wipe or recreate a LEGACY profile while it is gone.
+  // Deleting the profile itself first left exactly that window open.
+  await userRef.set({ deleting: true }, { merge: true });
+  for (const sub of await userRef.listCollections()) {
+    await db.recursiveDelete(sub);
+  }
   // Same minimal tombstone the client-side LEGACY wipe leaves: without it a
   // stale ID token could recreate a fresh LEGACY profile and data after the
-  // wipe. The rules reject every non-deleting write once the marker is set.
+  // wipe. Overwriting (not merging) drops every other profile field.
   await userRef.set({ deleting: true });
   return { deleted: true };
 });

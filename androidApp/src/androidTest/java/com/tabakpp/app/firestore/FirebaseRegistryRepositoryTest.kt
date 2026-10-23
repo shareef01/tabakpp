@@ -1048,9 +1048,10 @@ class FirebaseRegistryRepositoryTest {
     @Test
     fun testM_canonicalLedgerLiveRefresh_afterTrustedIncrement() {
         runBlocking {
-            // A PAST date: the trusted function rejects future dates (FUTURE_DATE),
-            // unlike the direct-write tests, which may use 2099 sentinels.
-            val date = "2000-12-15"
+            // The CURRENT tracking date: the trusted function rejects counter taps
+            // for any other date (COUNTER_MUST_TARGET_CURRENT_DATE), unlike the
+            // direct-write tests, which may use 2099 sentinels.
+            val date = currentTrackingDateForCallable()
             // Trusted emulator-only seeding (clients cannot set financialMode).
             ownerPatch(
                 "users/$testUid",
@@ -1060,9 +1061,7 @@ class FirebaseRegistryRepositoryTest {
                 "users/$testUid/configs/$TEST_TRACKER_ID",
                 """{"fields":{"name":{"stringValue":"Cigarettes"},"limit":{"integerValue":"10"},"order":{"integerValue":"0"},"type":{"stringValue":"CIGARETTE"},"pricePerUnit":{"doubleValue":1},"isFinanciallyTracked":{"booleanValue":true},"isPrimaryTracked":{"booleanValue":true}}}""",
             )
-            try {
-                firestore.collection("users").document(testUid).collection("dailyFinancials").document(date).delete()
-            } catch (_: Exception) { }
+            clearTrustedDate(date)
             try {
                 // Pre-condition: the real SDK ledger subscription sees no record yet.
                 val before = withTimeout(20_000) {
@@ -1073,7 +1072,7 @@ class FirebaseRegistryRepositoryTest {
                 val gateway = FirebaseTrustedFinancial(region = "europe-west1", emulatorHost = "127.0.0.1", emulatorPort = 5001)
                 gateway.execute("COUNTER_INCREMENT", mapOf(
                     "operationId" to "opM-live-refresh", "date" to date, "trackerId" to TEST_TRACKER_ID,
-                    "delta" to 1.0, "defaultUnitPrice" to 1.0,
+                    "delta" to 1.0, "defaultUnitPrice" to 1.0, "currentTrackingDate" to date,
                 ))
 
                 // The same subscription path must now emit the server-written ledger.
@@ -1106,8 +1105,8 @@ class FirebaseRegistryRepositoryTest {
     fun testL_callableCounterIncrement_idempotentAndConflict() {
         runBlocking {
           try {
-            // A PAST date: the trusted function rejects future dates (FUTURE_DATE).
-            val date = "2000-12-13"
+            // The CURRENT tracking date (see currentTrackingDateForCallable).
+            val date = currentTrackingDateForCallable()
             // Trusted emulator-only seeding (clients cannot set financialMode).
             ownerPatch(
                 "users/$testUid",
@@ -1117,15 +1116,13 @@ class FirebaseRegistryRepositoryTest {
                 "users/$testUid/configs/$TEST_TRACKER_ID",
                 """{"fields":{"name":{"stringValue":"Cigarettes"},"limit":{"integerValue":"10"},"order":{"integerValue":"0"},"type":{"stringValue":"CIGARETTE"},"pricePerUnit":{"doubleValue":1},"isFinanciallyTracked":{"booleanValue":true},"isPrimaryTracked":{"booleanValue":true}}}""",
             )
-            try {
-                firestore.collection("users").document(testUid).collection("dailyFinancials").document(date).delete()
-            } catch (_: Exception) { }
+            clearTrustedDate(date)
 
             val gateway = FirebaseTrustedFinancial(region = "europe-west1", emulatorHost = "127.0.0.1", emulatorPort = 5001)
             val opId = "opL-tap-1"
             val payload = mapOf(
                 "operationId" to opId, "date" to date, "trackerId" to TEST_TRACKER_ID,
-                "delta" to 1.0, "defaultUnitPrice" to 1.0,
+                "delta" to 1.0, "defaultUnitPrice" to 1.0, "currentTrackingDate" to date,
             )
 
             val r1 = gateway.execute("COUNTER_INCREMENT", payload)
@@ -1232,6 +1229,35 @@ class FirebaseRegistryRepositoryTest {
         conn.disconnect()
         Log.d(TAG, "ownerPatch($path) -> $code")
         check(code in 200..299) { "ownerPatch($path) failed: HTTP $code" }
+    }
+
+    /** Emulator-only owner-bypass DELETE (same superuser channel as [ownerPatch]). */
+    private fun ownerDelete(path: String) {
+        val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
+        val url = java.net.URL("http://127.0.0.1:8080/v1/projects/$projectId/databases/(default)/documents/$path")
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.requestMethod = "DELETE"
+        conn.setRequestProperty("Authorization", "Bearer owner")
+        val code = conn.responseCode
+        conn.disconnect()
+        Log.d(TAG, "ownerDelete($path) -> $code")
+        check(code in 200..299 || code == 404) { "ownerDelete($path) failed: HTTP $code" }
+    }
+
+    /**
+     * The trusted callable only accepts counter taps for the CURRENT tracking
+     * date. This test account has no stored timeZone and the raw gateway sends
+     * none, so the server takes the payload's `currentTrackingDate` as "today"
+     * once it is plausible somewhere on Earth: the UTC day-start-6 date always is.
+     * Callers clear the date's day + ledger first (owner bypass — an OPTION_B
+     * account cannot delete them itself), since testL and testM share it.
+     */
+    private fun currentTrackingDateForCallable(): String =
+        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(6).toLocalDate().toString()
+
+    private fun clearTrustedDate(date: String) {
+        ownerDelete("users/$testUid/days/$date")
+        ownerDelete("users/$testUid/dailyFinancials/$date")
     }
 
     /**

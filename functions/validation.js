@@ -239,6 +239,26 @@ export const resolveUserTrackingDate = ({
   };
 };
 
+/**
+ * How long after a day-start boundary a counter tap may still land on the
+ * tracking date that just ended — a tap sent at 05:59:59 can reach the server
+ * after 06:00 without being rejected.
+ */
+export const COUNTER_GRACE_MS = 5 * 60 * 1000;
+
+/**
+ * Counter taps stamp the LIVE tracker config as the day's dated snapshot,
+ * which is only true for the current tracking date. Any other date would
+ * record today's price/target as historical fact and open a day that nothing
+ * closes. `graceTrackingDate` (the date COUNTER_GRACE_MS ago, or null when the
+ * server has no zone to evaluate it in) admits a tap that raced the boundary.
+ * Late corrections to a past day go through HISTORICAL_DAY_UPDATE.
+ */
+export const requireCounterDate = (date, currentTrackingDate, graceTrackingDate = null) => {
+  if (date === currentTrackingDate || (graceTrackingDate != null && date === graceTrackingDate)) return date;
+  throw new HttpsError('failed-precondition', 'COUNTER_MUST_TARGET_CURRENT_DATE');
+};
+
 /** The profile's day-start hour; 0 (midnight) is a valid setting, not "unset". */
 export const resolveDayStartHour = (v) => {
   const n = Number(v);
