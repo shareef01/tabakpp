@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {
   computeDayCredit, calculateDailyFinancials, applyDelta, fingerprintOf, migrationPlan,
-  deriveSnapshotFromLog, roundMoney,
+  deriveSnapshotFromLog, roundMoney, stampFromConfig,
 } from './financial.js';
 
 const snap = (target, baseline, unitPrice, type = 'CIGARETTE') => ({
@@ -432,4 +432,21 @@ test('Financial rounding: symmetric commercial half-away-from-zero precision pol
     balance = roundMoney(balance - roundMoney(10.075));
   }
   assert.equal(balance, 1000.00, 'Balance must remain exactly 1000.00 without floating point drift after 10000 ops');
+});
+
+test('stampFromConfig: a tracker without its own price is stamped at the profile default, not as unknown (M1)', () => {
+  const cfg = { id: 'cig', type: 'CIGARETTE', limit: 10, pricePerUnit: null, baseline: 15 };
+  const stamp = stampFromConfig(cfg, 0.5);
+  assert.equal(stamp.unitPrice, 0.5);
+  assert.equal(stampFromConfig({ ...cfg, pricePerUnit: 0 }, 0.5).unitPrice, 0, 'an explicit 0 price is kept');
+  assert.equal(stampFromConfig({ ...cfg, pricePerUnit: 2 }, 0.5).unitPrice, 2);
+  // The stamp is dated truth: the canonical credit prices it, rather than
+  // leaving spent/saved unresolved at €0.
+  const day = { date: '2026-10-23', counts: { cig: 3 }, trackerSnapshots: { cig: stamp } };
+  const fin = calculateDailyFinancials(day, [], [cfg], 0.5, { currentTrackingDate: '2026-10-23' });
+  assert.deepEqual(fin.canonicalCredit, { wasted: 1.5, saved: 3.5, smokingUnits: 3, baselineSaved: 6 });
+  assert.equal(fin.unresolved.spent, false);
+  assert.equal(fin.unresolved.saved, false);
+  // Parity with the client formula over the same stamp.
+  assert.deepEqual(computeDayCredit(day.counts, day.trackerSnapshots, 0.5), fin.canonicalCredit);
 });

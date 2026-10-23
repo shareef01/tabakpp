@@ -4,6 +4,7 @@ import {
   isCalendarDate, requireTrackingDate, requireId, sanitizeCounts, sanitizeHistoricalCounts, resolveDayStartHour,
   requireRecentLogin, resolveCurrentTrackingDate,
   isValidIanaTimeZone, getZonedDateTimeParts, computeTrackingDateForZone, resolveUserTrackingDate,
+  requireCounterDate, COUNTER_GRACE_MS,
 } from './validation.js';
 
 const code = (fn) => {
@@ -241,3 +242,21 @@ test('resolveUserTrackingDate policy handles stored, requested, claimed, and mis
   assert.equal(r5.shouldPersist, false);
 });
 
+
+test('requireCounterDate admits only the current date, or the date that just ended within the grace window', () => {
+  // 06:02 Berlin (04:02Z): the tracking day rolled over two minutes ago.
+  const now = new Date('2026-10-23T04:02:00Z');
+  const current = computeTrackingDateForZone(now, 'Europe/Berlin', 6);
+  const grace = computeTrackingDateForZone(new Date(now.getTime() - COUNTER_GRACE_MS), 'Europe/Berlin', 6);
+  assert.equal(current, '2026-10-23');
+  assert.equal(grace, '2026-10-22');
+  assert.equal(requireCounterDate('2026-10-23', current, grace), '2026-10-23');
+  assert.equal(requireCounterDate('2026-10-22', current, grace), '2026-10-22', 'a tap that raced the boundary still lands');
+  assert.equal(code(() => requireCounterDate('2026-10-21', current, grace)), 'COUNTER_MUST_TARGET_CURRENT_DATE');
+  // Outside the window the grace date IS the current date, so yesterday is rejected.
+  const later = new Date('2026-10-23T09:00:00Z');
+  const laterGrace = computeTrackingDateForZone(new Date(later.getTime() - COUNTER_GRACE_MS), 'Europe/Berlin', 6);
+  assert.equal(code(() => requireCounterDate('2026-10-22', '2026-10-23', laterGrace)), 'COUNTER_MUST_TARGET_CURRENT_DATE');
+  // No zone to evaluate the window in: only the current date.
+  assert.equal(code(() => requireCounterDate('2026-10-22', '2026-10-23', null)), 'COUNTER_MUST_TARGET_CURRENT_DATE');
+});

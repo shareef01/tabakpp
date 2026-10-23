@@ -150,6 +150,22 @@ export const snapshotFromConfig = (cfg) => ({
   __hasBaseline: cfg?.baseline != null,
 });
 
+/**
+ * The dated stamp the trusted writer persists for a tracker (day doc / log).
+ * A tracker with no own price uses the profile default — the same resolution
+ * both clients stamp (web `buildTrackerSnapshot`, Kotlin `buildTrackerSnapshot`).
+ * Stamping `null` instead made `calculateDailyFinancials` treat the price as
+ * UNKNOWN, so every tap on such a tracker earned no money, frozen at close.
+ */
+export const stampFromConfig = (cfg, defaultUnitPrice) => ({
+  type: cfg?.type,
+  target: num(cfg?.limit),
+  baseline: cfg?.baseline ?? null,
+  unitPrice: cfg?.pricePerUnit ?? defaultUnitPrice,
+  isFinanciallyTracked: cfg?.isFinanciallyTracked !== false,
+  isPrimaryTracked: cfg?.isPrimaryTracked === true,
+});
+
 const ZERO_CREDIT = { wasted: 0, saved: 0, smokingUnits: 0, baselineSaved: 0 };
 
 /**
