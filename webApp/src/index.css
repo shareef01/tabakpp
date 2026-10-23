@@ -21,11 +21,17 @@
 }
 
 :root {
-  --accent: #D4FF5C;
-  --surface-base: #020202;
-  --surface-panel: #0a0a0c;
-  --surface-card: #111111;
-  --danger: #f43f5e;
+  /* MUST mirror webApp/src/constants/ui.js (ACCENTS[0]) and Color.kt. These are
+     only the pre-hydration values — App.jsx overrides --accent and
+     --accent-rgb inline from the user's profile. The previous values drifted
+     from every other definition (#D4FF5C here vs the shipped #FF5F5F default;
+     #020202 here vs Tailwind's #000000 base), which showed up as a colour
+     shift on OLED panels before the profile loaded.
+     Guarded by src/theme.tokens.test.js. */
+  --accent: #FF5F5F;
+  --accent-rgb: 255, 95, 95;
+  --surface-base: #000000;
+  --danger: #FF1111;
 }
 
 html {

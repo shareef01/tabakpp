@@ -309,6 +309,7 @@ adding `google-services.json`, or install a signed APK from
 | Cross-platform contract | `npm run test:contract` | Semantic parity between the JS and Kotlin ports of the domain math |
 | Firestore rules | `npm run test:rules` | Real authorization rules, executed against the Firestore emulator |
 | PWA offline + freshness | `npm run test:pwa` (after `npm run build`) | Offline navigation and deploy freshness of the production build |
+| Accessibility | `npm run test:a11y` | axe-core over 4 viewports × 4 views, per-accent contrast, and 200% zoom reflow — exits non-zero on any violation |
 | Kotlin unit | `./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest` | KMP domain math, repositories, view models, Compose UI (includes the Kotlin side of the contract fixtures) |
 | Android app unit | `./gradlew :androidApp:testDebugUnitTest` | App Check provider selection guard (no debug provider in release builds) |
 | Cloud Functions | `cd functions && npm test` | Option B financial math and input validation |
@@ -383,6 +384,10 @@ External contributions are welcome through pull requests. For anything touching
 security rules, data-model semantics, or CI, please open an issue first so the
 approach can be discussed — those areas carry invariants that are easy to break
 silently.
+
+Read **[CONTRIBUTING.md](CONTRIBUTING.md)** before your first PR: it lists the
+eight invariants a change must not break, the exact commands to run, and why the
+`react-hooks/exhaustive-deps` warnings in `npm run lint` are intentional.
 
 By contributing you agree that your work is licensed under the [MIT License](LICENSE).
 

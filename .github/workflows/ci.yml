@@ -126,6 +126,13 @@ jobs:
       - name: Cross-platform domain contract fixtures
         working-directory: webApp
         run: npm run test:contract
+      # axe-core over 4 viewports × 3 screens + login, plus per-accent contrast
+      # and the WCAG 1.4.10 200%-zoom reflow check. Exits non-zero on any
+      # violation. Uses the runner's preinstalled Google Chrome, the same
+      # resolution order as npm run test:pwa.
+      - name: Accessibility audit (axe-core)
+        working-directory: webApp
+        run: npm run test:a11y
       - name: Test Firestore rules
         working-directory: webApp
         run: npm run test:rules
