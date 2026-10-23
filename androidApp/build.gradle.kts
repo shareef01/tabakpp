@@ -210,6 +210,8 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
 dependencies {
     implementation(platform(libs.firebase.bom))
     debugImplementation(libs.firebase.appcheck.debug)
+    // `staging` is initWith(debug), which does not inherit debugImplementation.
+    "stagingImplementation"(libs.firebase.appcheck.debug)
     releaseImplementation(libs.firebase.appcheck.playintegrity)
     implementation(project(":composeApp"))
     implementation(project(":shared"))

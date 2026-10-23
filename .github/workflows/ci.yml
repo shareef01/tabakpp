@@ -79,13 +79,39 @@ jobs:
             "configuration_version": "1"
           }
           JSON
+      # `staging` is initWith(debug) but does not inherit the src/debug source
+      # set or debugImplementation deps, so it can break while debug/release
+      # build fine — build it here. checkStagingFirebaseConfig runs before every
+      # staging compile and rejects placeholder-looking values, so this
+      # compile-only file uses inert, non-placeholder-shaped ids. It points at
+      # no real app and never leaves the runner.
+      - name: Create compile-only staging Firebase configuration
+        run: |
+          cat > androidApp/src/staging/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "123456789012",
+              "project_id": "tabakpp-staging",
+              "storage_bucket": "tabakpp-staging.appspot.com"
+            },
+            "client": [{
+              "client_info": {
+                "mobilesdk_app_id": "1:123456789012:android:1a2b3c4d5e6f7a8b",
+                "android_client_info": { "package_name": "com.tabakpp.app.staging" }
+              },
+              "api_key": [{ "current_key": "ci-compile-only-staging-config" }],
+              "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+            }],
+            "configuration_version": "1"
+          }
+          JSON
       # DomainContractFixturesTest (shared/src/androidUnitTest) runs as part of
       # :shared:testDebugUnitTest — the same shared-tests/domain-fixtures.json
       # the web job checks below, so this job fails on its own if the Kotlin
       # port drifts from the JS one (item 11).
       # :androidApp:testDebugUnitTest holds the App Check provider guard tests.
       - name: Test shared code, Compose UI, and build Android
-        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleStaging :androidApp:assembleRelease --no-daemon
 
   web-and-rules:
     runs-on: ubuntu-latest

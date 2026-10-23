@@ -8,9 +8,9 @@ import java.io.File
 /**
  * Verifies the source-set contract for App Check provider selection.
  *
- * The AppCheckInstaller is split across src/debug and src/release.
+ * The AppCheckInstaller is split across src/debug, src/staging and src/release.
  * This test enforces that:
- * - The debug source set uses DebugAppCheckProviderFactory.
+ * - The debug and staging source sets use DebugAppCheckProviderFactory.
  * - The release source set uses PlayIntegrityAppCheckProviderFactory.
  * - The release source set NEVER references the debug provider.
  *
@@ -33,6 +33,36 @@ class AppCheckProviderSelectionTest {
         val f = File(moduleDir, "src/debug/java/com/tabakpp/app/AppCheckInstaller.kt")
         assertTrue(f.exists(), "debug AppCheckInstaller.kt must exist at ${f.absolutePath}")
         return f.readText()
+    }
+
+    // `staging` is initWith(debug), which copies build settings but NOT the
+    // src/debug source set — without its own installer it does not compile.
+    private fun stagingInstallerSource(): String {
+        val f = File(moduleDir, "src/staging/java/com/tabakpp/app/AppCheckInstaller.kt")
+        assertTrue(f.exists(), "staging AppCheckInstaller.kt must exist at ${f.absolutePath}")
+        return f.readText()
+    }
+
+    @Test
+    fun stagingSourceSet_usesDebugProvider() {
+        val src = stagingInstallerSource()
+        assertTrue(
+            src.contains("DebugAppCheckProviderFactory"),
+            "Staging AppCheckInstaller must use DebugAppCheckProviderFactory"
+        )
+        assertTrue(
+            src.contains("setTokenAutoRefreshEnabled(true)"),
+            "Staging AppCheckInstaller must explicitly enable token auto-refresh"
+        )
+    }
+
+    @Test
+    fun buildGradle_scopesDebugProviderToStaging() {
+        val src = File(moduleDir, "build.gradle.kts").readText()
+        assertTrue(
+            src.contains("\"stagingImplementation\"(libs.firebase.appcheck.debug)"),
+            "staging does not inherit debugImplementation; it needs its own debug provider dependency"
+        )
     }
 
     @Test
