@@ -29,8 +29,18 @@ const emptyRegistry = () => ({
  * aggregates via `reconcileStaleDays` — a convenience rollup, never what
  * decides which date a count belongs to (that already happened at write
  * time).
+ *
+ * ## On the remaining `react-hooks/exhaustive-deps` warnings
+ *
+ * `npm run lint` reports "missing dependency: 'user'" on most effects and
+ * callbacks here. That is deliberate and must stay: these subscribe/mutate on
+ * `user?.uid`, while `user` is a Firebase `User` object whose identity changes
+ * on every token refresh (~hourly). Depending on the whole object would tear
+ * down and rebuild all six Firestore listeners mid-session. The lint rule
+ * cannot see that the narrower key is the correct one, so the warnings are
+ * left visible rather than suppressed — they are a useful signal elsewhere.
  */
-export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = null, nowFn = () => new Date()) => {
+export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = null, nowFn = () => new Date(), listenerEpoch = 0) => {
   const [configs, setConfigs] = useState([]);
   const [logs, setLogs] = useState([]);
   const [dayDocs, setDayDocs] = useState([]);
@@ -40,6 +50,14 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   const [ledgersLoaded, setLedgersLoaded] = useState(false);
   const [financialMode, setFinancialMode] = useState(null);
   const [profileSettings, setProfileSettings] = useState(null);
+  /**
+   * Distinguishes "still waiting for the profile" from "the profile listener
+   * gave up". Without it, a failed `users/{uid}` read is indistinguishable
+   * from a slow one: `profileSettings` stays null, App.jsx's `isHydrated`
+   * never flips, and the user gets a skeleton forever with no retry path
+   * (only a Dismiss button on a banner that hides the error).
+   */
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const accountWriteState = useRef(null);
   const [avatar, setAvatar] = useState(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -47,6 +65,8 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   const [isEndingDay, setIsEndingDay] = useState(false);
   const [registryError, setRegistryError] = useState(null);
   const [configsHasPendingWrites, setConfigsHasPendingWrites] = useState(false);
+  // Ids of tracker documents with unsynced local writes (see subscribeToConfigs).
+  const [pendingConfigIds, setPendingConfigIds] = useState([]);
   /**
    * IN-FLIGHT MUTATION LEDGER (H-01 fix)
    * Tracks pending mutations with explicit date and tracker association.
@@ -156,10 +176,12 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       setLedgersLoaded(false);
       setFinancialMode(null);
       setConfigsHasPendingWrites(false);
+      setPendingConfigIds([]);
       pendingOpsRef.current = [];
       latestServerCountsRef.current = {};
       setLoading(false);
       setRegistryError(null);
+      setProfileLoaded(false);
       return undefined;
     }
 
@@ -170,11 +192,13 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     setActiveCounts({});
     setLifetimeAggregates(null);
     setProfileSettings(null);
+    setProfileLoaded(false);
     setAvatar(null);
     setLedgers([]);
     setLedgersLoaded(false);
     setFinancialMode(null);
     setConfigsHasPendingWrites(false);
+    setPendingConfigIds([]);
     setLoading(true);
     setRegistryError(null);
     latestServerCountsRef.current = {};
@@ -183,12 +207,16 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     const onListenerError = (err) => {
       console.error('[REGISTRY] listener error', err);
       setRegistryError('Could not sync registry. Check your connection and try again.');
+      // Terminal for the loading gate: leave the skeleton so the UI can offer
+      // a retry (App.jsx renders SyncFailedState when profileLoaded && error).
+      setProfileLoaded(true);
       setLoading(false);
     };
 
     const unsubProfile = onSnapshot(
       doc(db, 'users', user.uid),
       (s) => {
+        setProfileLoaded(true);
         if (!s.exists()) {
           setLifetimeAggregates({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
           setFinancialMode('LEGACY');
@@ -264,6 +292,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       setLoading(false);
       setRegistryError(null);
       setConfigsHasPendingWrites(metadata ? metadata.hasPendingWrites : false);
+      setPendingConfigIds(metadata?.pendingIds ?? []);
     }, onListenerError);
 
     const unsubLogs = RegistryService.subscribeToLogs(user.uid, (data) => {
@@ -293,7 +322,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       unsubAvatar();
       unsubLedgers();
     };
-  }, [user?.uid]);
+  }, [user?.uid, listenerEpoch]);
 
   // Live "today" bucket — the dated day doc `today` currently points at. This
   // is the entire fix for item 1: `today` is recomputed independently of this
@@ -556,7 +585,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
         : 'Could not save that change. Your count was restored.');
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   const decrement = useCallback(async (id) => {
     if (!user || (activeCountsRef.current[id] || 0) <= 0) return;
@@ -597,7 +626,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
         : 'Could not save that change. Your count was restored.');
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
+  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   /**
    * "Close day" — a UX affordance only (see registryService.closeDay). It
@@ -725,8 +754,8 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   }, [user?.uid, runMutation]);
 
   return {
-    configs, logs, dayDocs, metrics, loading, isEndingDay, isOnline, profileSettings,
-    avatar: avatarValue, registryError, configsHasPendingWrites,
+    configs, logs, dayDocs, metrics, loading, isEndingDay, isOnline, profileSettings, profileLoaded,
+    avatar: avatarValue, registryError, configsHasPendingWrites, pendingConfigIds,
     ledgers, ledgersLoaded, financialMode, canonical,
     clearRegistryError: () => setRegistryError(null),
     increment, decrement, endDay, updateHistoricalLog, updateHistoricalDay, deleteLog, restoreLog,

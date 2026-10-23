@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/shareef01/tabakpp/blob/main/SECURITY.md
+    about: Please do not open a public issue — report it privately per SECURITY.md.
+  - name: Setup, signing and App Check
+    url: https://github.com/shareef01/tabakpp/blob/main/SETUP_GUIDE.md
+    about: Environment, google-services.json, App Check and release-signing questions.
+  - name: Contributing and invariants
+    url: https://github.com/shareef01/tabakpp/blob/main/CONTRIBUTING.md
+    about: How to run the suites, and the invariants a PR must not break.

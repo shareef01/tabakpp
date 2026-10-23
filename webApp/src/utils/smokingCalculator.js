@@ -234,7 +234,8 @@ const expectedLifetimeAggregates = (dayDocs = [], logs = []) => {
 };
 
 // Day archives merged with same-date manual entries — an archive must not
-const aggregateLoggedCounts = (logs) => {
+/** Pure implementation: ALWAYS allocates a fresh result object. */
+const aggregateLoggedCountsPure = (logs) => {
   const archives = {};
   const others = {};
   (logs || []).forEach((log) => {
@@ -256,6 +257,35 @@ const aggregateLoggedCounts = (logs) => {
 };
 
 /**
+ * Identity-keyed memo around `aggregateLoggedCountsPure`.
+ *
+ * `logs` is a Firestore snapshot array that both clients REPLACE on every
+ * update (`setLogs(data)` in useRegistry, a fresh list in RegistryViewModel),
+ * never mutate in place — so array identity is a valid cache key. This matters
+ * because a single `getGlobalMetrics` call aggregates the same `logs` array
+ * five to eight times (directly, and again inside calculateStreak,
+ * calculateTrackingStreak, calculateLifeLostMinutes and
+ * calculateRecoveryMinutes), and `metrics` recomputes on every counter tap.
+ * On a two-year history that is ~1,200 documents re-scanned per tap for an
+ * answer that cannot have changed since the last snapshot.
+ *
+ * PRECONDITIONS: `logs` must not be mutated in place, and the returned object
+ * (including its inner per-date maps) must be treated as READ-ONLY. Every
+ * internal caller only reads it; `projectLoggedCounts` copies before writing.
+ * The exported `SmokingCalculator.aggregateLoggedCounts` deliberately stays on
+ * the pure implementation so external callers keep getting a fresh object.
+ */
+const _loggedCountsCache = new WeakMap();
+const aggregateLoggedCountsCached = (logs) => {
+  if (!Array.isArray(logs)) return aggregateLoggedCountsPure(logs);
+  const cached = _loggedCountsCache.get(logs);
+  if (cached) return cached;
+  const out = aggregateLoggedCountsPure(logs);
+  _loggedCountsCache.set(logs, out);
+  return out;
+};
+
+/**
  * Overlay `days/{date}` documents (the dated daily-document model — see
  * registryService.js) onto counts already aggregated from the legacy `logs`
  * collection. A given calendar date is produced by exactly one of the two
@@ -273,7 +303,9 @@ const mergeDayDocsIntoLogged = (logged, dayDocs) => {
 };
 
 const projectLoggedCounts = (logs, dayDocs, trackingDay, activeCounts = {}) => {
-  const out = aggregateLoggedCounts(logs);
+  // Shallow copy: the cached aggregate is shared across callers in one render
+  // pass and must stay read-only (this function writes per-date entries).
+  const out = { ...aggregateLoggedCountsCached(logs) };
   const hasActive = Object.keys(activeCounts).length > 0;
   (dayDocs || []).forEach((day) => {
     const counts = day.date === trackingDay && day.status !== 'closed' && hasActive ? activeCounts : day.counts;
@@ -349,7 +381,10 @@ const computeDayCredit = (counts, trackerSnapshots, defaultUnitPrice = 0.5) => {
 
 export const SmokingCalculator = {
   mergeCounts,
-  aggregateLoggedCounts,
+  // Public API stays on the PURE implementation: every external call gets its
+  // own fresh object, so callers may mutate it. Internal hot paths use the
+  // identity-keyed `aggregateLoggedCountsCached` instead.
+  aggregateLoggedCounts: aggregateLoggedCountsPure,
   mergeDayDocsIntoLogged,
   projectLoggedCounts,
   snapshotsByDate,
@@ -619,7 +654,7 @@ export const SmokingCalculator = {
    */
   calculateTrackingStreak: (logs, activeCounts, trackingDay, dayDocs = []) => {
     if (!trackingDay) return 0;
-    const logged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs);
+    const logged = mergeDayDocsIntoLogged(aggregateLoggedCountsCached(logs), dayDocs);
     const loggedDates = Object.keys(logged).sort().reverse();
     const hasTodayEvidence = Object.prototype.hasOwnProperty.call(logged, trackingDay) || Object.keys(activeCounts || {}).length > 0;
     if (loggedDates.length === 0 && !hasTodayEvidence) return 0;
@@ -728,7 +763,7 @@ export const SmokingCalculator = {
   },
 
   sumSmokingUnitsFromLogs: (logs, configs) => {
-    const logged = aggregateLoggedCounts(logs);
+    const logged = aggregateLoggedCountsCached(logs);
     return Object.values(logged).reduce(
       (sum, dayCounts) => sum + SmokingCalculator.sumSmokingUnits(dayCounts, configs),
       0
@@ -757,7 +792,7 @@ export const SmokingCalculator = {
     } else {
       if (smokingIds.size === 0) return 0;
       let fromLogs = 0;
-      const logged = aggregateLoggedCounts(logs);
+      const logged = aggregateLoggedCountsCached(logs);
       Object.values(logged).forEach((dayCounts) => {
         smokingIds.forEach((id) => {
           fromLogs += Math.max(0, dayCounts[id] || 0);
@@ -782,7 +817,7 @@ export const SmokingCalculator = {
     const smokingConfigs = (configs || []).filter((c) => SMOKING_TYPES.includes(c.type));
     if (smokingConfigs.length === 0) return 0;
 
-    const logged = aggregateLoggedCounts(logs);
+    const logged = aggregateLoggedCountsCached(logs);
     let recovered = 0;
 
     Object.entries(logged).forEach(([date, counts]) => {
@@ -815,7 +850,7 @@ export const SmokingCalculator = {
   getGlobalMetrics: (logs, configs, activeCounts, trackingDay, userPrice = 0.5, lifetimeAggregates = null, dayDocs = []) => {
     const primaryConfigs = (configs || []).filter((c) => c.isPrimaryTracked !== false);
     const sessionCounts = activeCounts || {};
-    const logged = aggregateLoggedCounts(logs);
+    const logged = aggregateLoggedCountsCached(logs);
 
     const count = primaryConfigs.reduce(
       (sum, c) => sum + Math.max(0, sessionCounts[c.id] || 0),
@@ -1078,7 +1113,7 @@ export const SmokingCalculator = {
    */
   recentWindowTrend: (logs, dayDocs, today, windowDays = 7) => {
     if (!today) return null;
-    const merged = mergeDayDocsIntoLogged(aggregateLoggedCounts(logs), dayDocs);
+    const merged = mergeDayDocsIntoLogged(aggregateLoggedCountsCached(logs), dayDocs);
     const windowAvg = (firstOffset) => {
       let total = 0;
       let tracked = 0;

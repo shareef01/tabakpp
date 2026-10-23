@@ -14,19 +14,58 @@ const MIME = {
   '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json',
 };
 
+/**
+ * Locate a Chromium binary cross-platform.
+ *
+ * The previous version only looked in the Windows ms-playwright layout
+ * (`chrome-win64/chrome.exe`), so this audit could never run in CI and was
+ * reachable only by a human on Windows who knew the path.
+ */
 function findChrome() {
-  const roots = [process.env.LOCALAPPDATA, process.env.APPDATA]
+  // Same precedence as scripts/test-pwa.mjs so both browser-driven suites
+  // resolve the binary the same way (CI runners ship /usr/bin/google-chrome).
+  const explicit = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_BIN || process.env.CHROME_PATH;
+  if (explicit) {
+    if (!fs.existsSync(explicit)) throw new Error(`Browser path does not exist: ${explicit}`);
+    return explicit;
+  }
+
+  // Playwright's own download locations, per platform.
+  const layouts = {
+    win32: ['chrome-win64/chrome.exe', 'chrome-win/chrome.exe'],
+    darwin: ['chrome-mac/Chromium.app/Contents/MacOS/Chromium', 'chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium'],
+    linux: ['chrome-linux/chrome', 'chrome-linux64/chrome'],
+  }[process.platform] ?? ['chrome-linux/chrome'];
+
+  const roots = [process.env.LOCALAPPDATA, process.env.APPDATA, process.env.HOME && path.join(process.env.HOME, '.cache')]
     .filter(Boolean)
     .map((r) => path.join(r, 'ms-playwright'));
+
   for (const root of roots) {
     if (!fs.existsSync(root)) continue;
-    for (const entry of fs.readdirSync(root)) {
+    for (const entry of fs.readdirSync(root).sort().reverse()) {
       if (!entry.startsWith('chromium-')) continue;
-      const exe = path.join(root, entry, 'chrome-win64', 'chrome.exe');
-      if (fs.existsSync(exe)) return exe;
+      for (const layout of layouts) {
+        const exe = path.join(root, entry, layout);
+        if (fs.existsSync(exe)) return exe;
+      }
     }
   }
-  throw new Error('No cached Chromium found under ms-playwright.');
+
+  // System installs (CI images, distro packages).
+  for (const candidate of [
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ]) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  throw new Error(
+    'No Chromium found. Set CHROME_PATH, or run `npx playwright install --with-deps chromium` (CI does).',
+  );
 }
 
 function startServer() {
@@ -91,6 +130,9 @@ async function run() {
   const page = await browser.newPage();
   let totalAudits = 0;
   let totalViolations = 0;
+  let contrastIssues = 0;
+  // Assigned unconditionally below; the initial `false` was a dead store.
+  let reflowViolation;
   const violationSummary = new Map();
 
   try {
@@ -157,7 +199,14 @@ async function run() {
       });
       const violations = accentResults.violations.length;
       if (violations > 0) {
+        contrastIssues += violations;
+        totalViolations += violations;
         console.log(`[CONTRAST ISSUE] Accent ${accent.n} (${accent.v}): ${violations} violations`);
+        for (const v of accentResults.violations) {
+          for (const n of v.nodes) {
+            console.log(`  -> ${n.target.join(' ')}: ${n.failureSummary?.replace(/\n/g, ' ')}`);
+          }
+        }
       } else {
         console.log(`[CONTRAST PASS] Accent ${accent.n} (${accent.v}): Pass (${accentResults.passes.length} contrast nodes cleared)`);
       }
@@ -168,10 +217,10 @@ async function run() {
     // At 200% zoom on a 1280px desktop, effective viewport is 640px without horizontal scroll
     await page.setViewport({ width: 640, height: 450, deviceScaleFactor: 2 });
     await page.goto(`${url}/`, { waitUntil: 'networkidle0' });
-    const hasHorizontalOverflow = await page.evaluate(() => {
+    reflowViolation = await page.evaluate(() => {
       return document.documentElement.scrollWidth > window.innerWidth;
     });
-    console.log(`Reflow check (640px equivalent 200% desktop): ${hasHorizontalOverflow ? 'FAIL (Horizontal scroll present)' : 'PASS (No horizontal scroll)'}`);
+    console.log(`Reflow check (640px equivalent 200% desktop): ${reflowViolation ? 'FAIL (Horizontal scroll present)' : 'PASS (No horizontal scroll)'}`);
 
   } finally {
     await browser.close();
@@ -190,6 +239,18 @@ async function run() {
     console.log('ALL views and viewports passed automated axe-core checks with 0 violations!');
   }
   console.log('========================================');
+
+  // This script used to log violations and exit 0 regardless, which made it
+  // useless as a CI gate. It now fails the run so accessibility regressions
+  // (missing labels, contrast, reflow) block the PR that introduces them.
+  if (totalViolations > 0 || reflowViolation) {
+    console.error(
+      `\nAccessibility audit FAILED: ${totalViolations} axe violation(s)`
+        + `${contrastIssues ? ` (${contrastIssues} contrast)` : ''}`
+        + `${reflowViolation ? ', horizontal scroll at 200% zoom' : ''}.`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 run().catch((err) => {

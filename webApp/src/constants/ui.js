@@ -37,6 +37,14 @@ export const ACCENTS = [
 
 export const SCALING_OPTIONS = ['SMALL', 'MEDIUM', 'LARGE'];
 
+/**
+ * The accent a brand-new account starts with (the UserProfile.accent default).
+ * Single source of truth: index.css's `:root --accent`, its `--accent-rgb`
+ * fallback, and App.jsx's pre-hydration/ensureUserDocument default are all
+ * checked against this by src/theme.tokens.test.js.
+ */
+export const DEFAULT_ACCENT = ACCENTS[0].v;
+
 export const COUNTER_TYPES = [
   { id: 'CIGARETTE', label: 'Cigarette' },
   { id: 'RYO_ROLL', label: 'RYO' },

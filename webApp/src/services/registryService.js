@@ -344,7 +344,14 @@ export const RegistryService = {
       orderBy('order', 'asc')
     );
     return onSnapshot(q, { includeMetadataChanges: true }, (s) => {
-      onSuccess(s.docs.map(withDocId), s.metadata);
+      // Per-document pending state. The query-level `metadata.hasPendingWrites`
+      // is true when ANY tracker doc is unsynced, which made every card show a
+      // spinner for a single edit. `pendingIds` lets the UI flag only the
+      // document that is actually in flight.
+      onSuccess(s.docs.map(withDocId), {
+        hasPendingWrites: s.metadata.hasPendingWrites,
+        pendingIds: s.docs.filter((d) => d.metadata.hasPendingWrites).map((d) => d.id),
+      });
     }, onError);
   },
 

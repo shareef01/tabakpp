@@ -281,6 +281,39 @@ describe('useRegistry listener errors', () => {
     expect(result.current.loading).toBe(false);
     expect(result.current.registryError).toMatch(/Could not sync registry/);
   });
+
+  it('reports profileLoaded so the UI can leave the skeleton and offer a retry', () => {
+    // Regression: a failed profile listener used to leave profileSettings null
+    // with no terminal flag, so App.jsx's `!isHydrated` gate rendered the
+    // dashboard skeleton forever with no way to retry (its only control was a
+    // "Dismiss" that hid the error). profileLoaded is what breaks that loop.
+    const { result, rerender } = renderHook(
+      ({ epoch }) => useRegistry(USER, TODAY, 0.5, null, () => new Date(), epoch),
+      { initialProps: { epoch: 0 } },
+    );
+
+    expect(result.current.profileLoaded).toBe(false);
+    expect(result.current.profileSettings).toBeNull();
+
+    act(() => {
+      cap.profileErr.current?.(new Error('permission-denied'));
+    });
+
+    expect(result.current.profileLoaded).toBe(true);
+    expect(result.current.profileSettings).toBeNull();
+
+    // Bumping listenerEpoch (App's "Retry sync") re-attaches the listeners and
+    // resets the flag, so the retry gets a real outcome rather than a stale one.
+    rerender({ epoch: 1 });
+    expect(result.current.profileLoaded).toBe(false);
+    expect(result.current.registryError).toBeNull();
+
+    act(() => {
+      cap.profileCb.current?.(profileSnap({ accent: '#abc' }));
+    });
+    expect(result.current.profileLoaded).toBe(true);
+    expect(result.current.profileSettings.accent).toBe('#abc');
+  });
 });
 
 describe('useRegistry.reorder', () => {

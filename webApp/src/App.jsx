@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense, lazy } from 'react';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import { AlertCircle, Loader2, Plus } from 'lucide-react';
 import { RegistryService } from './services/registryService';
@@ -9,9 +9,13 @@ import { auth } from './firebase';
 import { hexToRgbValues } from './utils/formatters';
 import { SmokingCalculator } from './utils/smokingCalculator';
 import { pathForTab, tabForPath } from './utils/routing';
+import { DEFAULT_ACCENT } from './constants/ui';
 const cn = (...classes) => classes.filter(Boolean).join(' ');
 
-const FIRESTORE_ACCENT_DEFAULT = '#FF5F5F';
+// Was a local '#FF5F5F' literal duplicated here and in ensureUserDocument's
+// bootstrap call, alongside index.css's conflicting #D4FF5C. One definition now
+// lives in constants/ui.js (ACCENTS[0]) and is guarded by theme.tokens.test.js.
+const FIRESTORE_ACCENT_DEFAULT = DEFAULT_ACCENT;
 
 const loadInitialAccent = () => {
   try {
@@ -90,6 +94,43 @@ const OfflineBanner = ({ isOffline }) => (
   </AnimatePresence>
 );
 
+/**
+ * Terminal sync failure. Shown instead of the dashboard skeleton when the
+ * profile listener dies: previously that state was an indefinite skeleton with
+ * only a "Dismiss" button, which hid the error and left the app unusable with
+ * no way to retry. Retry re-mounts every Firestore listener (listenerEpoch).
+ */
+const SyncFailedState = React.memo(({ onRetry }) => (
+  <div
+    role="alert"
+    className="min-h-[22rem] rounded-[2rem] border border-dashed border-red-500/25 bg-red-950/10 flex flex-col items-center justify-center text-center px-6 md:px-8"
+  >
+    <div className="w-14 h-14 rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center ring-1 ring-red-500/20">
+      <AlertCircle size={26} aria-hidden />
+    </div>
+    <h2 className="mt-5 text-xl md:text-2xl font-black tracking-tight text-white">We couldn't load your data</h2>
+    <p className="mt-2 max-w-sm text-sm text-neutral-400">
+      Your counts are not lost — they live in your account. Retry the sync, or sign out and back in.
+    </p>
+    <div className="mt-6 flex flex-col sm:flex-row items-center gap-3">
+      <button
+        type="button"
+        onClick={onRetry}
+        className="min-h-12 px-6 rounded-xl bg-accent text-black text-[11px] font-black uppercase tracking-widest focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-black"
+      >
+        Retry sync
+      </button>
+      <button
+        type="button"
+        onClick={() => { auth?.signOut?.(); }}
+        className="min-h-12 px-6 rounded-xl border border-white/15 text-white text-[11px] font-black uppercase tracking-widest focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        Sign out
+      </button>
+    </div>
+  </div>
+));
+
 class GlobalErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null }; }
   static getDerivedStateFromError(error) { return { hasError: true, error }; }
@@ -137,6 +178,10 @@ const AppContent = () => {
   // 2. STATE MANAGEMENT
   const [settings, setSettings] = useState(defaultSettings);
   const [isHydrated, setIsHydrated] = useState(false);
+  // Bumping this re-mounts every Firestore listener in useRegistry — the only
+  // recovery path when a listener dies with a non-retryable error (see
+  // SyncFailedState).
+  const [listenerEpoch, setListenerEpoch] = useState(0);
   // Tab state is seeded from the URL (item 8) so a direct load, refresh, or
   // bookmark of /history or /settings lands on the right screen.
   const [activeTab, setActiveTab] = useState(() => tabForPath(window.location.pathname));
@@ -209,15 +254,15 @@ const AppContent = () => {
     };
   }, [settings.dayStartHour]);
 
-  const registry = useRegistry(user, today, settings.unitPrice, setToday);
+  const registry = useRegistry(user, today, settings.unitPrice, setToday, undefined, listenerEpoch);
 
   const {
-    configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings,
-    avatar, registryError, clearRegistryError, configsHasPendingWrites,
+    configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings, profileLoaded,
+    avatar, registryError, clearRegistryError, pendingConfigIds,
     increment, decrement, endDay, reorder, addProtocol, updateProtocol, deleteProtocol,
     createManualEntry, deleteLog, restoreLog, updateHistoricalLog, updateHistoricalDay, updateAvatar,
     canonical, ledgers
-  } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, avatar: null, configsHasPendingWrites: false, canonical: null, ledgers: [] };
+  } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, profileLoaded: false, avatar: null, configsHasPendingWrites: false, pendingConfigIds: [], canonical: null, ledgers: [] };
 
   // Derive onboarding state from real product state (item 27 — no schema change).
   const onboardingState = SmokingCalculator.getFirstWeekGuidance(
@@ -238,7 +283,7 @@ const AppContent = () => {
       try {
         await RegistryService.ensureUserDocument(user.uid, {
           name: user.displayName || '',
-          accent: '#FF5F5F'
+          accent: FIRESTORE_ACCENT_DEFAULT
         });
         if (!cancelled) await RegistryService.migrateSmokingUnitsIfNeeded(user.uid);
         // One-time, idempotent, self-healing migrations (activeCounts -> days,
@@ -306,12 +351,20 @@ const AppContent = () => {
     try { await updateProtocol(editProtocol.id, data); setEditProtocol(null); } catch (e) { console.error(e); throw e; }
   };
 
+  // RegistryService.subscribeToConfigs uses includeMetadataChanges, so every
+  // write produces TWO snapshots (local estimate, then server ack) and a new
+  // `configs` array each time. Depending on `configs` here gave `onInc` a new
+  // identity twice per write, defeating React.memo on every TrackerCard. The
+  // ref keeps the callback stable; the name lookup still sees fresh data.
+  const configsRef = useRef(configs);
+  configsRef.current = configs;
+
   const handleIncrement = useCallback((id) => {
     increment(id).then(() => {
-      const config = configs.find((item) => item.id === id);
+      const config = configsRef.current.find((item) => item.id === id);
       setIncrementUndo({ id, name: config?.name || 'Counter', key: `${id}-${Date.now()}` });
     }).catch((e) => console.error('[SYS] Increment failed', e));
-  }, [increment, configs]);
+  }, [increment]);
 
   const handleDecrement = useCallback((id) => {
     setIncrementUndo((prev) => (prev?.id === id ? null : prev));
@@ -327,6 +380,23 @@ const AppContent = () => {
     window.history.pushState({ tab: nextTab }, '', pathForTab(nextTab));
     window.requestAnimationFrame(() => window.scrollTo({ top: scrollPositions.current[nextTab] ?? 0, behavior: 'auto' }));
   }, []);
+
+  // Only the tracker with an unsynced write shows a spinner. The query-level
+  // metadata flag is true when ANY config document is pending, which flagged
+  // every card for a single edit. Must stay above the isAuthLoading early
+  // return so hook order is unconditional.
+  const pendingIds = useMemo(() => new Set(pendingConfigIds || []), [pendingConfigIds]);
+
+  // A listener that gave up leaves profileLoaded true with an error and no
+  // hydrated settings. Without this branch that state rendered an infinite
+  // skeleton whose only control was a "Dismiss" that hid the error.
+  const syncFailed = profileLoaded && !isHydrated && !isRegistryLoading && !!registryError;
+  const retrySync = useCallback(() => {
+    setBootstrapError(null);
+    setSettingsError(null);
+    clearRegistryError();
+    setListenerEpoch((n) => n + 1);
+  }, [clearRegistryError]);
 
   if (isAuthLoading) return <LoadingView />;
 
@@ -390,7 +460,9 @@ const AppContent = () => {
                   {activeTab === 'track' && (
                     <motion.div key="track" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-3 md:space-y-4">
                       <h1 className="sr-only">Track</h1>
-                      {!isHydrated || isRegistryLoading ? (
+                      {syncFailed ? (
+                        <SyncFailedState onRetry={retrySync} />
+                      ) : !isHydrated || isRegistryLoading ? (
                         <DashboardSkeleton widgetSize={settings.widgetSize} />
                       ) : (
                         <>
@@ -407,7 +479,7 @@ const AppContent = () => {
                                 onDec={handleDecrement}
                                 index={i}
                                 globalSize={settings.widgetSize}
-                                isPending={configsHasPendingWrites}
+                                isPending={pendingIds.has(c.id)}
                               />
                             ))}
                           </div> : (
@@ -431,7 +503,7 @@ const AppContent = () => {
                   {activeTab === 'history' && (
                     <motion.div key="history" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
                       <h1 className="sr-only">History</h1>
-                      {!isHydrated || isRegistryLoading ? <DashboardSkeleton widgetSize={settings.widgetSize} /> : <HistoryScreen
+                      {syncFailed ? <SyncFailedState onRetry={retrySync} /> : !isHydrated || isRegistryLoading ? <DashboardSkeleton widgetSize={settings.widgetSize} /> : <HistoryScreen
                         logs={logs}
                         dayDocs={dayDocs}
                         historyUpdate={historyUpdate}
@@ -453,7 +525,7 @@ const AppContent = () => {
                   {activeTab === 'settings' && (
                     <motion.div key="settings" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
                       <h1 className="sr-only">Settings</h1>
-                      {!isHydrated || isRegistryLoading ? <DashboardSkeleton widgetSize={settings.widgetSize} /> : <SettingsScreen
+                      {syncFailed ? <SyncFailedState onRetry={retrySync} /> : !isHydrated || isRegistryLoading ? <DashboardSkeleton widgetSize={settings.widgetSize} /> : <SettingsScreen
                         configs={configs}
                         user={user}
                         settings={settings}
