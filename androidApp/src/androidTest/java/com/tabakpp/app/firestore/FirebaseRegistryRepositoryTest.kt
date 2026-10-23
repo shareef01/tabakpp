@@ -1271,10 +1271,13 @@ class FirebaseRegistryRepositoryTest {
     private fun currentTrackingDateForCallable(): String =
         java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(6).toLocalDate().toString()
 
+    // `currentTrackingDate` is the device's "today", like the app's gateway
+    // sends — independent of the tap's target [date]. (Claiming a stale today
+    // would be rejected earlier, as IMPLAUSIBLE_CURRENT_TRACKING_DATE.)
     private fun trustedTapPayload(opId: String, date: String, delta: Double = 1.0): Map<String, Any?> = mapOf(
         "operationId" to opId, "date" to date, "trackerId" to TEST_TRACKER_ID,
         "delta" to delta, "defaultUnitPrice" to 1.0,
-        "timeZone" to "UTC", "currentTrackingDate" to date,
+        "timeZone" to "UTC", "currentTrackingDate" to currentTrackingDateForCallable(),
     )
 
     /**
