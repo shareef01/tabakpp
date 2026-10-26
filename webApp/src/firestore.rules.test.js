@@ -1076,3 +1076,92 @@ describe('audit regressions: lease forgery, tombstone mode drop, tombstoned ledg
     }
   });
 });
+
+/**
+ * Authorization boundary (AUDIT-2026-10 / W4-1 security review).
+ *
+ * These pin the three properties the whole Spark threat model rests on, which
+ * the earlier suites covered only indirectly:
+ *   1. an UNAUTHENTICATED client can read and write nothing — not even a
+ *      collection whose rules forget an auth check;
+ *   2. a collection the rules do not name is denied outright (no accidental
+ *      "unknown path is open" default);
+ *   3. OPTION B idempotency receipts are append-only and owner-scoped, so a
+ *      retried operation can never rewrite its own stored result.
+ */
+describe('authorization boundary — unauthenticated access and unknown collections', () => {
+  const dayLog = { logDate: '2026-10-01', counts: { cig: 2 }, isManual: true, origin: 'MANUAL_ENTRY' };
+  const dayDocData = { date: '2026-10-01', counts: { cig: 1 }, trackerSnapshots: {}, status: 'open' };
+  const receipt = {
+    operationId: 'op-1',
+    operationType: 'createManualLog',
+    payloadFingerprint: 'fp-1',
+    resultStatus: 'OK',
+  };
+
+  const seedEverything = async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const admin = context.firestore();
+      await setDoc(doc(admin, 'users/alice'), emptyProfile);
+      await setDoc(doc(admin, 'users/alice/configs/cig'), { name: 'Cigarette', limit: 10, order: 0 });
+      await setDoc(doc(admin, 'users/alice/logs/L1'), dayLog);
+      await setDoc(doc(admin, 'users/alice/days/2026-10-01'), dayDocData);
+      await setDoc(doc(admin, 'users/alice/dailyFinancials/2026-10-01'), {
+        date: '2026-10-01',
+        countsByTracker: { cig: 5 },
+        canonicalCredit: { saved: 5, wasted: 5, smokingUnits: 5 },
+      });
+      await setDoc(doc(admin, 'users/alice/financialOperations/op-1'), receipt);
+    });
+  };
+
+  it('denies every read and write to user data for an unauthenticated client', async () => {
+    await seedEverything();
+    const anon = testEnv.unauthenticatedContext().firestore();
+
+    for (const path of [
+      'users/alice',
+      'users/alice/configs/cig',
+      'users/alice/logs/L1',
+      'users/alice/days/2026-10-01',
+      'users/alice/meta/profile',
+      'users/alice/dailyFinancials/2026-10-01',
+      'users/alice/financialOperations/op-1',
+    ]) {
+      await assertFails(getDoc(doc(anon, path)));
+      // A write is denied for the same reason: `isOwner` requires an auth uid.
+      await assertFails(setDoc(doc(anon, path), { anything: true }));
+    }
+  });
+
+  it('denies collections the rules never name (no implicit open path)', async () => {
+    const db = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(db, 'publicStuff/x'), { anything: true }));
+    await assertFails(getDoc(doc(db, 'publicStuff/x')));
+    // A user-scoped collection the schema does not define is denied too, even
+    // for the owner — an unknown subcollection must not become client-writable
+    // just because it sits under users/{uid}.
+    await assertFails(setDoc(doc(db, 'users/alice/unknownCollection/x'), { anything: true }));
+    await assertFails(getDoc(doc(db, 'users/alice/unknownCollection/x')));
+  });
+
+  it('financialOperations receipts are append-only and owner-scoped', async () => {
+    await seedEverything();
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    const mallory = testEnv.authenticatedContext('mallory').firestore();
+
+    await assertSucceeds(getDoc(doc(alice, 'users/alice/financialOperations/op-1')));
+    // Immutable: a retried logical action must not be able to rewrite its own result.
+    await assertFails(updateDoc(doc(alice, 'users/alice/financialOperations/op-1'), { resultStatus: 'OK', payloadFingerprint: 'fp-2' }));
+    await assertFails(getDoc(doc(mallory, 'users/alice/financialOperations/op-1')));
+    await assertFails(setDoc(doc(mallory, 'users/alice/financialOperations/op-2'), { ...receipt, operationId: 'op-2' }));
+  });
+
+  it('rejects a receipt whose operationType is outside the supported set', async () => {
+    await seedEverything();
+    const alice = testEnv.authenticatedContext('alice').firestore();
+    await assertFails(setDoc(doc(alice, 'users/alice/financialOperations/op-3'), {
+      ...receipt, operationId: 'op-3', operationType: 'stealEverything',
+    }));
+  });
+});

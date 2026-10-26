@@ -5,9 +5,14 @@ import { getFirestore } from "firebase/firestore";
 
 /**
  * TABAK++ Firebase Configuration
- * Client config is public (VITE_FIREBASE_*). App Check (reCAPTCHA Enterprise) is
- * strongly recommended on Spark to protect Auth/Firestore quotas:
- * set VITE_FIREBASE_APPCHECK_SITE_KEY from Firebase Console → App Check.
+ * Client config is public (VITE_FIREBASE_*).
+ *
+ * App Check is OPTIONAL here and is NOT part of the security boundary: this
+ * project runs on Spark with Firestore Security Rules as the authorization and
+ * validation boundary, and App Check enforcement is deliberately OFF on both
+ * clients (see README → Security and SECURITY.md). A missing
+ * VITE_FIREBASE_APPCHECK_SITE_KEY is therefore a normal, supported
+ * configuration — never report it as an error or imply the deploy is broken.
  */
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -35,21 +40,17 @@ const app = firebaseConfigError ? null : initializeApp(firebaseConfig);
 
 /**
  * Resolves when App Check is ready (or immediately if no site key).
- * Auth/Firestore still work without it until you enforce App Check in Console
- * (SETUP_GUIDE.md → Web App Check → Enforce checklist).
+ *
+ * App Check is an OPTIONAL, advisory integration in this project: enforcement
+ * is off, so an absent site key is a supported configuration (the whole app
+ * works, unenforced, on Firestore Security Rules alone). Initialization is
+ * therefore silent when the key is missing — reporting it as a production error
+ * made a deliberately App-Check-free deploy look misconfigured.
  */
 export const appCheckReady = (async () => {
   if (!app) return null;
   const siteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
-  if (!siteKey) {
-    if (import.meta.env.PROD) {
-      console.error(
-        '[firebase] App Check site key missing in production. ' +
-        'Configure the site key and follow SETUP_GUIDE.md before enabling enforcement.'
-      );
-    }
-    return null;
-  }
+  if (!siteKey) return null;
   if (import.meta.env.DEV) {
     // Register debug tokens in Firebase Console → App Check → Manage debug tokens
     self.FIREBASE_APPCHECK_DEBUG_TOKEN = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN || true;

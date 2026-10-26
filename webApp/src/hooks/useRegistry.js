@@ -307,22 +307,45 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       setAvatar(data?.avatar ?? null);
     }, () => { /* non-fatal — avatar is decorative */ });
 
-    const unsubLedgers = RegistryService.subscribeToLedgers(user.uid, (data) => {
-      setLedgers(data);
-      setLedgersLoaded(true);
-    }, () => { /* a ledger read failure must not silently imply "no ledger" */
-      setLedgersLoaded(false);
-    });
-
     return () => {
       unsubProfile();
       unsubConfigs();
       unsubLogs();
       unsubDays();
       unsubAvatar();
-      unsubLedgers();
     };
   }, [user?.uid, listenerEpoch]);
+
+  /**
+   * Canonical (OPTION B) daily ledgers — subscribed ONLY for accounts whose
+   * server-side `financialMode` is MIGRATING/OPTION_B.
+   *
+   * A LEGACY account has no ledger by definition: the ledger is an OPTION_B
+   * projection, `dailyLedger.js` is never imported by the app, and `canonical`
+   * below returns null for LEGACY regardless of what is loaded. Subscribing
+   * anyway billed a query per app start (Firestore bills the minimum read even
+   * for an empty result) and kept a live listener on a collection that can only
+   * ever be empty — a pure Spark-cost regression with no functional upside.
+   *
+   * Gated on a RESOLVED mode (`null` while the profile first loads) so the
+   * ledger can never be skipped because the mode was still unknown, and
+   * `ledgersLoaded` explicitly means "no ledger expected" for LEGACY.
+   */
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    if (!financialMode) return undefined;
+    if (financialMode === 'LEGACY') {
+      setLedgers([]);
+      setLedgersLoaded(true);
+      return undefined;
+    }
+    return RegistryService.subscribeToLedgers(user.uid, (data) => {
+      setLedgers(data);
+      setLedgersLoaded(true);
+    }, () => { /* a ledger read failure must not silently imply "no ledger" */
+      setLedgersLoaded(false);
+    });
+  }, [user?.uid, financialMode]);
 
   // Live "today" bucket — the dated day doc `today` currently points at. This
   // is the entire fix for item 1: `today` is recomputed independently of this
@@ -714,18 +737,41 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     );
   }, [user?.uid, configs, runMutation, requireOnline]);
 
+  /**
+   * Single-flight guard for tracker creation.
+   *
+   * `addProtocol` is a read-then-create: two calls in flight at once both read
+   * the same config count and both pass the cap, and each writes a NEW auto-id
+   * document (so neither overwrites the other). The result is a 9th tracker,
+   * which no tracking day can use — `firestore.rules` caps a day's
+   * `trackerSnapshots` map at 8, so `adjustCounter`/`createManualEntry` then
+   * fail with TRACKER_LIMIT until the extra tracker is removed.
+   *
+   * The form already disables its Save button while saving, but a fast
+   * double-click can reach this hook before React re-renders. Making the hook
+   * single-flight removes the reachable-within-one-client half of the race; the
+   * cross-device half is a documented limitation (rules cannot count documents,
+   * so a Spark/client-only architecture cannot enforce a collection cap).
+   */
+  const addInFlightRef = useRef(false);
   const addProtocol = useCallback(async (data) => {
-    if (!user) return;
+    if (!user) return undefined;
+    if (addInFlightRef.current) return undefined;
     // Client-side cap matching firestore.rules' trackerSnapshots bound (AUD-005)
     // so a 9th tracker is rejected up-front instead of failing a day write.
     if (configs.length >= MAX_TRACKERS) {
       setRegistryError(`You can track up to ${MAX_TRACKERS} counters at once.`);
-      return;
+      return undefined;
     }
-    return runMutation(
-      () => RegistryService.addProtocol(user.uid, { ...data, order: configs.length }),
-      'Could not add tracker.'
-    );
+    addInFlightRef.current = true;
+    try {
+      return await runMutation(
+        () => RegistryService.addProtocol(user.uid, { ...data, order: configs.length }),
+        'Could not add tracker.'
+      );
+    } finally {
+      addInFlightRef.current = false;
+    }
   }, [user?.uid, configs.length, runMutation]);
 
   const updateProtocol = useCallback(async (id, data) => {

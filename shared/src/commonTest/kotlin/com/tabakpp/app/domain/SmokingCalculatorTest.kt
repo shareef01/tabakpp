@@ -93,8 +93,21 @@ class SmokingCalculatorTest {
 
     @Test
     fun testNormalizeCounts() {
-        val input = mapOf("a" to 5.0, "b" to -10.0, "c" to 0.0)
-        val expected = mapOf("a" to 5.0, "b" to 0.0, "c" to 0.0)
+        // Parity contract with the web `normalizeCounts` / InputSanitizer.counts:
+        // keep only values firestore.rules can store, DROP the rest.
+        // (Before AUDIT-2026-10 this clamped -10 to 0 and passed NaN,
+        // Infinity, 2.5 and 10_001 straight through to a denied write.)
+        val input = mapOf(
+            "a" to 5.0,
+            "b" to -10.0,
+            "c" to 0.0,
+            "fractional" to 2.5,
+            "nan" to Double.NaN,
+            "infinite" to Double.POSITIVE_INFINITY,
+            "excessive" to 10_001.0,
+            "bad key!" to 1.0,
+        )
+        val expected = mapOf("a" to 5.0, "c" to 0.0)
         assertEquals(expected, SmokingCalculator.normalizeCounts(input))
     }
 
