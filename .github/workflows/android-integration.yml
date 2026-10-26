@@ -525,11 +525,11 @@ jobs:
           # Run Android instrumentation tests — full androidTest suite.
           # No -Pandroid.testInstrumentationRunnerArguments.class filter: AndroidJUnitRunner
           # discovers all androidTest classes automatically (currently FirebaseRegistryRepositoryTest
-          # 19 tests + RegistryErrorStructuredCodeTest 9 tests = 28 tests). This keeps CI in sync
+          # 22 tests + RegistryErrorStructuredCodeTest 9 tests = 31 tests). This keeps CI in sync
           # with the complete intended suite and automatically includes future androidTest classes.
           # timeout_msec=420000: per-test timeout (via AndroidJUnitRunner) catches hanging tests / setup
           # timeout -k 30s 40m: hard kill if tests hang beyond 40 min (within 60m job limit;
-          # 28 androidTest tests take ~16m on software emulator under contention, plus ~7m APK install)
+          # 31 androidTest tests take ~16m on software emulator under contention, plus ~7m APK install)
 
           # Stale-result protection. The JUnit XML is the authoritative gate below, so a
           # directory left behind by an earlier run must not be able to satisfy it: clear
