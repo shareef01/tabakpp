@@ -16,7 +16,7 @@ Fresh results are recorded only when executed in-session. Historical counts are 
 | Compose | `:composeApp:testDebugUnitTest` | prior session | 50 passed |
 | Android lint/build | `:androidApp:lintDebug :androidApp:assembleDebug` | prior session | SUCCESSFUL |
 | Android trusted Callable lifecycle | `FirebaseRegistryRepositoryTest#testL…` | prior session | **PASS** |
-| Android device instrumentation | `:androidApp:connectedDebugAndroidTest` | **this session** | **27 executed / 0 failed / 0 skipped** (incl. new `testM`) |
+| Android device instrumentation | `:androidApp:connectedDebugAndroidTest` | **2026-10-26 (this session)** | **28 executed / 0 failed / 0 errors / 0 skipped** on a physical device (19 `FirebaseRegistryRepositoryTest` + 9 `RegistryErrorStructuredCodeTest`); requires the demo-project `google-services.json` + firestore/auth/functions emulators, otherwise the fixture-reset guard fails all 19 Firebase tests (see `docs/audit-2026-10-26.md` F3) |
 | Repository ledger live refresh (OPTION_B, trusted mutation) | `testM_canonicalLedgerLiveRefresh_afterTrustedIncrement` | **this session** | **PASS** |
 | Web production build | `npm run build` | prior session | ✓ built |
 | Hygiene | `git diff --check` | this session | clean |

@@ -1227,7 +1227,8 @@ export const RegistryService = {
 
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const configIds = await listConfigIds(uid);
-    if (configIds.length > MAX_TRACKERS) throw new Error('TRACKER_LIMIT');    if (Object.entries(normalized).some(([id, value]) => value > 0 && !configIds.includes(id))) {
+    if (configIds.length > MAX_TRACKERS) throw new Error('TRACKER_LIMIT');
+    if (Object.entries(normalized).some(([id, value]) => value > 0 && !configIds.includes(id))) {
       throw new Error('INVALID_TRACKER');
     }
 
