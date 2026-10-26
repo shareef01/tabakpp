@@ -113,6 +113,12 @@ jobs:
       - name: Clear stale Android test results
         run: rm -rf androidApp/build/outputs/androidTest-results/
 
+      # The instrumentation result gate is the only thing standing between a failed
+      # runner and a green job, so its own regression suite runs here too (stdlib
+      # unittest, no emulator, no network — a few seconds).
+      - name: Test the instrumentation result gate
+        run: python3 .github/scripts/test-android-test-results-gate.py
+
       # Pre-build the test APKs BEFORE booting the emulator. The Gradle build
       # (Kotlin compile + dex) is CPU-intensive and running it concurrently
       # with the Android emulator causes the emulator to crash
@@ -550,58 +556,18 @@ jobs:
           # "AndroidTestRunner failed ... INSTALL_FAILED_UPDATE_INCOMPATIBLE" and the
           # build still reports BUILD SUCCESSFUL with exit 0 (observed locally). The
           # JUnit XML is therefore authoritative, and missing, empty, all-skipped,
-          # stale or failing results all fail the job.
-          xml_sum_attr() {  # $1=file $2=attribute name
-            # `|| true` on every stage: the script runs under `set -euo pipefail`,
-            # and a partially written XML that lacks an attribute must yield 0, not
-            # abort the gate with a confusing grep failure.
-            { grep -o "<testsuite [^>]*" "$1" 2>/dev/null || true; } \
-              | { grep -o " $2=\"[0-9]*\"" || true; } \
-              | { grep -o "[0-9]*" || true; } \
-              | awk '{ total += $1 } END { print total + 0 }'
-          }
-
-          RESULT_FILES=0
-          RESULT_TESTS=0
-          RESULT_FAILURES=0
-          RESULT_ERRORS=0
-          RESULT_SKIPPED=0
-          RESULT_STALE=0
-          RESULT_FAIL_ELEMENTS=0
-          while IFS= read -r xml; do
-            [ -n "$xml" ] || continue
-            if [ ! "$xml" -nt "$RESULTS_MARKER" ]; then
-              RESULT_STALE=$((RESULT_STALE + 1))
-              echo "::warning::Ignoring stale JUnit XML from a previous run: $xml"
-              continue
-            fi
-            RESULT_FILES=$((RESULT_FILES + 1))
-            RESULT_TESTS=$((RESULT_TESTS + $(xml_sum_attr "$xml" tests)))
-            RESULT_FAILURES=$((RESULT_FAILURES + $(xml_sum_attr "$xml" failures)))
-            RESULT_ERRORS=$((RESULT_ERRORS + $(xml_sum_attr "$xml" errors)))
-            RESULT_SKIPPED=$((RESULT_SKIPPED + $(xml_sum_attr "$xml" skipped)))
-            # Belt and braces: <failure>/<error> ELEMENTS are unambiguous evidence,
-            # so they are counted too. A truncated file whose header claims
-            # failures="0" but still contains a failure element cannot pass.
-            RESULT_FAIL_ELEMENTS=$((RESULT_FAIL_ELEMENTS + $(grep -c -e '<failure' -e '<error' "$xml" 2>/dev/null || true)))
-          done <<< "$(find "$RESULTS_DIR" -type f -name '*.xml' 2>/dev/null || true)"
-
-          RESULT_EXECUTED=$((RESULT_TESTS - RESULT_SKIPPED))
-          echo "INSTRUMENTATION_RESULTS: files=$RESULT_FILES tests=$RESULT_TESTS executed=$RESULT_EXECUTED failures=$RESULT_FAILURES errors=$RESULT_ERRORS skipped=$RESULT_SKIPPED stale=$RESULT_STALE failure_elements=$RESULT_FAIL_ELEMENTS"
-
+          # stale, malformed or failing results all fail the job.
+          #
+          # The checks live in .github/scripts/android-test-results-gate.py (stdlib
+          # xml.etree only) so they are unit-tested in
+          # .github/scripts/test-android-test-results-gate.py, instead of being
+          # re-derived with ad-hoc grep/sed in this shell script.
           RESULT_GATE_FAILED=""
-          if [ "$RESULT_FILES" -eq 0 ]; then
-            RESULT_GATE_FAILED="NO_RESULTS: no JUnit XML produced under $RESULTS_DIR"
-          elif [ "$RESULT_TESTS" -eq 0 ]; then
-            RESULT_GATE_FAILED="EMPTY_RESULTS: JUnit XML reports zero tests"
-          elif [ "$RESULT_EXECUTED" -le 0 ]; then
-            RESULT_GATE_FAILED="EMPTY_RESULTS: all $RESULT_TESTS discovered tests were skipped"
-          elif [ "$RESULT_FAILURES" -ne 0 ] || [ "$RESULT_ERRORS" -ne 0 ] || [ "$RESULT_FAIL_ELEMENTS" -ne 0 ]; then
-            RESULT_GATE_FAILED="FAILED_TESTS: failures=$RESULT_FAILURES errors=$RESULT_ERRORS failure_elements=$RESULT_FAIL_ELEMENTS"
-          fi
-          if [ -n "$RESULT_GATE_FAILED" ]; then
-            echo "::error::Instrumentation result gate failed: $RESULT_GATE_FAILED"
-          fi
+          python3 .github/scripts/android-test-results-gate.py \
+            --results-dir "$RESULTS_DIR" \
+            --marker "$RESULTS_MARKER" \
+            --gradle-exit "$TEST_EXIT" \
+            || RESULT_GATE_FAILED="result gate failed (see the INSTRUMENTATION_RESULTS / GATE lines above)"
 
           if [ "$TEST_EXIT" -ne 0 ] || [ -n "$RESULT_GATE_FAILED" ]; then
             echo "::error::Instrumentation tests failed (gradle exit: $TEST_EXIT; result gate: ${RESULT_GATE_FAILED:-passed})"
@@ -659,8 +625,11 @@ jobs:
             echo "=== JUnit XML files ($RESULTS_DIR) ==="
             find "$RESULTS_DIR" -type f -name '*.xml' 2>/dev/null || echo "(none)"
             echo ""
-            echo "=== JUnit XML summary ==="
-            echo "files=$RESULT_FILES tests=$RESULT_TESTS executed=$RESULT_EXECUTED failures=$RESULT_FAILURES errors=$RESULT_ERRORS skipped=$RESULT_SKIPPED stale=$RESULT_STALE"
+            echo "=== JUnit XML summary (re-run of the gate parser) ==="
+            python3 .github/scripts/android-test-results-gate.py \
+              --results-dir "$RESULTS_DIR" \
+              --marker "$RESULTS_MARKER" \
+              --gradle-exit "$TEST_EXIT" 2>&1 || true
             echo ""
             echo "=== Test logcat (last 200 lines) ==="
             tail -200 test-logcat.log 2>/dev/null || echo "No logcat available"
@@ -670,7 +639,7 @@ jobs:
             exit 1
           fi
 
-          echo "Instrumentation tests passed: $RESULT_EXECUTED executed, 0 failures, 0 errors (from $RESULT_FILES JUnit XML file(s))"
+          echo "Instrumentation tests passed (result gate: PASS — totals are in the INSTRUMENTATION_RESULTS line above)"
           exit 0
           SCRIPT
           chmod +x ci-run-tests.sh

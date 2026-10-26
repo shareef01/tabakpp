@@ -83,7 +83,8 @@ biggest). Secrets scan: none. Dependency audit: **Web production 0 vulns**; Web 
 `subscribeToLedgers` SDK subscription returns no ledger for a fresh date, and after a
 trusted `COUNTER_INCREMENT` it emits the server-written canonical ledger (counts 1,
 saved €9, wasted €1). `:androidApp:connectedDebugAndroidTest` → **28/28, 0 failed**
-(19 Firebase + 9 JVM; last re-verified 2026-10-26).
+(19 `FirebaseRegistryRepositoryTest` + 9 `RegistryErrorStructuredCodeTest`, all
+part of the instrumentation run; last re-verified 2026-10-26).
 The ViewModel `canonical`/`ledgers` projection is covered by `RegistryViewModelTest` (unit);
 wiring the real ViewModel on-device is the remaining (minor) W2-1 gap.
 
