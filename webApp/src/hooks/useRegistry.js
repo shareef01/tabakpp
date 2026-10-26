@@ -339,6 +339,12 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       setLedgersLoaded(true);
       return undefined;
     }
+    // A mode change invalidates whatever was loaded before it: the new
+    // subscription has not delivered a snapshot yet, so the projection must stay
+    // gated (`canonical === null`) rather than read as "OPTION_B, no ledgers" —
+    // which would render every date as unavailable/unknown money for a frame.
+    setLedgers([]);
+    setLedgersLoaded(false);
     return RegistryService.subscribeToLedgers(user.uid, (data) => {
       setLedgers(data);
       setLedgersLoaded(true);

@@ -16,7 +16,6 @@ const output = process.env.PWA_TEST_REPORT || path.join(temporary, 'results.json
 const sessions = new WeakMap();
 const deniedNavigationURLs = new Set();
 evidence.expectedNetworkFailures = [];
-const fixtureDiagnostic = '[firebase] App Check site key missing in production. Configure the site key and follow SETUP_GUIDE.md before enabling enforcement.';
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 let directory;
 let online = true;
@@ -78,7 +77,6 @@ function build(label) {
       VITE_FIREBASE_API_KEY: 'pwa-local-public-test-key', VITE_FIREBASE_AUTH_DOMAIN: 'demo-tabakpp-pwa.firebaseapp.com',
       VITE_FIREBASE_PROJECT_ID: 'demo-tabakpp-pwa', VITE_FIREBASE_STORAGE_BUCKET: 'demo-tabakpp-pwa.appspot.com',
       VITE_FIREBASE_MESSAGING_SENDER_ID: '123456789', VITE_FIREBASE_APP_ID: '1:123456789:web:abcdef123456',
-      VITE_FIREBASE_APPCHECK_SITE_KEY: '',
     },
   });
   fs.writeFileSync(path.join(temporary, `${label}.log`), result.stdout + result.stderr);
@@ -298,7 +296,7 @@ async function run() {
       await hostingContext.close();
     }
     assert.deepEqual(evidence.workerErrors, [], 'no SW initialization/runtime errors');
-    assert.deepEqual(evidence.consoleErrors.filter(error => error !== fixtureDiagnostic), [], 'no fatal browser errors');
+    assert.deepEqual(evidence.consoleErrors, [], 'no fatal browser errors');
     assert.deepEqual(evidence.warnings, []);
     console.log(`PWA regression passed: ${evidence.scenarios.length} scenarios; ${evidence.browser}`);
   } catch (error) {

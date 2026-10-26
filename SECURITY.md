@@ -11,7 +11,7 @@ Only the latest release of `tabak++` is actively maintained and supported with s
 
 ## Threat Model & Security Architecture
 
-**What is deployed today:** production runs on the Firebase Spark plan in **Legacy mode** only. Clients write directly to Firestore, and Firestore Security Rules are the security boundary. Rules guarantee owner isolation and bound the shape of every write, but they cannot recompute money, so an account owner can rewrite their own totals. The Option B Cloud Functions described below are written and tested in CI but **not deployed**, and App Check is integrated but **not enforced**.
+**What is deployed today:** production runs on the Firebase Spark plan in **Legacy mode** only. Clients write directly to Firestore, and Firestore Security Rules are the security boundary. Rules guarantee owner isolation and bound the shape of every write, but they cannot recompute money, so an account owner can rewrite their own totals. The Option B Cloud Functions described below are written and tested in CI but **not deployed**, and App Check is **not used at all** — it was removed from both clients rather than enforced (see item 7).
 
 `tabak++` is built for two financial modes. Owner data isolation holds in both; server-verified financial integrity exists only in Option B:
 
@@ -32,8 +32,10 @@ Only the latest release of `tabak++` is actively maintained and supported with s
    - For Option B and Migrating accounts, client-side deletion of financial data is blocked by security rules. Complete account data wipe is handled server-side by the `deleteAccountData` Cloud Function, which validates recent authentication (auth time within 5 minutes) and removes all user subcollections.
 6. **Public Firebase Configuration**:
    - In accordance with standard Firebase architecture, client identifiers (`apiKey`, `projectId`, `appId`) embedded in web or mobile binaries are identifiers, not secrets. Security is enforced through Firestore Security Rules, verified Firebase Authentication tokens, and Cloud Function callable context.
-7. **App Check**:
-   - Web uses reCAPTCHA Enterprise (`ReCaptchaEnterpriseProvider`). Android release builds use `PlayIntegrityAppCheckProviderFactory`. Enforcement is currently **off** for Firestore, Authentication and Storage, so App Check is advisory and not part of the security boundary. Once enforced it reduces abuse and automated traffic; it complements but does not replace Firestore rules and server validation.
+7. **App Check — not used**:
+   - This project runs without Firebase App Check: no attestation provider is installed on either client, no App Check token is requested, and no enforcement is configured. Web and Android both talk to Firebase Authentication and Cloud Firestore directly, authorized by Firestore Security Rules.
+   - This is an explicit security trade-off, not an oversight: **it does not weaken owner data isolation** (every rule path still requires `request.auth.uid == userId`), but it **removes a layer of abuse resistance**. Automated or non-app traffic is not stopped by attestation; the remaining control is Google Cloud **API-key restriction** (HTTP-referrer restricted web key, package + signing-certificate restricted Android key), which limits *which applications and domains may use the key*. That is **not equivalent** to attestation: API-key restrictions raise the cost of casual reuse of the public key, while App Check attests the running app. Quota abuse within a permitted app/origin is therefore only bounded by Spark quotas.
+   - Operational warning: do **not** enable App Check enforcement in the Firebase Console while these clients are current — they send no tokens, so Firestore/Auth would reject their requests. Adding App Check later means re-introducing providers and re-releasing clients first; see `SETUP_GUIDE.md` → "Adding App Check later (not currently used)".
 
 ## Reporting a Vulnerability
 

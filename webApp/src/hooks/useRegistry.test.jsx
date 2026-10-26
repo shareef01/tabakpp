@@ -440,6 +440,18 @@ describe('useRegistry lifecycle', () => {
     expect(cap.unsub.avatar).toHaveBeenCalled();
   });
 
+  // Sign-out/unmount must release the conditional ledger listener too — it is
+  // attached by a separate effect, so it needs its own cleanup assertion.
+  it('unsubscribes the canonical ledger listener on unmount for an OPTION_B account', () => {
+    const { unmount } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      ledgers: [LEDGER()],
+    });
+    expect(cap.ledgerSubs.current).toBe(1);
+    unmount();
+    expect(cap.unsub.ledgers).toHaveBeenCalled();
+  });
+
   it('tracks connectivity via window online/offline events', () => {
     const { result } = mountHydrated();
     act(() => window.dispatchEvent(new Event('offline')));
@@ -764,6 +776,48 @@ describe('useRegistry — OPTION_B canonical financial integration', () => {
     });
     expect(cap.ledgerSubs.current).toBe(1);
     expect(result.current.metrics.financialSource).toBe('OPTION_B_CANONICAL_SOURCE');
+  });
+
+  // Lifecycle of the conditional listener. The mode arrives asynchronously with
+  // the profile and can change while the app is open (a migration completing, or
+  // an operator resetting the account), so the effect must attach/detach exactly
+  // once per transition and never guess a mode.
+  it('never subscribes to the ledger before the financial mode is resolved', () => {
+    const view = renderHook((props) => useRegistry(props.user, TODAY, 0.5), { initialProps: { user: USER } });
+    expect(cap.ledgerSubs.current).toBe(0);
+    expect(view.result.current.financialMode).toBeNull();
+    expect(view.result.current.canonical).toBeNull();
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ financialMode: 'MIGRATING' }))));
+    expect(cap.ledgerSubs.current).toBe(1);
+  });
+
+  it('attaches the ledger listener when the account transitions LEGACY → OPTION_B', () => {
+    const { result } = mountHydrated({ day: dayData({ cig: 3 }) });
+    expect(cap.ledgerSubs.current).toBe(0);
+
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ financialMode: 'OPTION_B' }))));
+    expect(cap.ledgerSubs.current).toBe(1);
+    expect(result.current.financialMode).toBe('OPTION_B');
+    // Not yet delivered ⇒ gated (null), not an empty projection.
+    expect(result.current.canonical).toBeNull();
+
+    act(() => cap.ledgersCb.current([LEDGER()]));
+    expect(result.current.canonical.byDate[TODAY]).toBeTruthy();
+  });
+
+  it('detaches and clears the projection if the mode reverts to LEGACY', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      ledgers: [LEDGER()],
+    });
+    expect(cap.ledgerSubs.current).toBe(1);
+
+    act(() => cap.profileCb.current(profileSnap(defaultProfile())));
+    expect(cap.unsub.ledgers).toHaveBeenCalled();
+    expect(result.current.financialMode).toBe('LEGACY');
+    expect(result.current.canonical).toBeNull();
+    expect(result.current.ledgersLoaded).toBe(true);
+    expect(result.current.ledgers).toEqual([]);
   });
 
   it('OPTION_B + source activity but NO ledger ⇒ unavailable (never legacy fallback, never zero)', () => {

@@ -28,7 +28,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.TimeUnit
 import java.net.HttpURLConnection
@@ -152,17 +151,9 @@ class FirebaseRegistryRepositoryTest {
                     persistenceEnabled = false,
                 )
 
-                // Pre-fetch App Check to cache the DNS failure for
-                // firebaseappcheck.googleapis.com, which is unreachable from the CI
-                // emulator. Uncached, each sign-in eats a multi-second DNS timeout.
-                try {
-                    Tasks.await(
-                        FirebaseAppCheck.getInstance().getToken(true),
-                        15, TimeUnit.SECONDS
-                    )
-                } catch (e: Exception) {
-                    Log.d(TAG, "App Check token pre-fetch failed (expected in CI): ${e.message}")
-                }
+                // App Check is not installed (Spark-only, no attestation), so
+                // there is no token pre-fetch here — sign-in talks to the Auth
+                // emulator directly.
 
                 // ---- The ONE and ONLY signInAnonymously() call in this class ----
                 val signInTask = nativeAuth.signInAnonymously()

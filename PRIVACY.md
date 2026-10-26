@@ -14,7 +14,7 @@ devices.
 - Avatars are stored as compressed image data in the user's profile metadata (`meta/profile`).
 - The app does not intentionally sell personal data or use tracker data for ads.
 - Local diagnostic logs must not be committed or shared because third-party SDKs
-  may include account identifiers or App Check tokens in development output.
+  may include account identifiers in development output.
 
 ## Retention and deletion
 
@@ -46,8 +46,11 @@ Access rules restrict each signed-in user strictly to their own Firestore subtre
 In Legacy mode, Firestore Security Rules enforce owner isolation and validation bounds.
 In Option B mode, calculations and ledger writes are strictly server-authoritative via Cloud
 Functions, preventing client modification of financial totals while preserving owner isolation.
-Firebase App Check is integrated on both web and Android clients (advisory mode) to provide
-device and app attestation.
+Firebase App Check is not used: no attestation provider is installed on either client and no
+App Check token is requested, so the app does not collect or transmit app-attestation data.
+Firestore rules and API-key restrictions remain the active controls. API-key restrictions limit
+which applications and origins may use the public key, but they are not a substitute for device
+attestation, so abuse resistance is lower than an App-Check-enforced deployment.
 
 ## Contact
 

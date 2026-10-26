@@ -16,6 +16,12 @@ Deploy the reviewed follow-up rules before releasing clients that use migration 
 
 ## App Check: M10 remains conditional
 
+> **Superseded (2026-10-26).** App Check was removed from both clients instead of
+> being enforced; the app now runs without any attestation. The observations
+> below describe the 2026-10-07 state and are kept as a historical record — see
+> `SETUP_GUIDE.md` → "App Check (not used in this project)" for the current
+> position.
+
 Read-only production inspection found registered Play Integrity and reCAPTCHA Enterprise providers. Firestore and Auth remain UNENFORCED. Cloud Monitoring's App Check verification metric for September 30–October 7 reported 400 valid web Firestore requests and 5 valid web Auth requests. No Android series was returned; this is not proof of Android compatibility.
 
 Verify a production-signed released Android build on a physical device and correlate valid Android tokens in service metrics before enabling enforcement. Older incompatible clients also need an upgrade plan. No enforcement setting was changed by this work.

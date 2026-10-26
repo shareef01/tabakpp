@@ -1,32 +1,17 @@
-import { describe, it, expect, vi } from 'vitest';
-
-const { appCheckCalls } = vi.hoisted(() => ({
-  // Shared call recorder: under Vitest 5 the hoisted mock factory can execute
-  // in a module context where its own vi.fn() bindings differ from the test
-  // file's (and from the mocked module's exports). A plain hoisted object is
-  // the one guaranteed-shared reference for call assertions.
-  appCheckCalls: { initializeAppCheck: [], reCaptchaProvider: [] },
-}));
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 /**
- * Tests the App Check initialization logic in firebase.js.
+ * firebase.js — client configuration surface.
  *
- * firebase.js uses dynamic import() for "firebase/app-check" and reads
- * import.meta.env at module-load time. These tests verify:
- * - appCheckReady always resolves (never rejects), regardless of site key
- * - auth/db are exported (may be null if firebaseConfigError, which is expected
- *   when VITE_FIREBASE_* env vars are missing in CI)
- * - When a site key is present, ReCaptchaEnterpriseProvider is used
- * - isTokenAutoRefreshEnabled is true in the config
+ * The module reads `import.meta.env` at load time, so each case loads a fresh
+ * copy through the module registry (`vi.resetModules()`). SDK modules are
+ * mocked so no network client is created.
  *
- * setupTests.js globally mocks ./firebase; the transparent importOriginal
- * factory below loads the REAL module instead (vi.unmock alone no longer
- * beats a setup-file mock under Vitest 5), with Firebase SDK modules mocked
- * to avoid network.
+ * Scope note: App Check is intentionally absent from this app (Spark-only — no
+ * attestation provider, no token, no enforcement), so there is no
+ * provider-selection behaviour left to assert here. See SECURITY.md.
  */
-
-vi.mock('./firebase', async (importOriginal) => await importOriginal());
-const loadFirebase = () => import('./firebase');
 
 vi.mock('firebase/app', () => ({
   initializeApp: vi.fn(() => ({ name: '[DEFAULT]', options: { projectId: 'test' } })),
@@ -40,46 +25,42 @@ vi.mock('firebase/firestore', () => ({
   getFirestore: vi.fn(() => ({ app: { name: '[DEFAULT]' } })),
 }));
 
-// Mock firebase/app-check — initializeAppCheck must return a Promise
-// because firebase.js awaits it in an async IIFE. ReCaptchaEnterpriseProvider
-// is called with `new`, so it must be a constructable function.
-vi.mock('firebase/app-check', () => ({
-  initializeAppCheck: (app, options) => {
-    appCheckCalls.initializeAppCheck.push(options);
-    return Promise.resolve({ app, options });
-  },
-  ReCaptchaEnterpriseProvider: function (siteKey) {
-    appCheckCalls.reCaptchaProvider.push(siteKey);
-    return { _isMockReCaptchaProvider: true, siteKey };
-  },
-}));
+// setupTests.js globally mocks ./firebase for the component suites; this
+// transparent factory hands the REAL module back so these cases exercise the
+// actual config/error logic (vi.unmock alone no longer beats a setup-file mock).
+vi.mock('./firebase', async (importOriginal) => await importOriginal());
 
-describe('firebase.js — App Check initialization', () => {
+const loadFirebase = async () => {
+  vi.resetModules();
+  return import('./firebase');
+};
 
-  it('exports appCheckReady, auth, db, and firebaseConfigError', async () => {
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe('firebase.js — configuration surface', () => {
+  it('exports auth, db and firebaseConfigError, and no App Check surface', async () => {
     const mod = await loadFirebase();
-    expect(mod).toHaveProperty('appCheckReady');
+    expect(mod.auth).toBeDefined();
     expect(mod).toHaveProperty('auth');
     expect(mod).toHaveProperty('db');
     expect(mod).toHaveProperty('firebaseConfigError');
-  });
-
-  it('appCheckReady resolves (never rejects), regardless of site key', async () => {
-    const { appCheckReady } = await loadFirebase();
-    const result = await appCheckReady;
-    // appCheckReady resolves to:
-    // - null when no site key is configured (graceful degradation)
-    // - an AppCheck instance when site key is present
-    // It must NEVER reject.
-    expect(result).not.toBeUndefined();
+    // App Check was removed deliberately: nothing may re-introduce a token
+    // provider surface that could be mistaken for a security boundary. Asserted
+    // against the module SOURCE — a Vitest module mock answers `in` for every
+    // key and throws on an unknown one, so a runtime probe cannot prove absence.
+    // (Vitest runs with cwd = webApp, same convention as the rules suite.)
+    const source = readFileSync('src/firebase.js', 'utf8');
+    expect(source).not.toMatch(/app-check|appCheck|RecaptchaEnterprise|APPCHECK/);
   });
 
   it('auth/db are null when Firebase config is incomplete (CI has no .env.local)', async () => {
-    const { auth, db, appCheckReady, firebaseConfigError } = await loadFirebase();
-    await appCheckReady;
-
-    // In CI without .env.local, firebaseConfigError is non-null and
-    // auth/db are null — this is the expected graceful failure path.
+    const { auth, db, firebaseConfigError } = await loadFirebase();
     if (firebaseConfigError) {
       expect(auth).toBeNull();
       expect(db).toBeNull();
@@ -87,35 +68,34 @@ describe('firebase.js — App Check initialization', () => {
   });
 
   it('auth/db are non-null when Firebase config is complete', async () => {
-    const { auth, db, appCheckReady, firebaseConfigError } = await loadFirebase();
-    await appCheckReady;
-
-    // When config is complete (e.g. local dev with .env.local), auth/db are set
+    const { auth, db, firebaseConfigError } = await loadFirebase();
     if (!firebaseConfigError) {
       expect(auth).not.toBeNull();
       expect(db).not.toBeNull();
     }
   });
 
-  it('calls initializeAppCheck with ReCaptchaEnterpriseProvider when site key present', async () => {
-    const { appCheckReady } = await loadFirebase();
-    const result = await appCheckReady;
-
-    if (result) {
-      // Site key was present → App Check initialized
-      expect(appCheckCalls.reCaptchaProvider).toEqual([
-        import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY,
-      ]);
-      expect(appCheckCalls.initializeAppCheck).toHaveLength(1);
-      expect(appCheckCalls.initializeAppCheck[0]).toEqual(
-        expect.objectContaining({
-          isTokenAutoRefreshEnabled: true,
-        })
-      );
+  it('names the missing client keys in the configuration error', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_FIREBASE_API_KEY', '');
+    const mod = await import('./firebase');
+    // Either the local .env supplied every key (nothing to report), or the
+    // message names the keys a deployer must fill in.
+    if (mod.firebaseConfigError) {
+      expect(mod.firebaseConfigError).toMatch(/Missing Firebase config/);
+      expect(mod.firebaseConfigError).toMatch(/apiKey/);
     } else {
-      // No site key → App Check not initialized (graceful degradation)
-      expect(appCheckCalls.reCaptchaProvider).toHaveLength(0);
-      expect(appCheckCalls.initializeAppCheck).toHaveLength(0);
+      expect(mod.firebaseConfigError).toBeNull();
     }
+  });
+
+  it('never reports App Check as required or misconfigured', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await loadFirebase();
+    const appCheckComplaints = errorSpy.mock.calls
+      .map((args) => args.join(' '))
+      .filter((line) => /app ?check/i.test(line));
+    expect(appCheckComplaints).toEqual([]);
+    errorSpy.mockRestore();
   });
 });
