@@ -442,6 +442,26 @@ describe('RegistryService.migrateLegacyActiveCounts (item 1 — activeCounts mig
 
     expect(dayDoc(expectedDate).counts).toEqual({ cig: 5 });
   });
+
+  // The FILTERING half of the count contract: `activeCounts` is stored state an
+  // old client may have written, so unusable entries are dropped rather than
+  // blocking the migration forever (a rules-denied write here would strand the
+  // account on the legacy schema). Only caller-supplied input is rejected.
+  it('drops unusable entries from stored legacy counts instead of stranding the migration', async () => {
+    seedConfig(CIG);
+    const expectedDate = SmokingCalculator.getTrackingDate(new Date(), 6);
+    seedUser({
+      activeCounts: { cig: 3, fractional: 2.5, negative: -4, huge: 10_001, 'bad key!': 2 },
+      dayStartHour: 6,
+      schemaVersion: 1,
+      lifetimeAggregates: baseAgg(),
+    });
+
+    await RegistryService.migrateLegacyActiveCounts(UID);
+
+    expect(dayDoc(expectedDate).counts).toEqual({ cig: 3 });
+    expect(userDoc().schemaVersion).toBe(2);
+  });
 });
 
 describe('RegistryService.migrateAvatarToProfileMeta / updateAvatar (item 12)', () => {
@@ -625,17 +645,24 @@ describe('RegistryService.updateHistoricalLog', () => {
     await expect(RegistryService.updateHistoricalLog(UID, 'nope', { cig: 1 })).rejects.toThrow('LOG_NOT_FOUND');
   });
 
-  it('drops non-finite, negative, and excessive counts', async () => {
+  // CONTRACT CHANGE (AUDIT-2026-10): this path used to FILTER the three bad
+  // values away and write `counts: {}` — i.e. a caller bug silently zeroed the
+  // record's consumption (and its stamped credit). User-supplied counts are now
+  // REJECTED with a legible domain error and nothing is written. The filtering
+  // behaviour still applies where it belongs — to STORED/legacy state; see
+  // "drops unusable entries from stored legacy counts" below.
+  it('rejects non-finite, negative, and excessive counts instead of silently zeroing the row', async () => {
     seedLog({ trackerSnapshots: { cig: SmokingCalculator.buildTrackerSnapshot(CIG, 0.5) }, id: 'L1', logDate: '2026-07-10', counts: { cig: 1 }, origin: 'DAY_RESET' });
     seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });
 
-    await RegistryService.updateHistoricalLog(UID, 'L1', {
+    await expect(RegistryService.updateHistoricalLog(UID, 'L1', {
       cig: Number.POSITIVE_INFINITY,
       negative: -1,
       excessive: 10_001,
-    });
+    })).rejects.toThrow('INVALID_COUNT');
 
-    expect(logDoc('L1').counts).toEqual({});
+    expect(logDoc('L1').counts).toEqual({ cig: 1 });
+    expect(userDoc().lifetimeAggregates).toEqual(baseAgg());
   });
 
   it('preserves counts for deleted trackers when editing live config values', async () => {
@@ -784,6 +811,42 @@ describe('RegistryService.createManualEntry', () => {
       smokingUnits: 2,
       baselineSaved: 0,
     });
+  });
+
+  /**
+   * Option A (event-level) accounting — DOCUMENTED, ACCEPTED LIMITATION.
+   *
+   * docs/financial-semantics.md §3: `saved`/`baselineSaved` are day-level
+   * quantities, but the LEGACY log path stamps one credit PER RECORD. Two
+   * manual entries on the same date therefore each grant the day's full
+   * allowance: a 10-unit/€1 day ("target 10, so €10 of allowance") with logs of
+   * 2 and 3 credits €8 + €7 = €15 of "saved" — more than the day's whole budget.
+   * `wasted` and `smokingUnits` stay event-additive and correct.
+   *
+   * This is pinned (not fixed) on purpose: adopting the day-level model (Option
+   * B) needs a write-path change, an old-client compatibility window and an
+   * authorized historical repair — see §10–§17. Nothing here rewrites stored
+   * records, and no UI label claims the figure is a per-day budget.
+   */
+  it('Option A: two manual entries on one date credit the daily allowance twice (accepted limitation)', async () => {
+    seedConfig(CIG);
+    seedUser({ lifetimeAggregates: { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 }, unitPrice: 0.5 });
+
+    await RegistryService.createManualEntry(UID, '2026-07-05', { cig: 2 });
+    await RegistryService.createManualEntry(UID, '2026-07-05', { cig: 3 });
+
+    const u = userDoc().lifetimeAggregates;
+    expect(u.saved).toBeCloseTo(15); // (10-2)·1 + (10-3)·1 — NOT the day-level (10-5)·1 = 5
+    expect(u.wasted).toBeCloseTo(5); // event-additive: correct under both models
+    expect(u.smokingUnits).toBeCloseTo(5); // event-additive: correct under both models
+    expect(logPaths()).toHaveLength(2);
+
+    // The day-level value the Option B contract would produce for the same data:
+    const dayLevel = SmokingCalculator.computeDayCredit(
+      { cig: 5 },
+      { cig: SmokingCalculator.buildTrackerSnapshot(CIG, 0.5) }
+    );
+    expect(dayLevel.saved).toBeCloseTo(5);
   });
 });
 
@@ -953,5 +1016,70 @@ describe('Compatibility — a pre-existing baselineSaved drift is NOT self-heale
     ]).baselineSaved;
     expect(authoritative).toBeCloseTo(36);
     expect(stored - authoritative).toBeCloseTo(18); // drift persists ⇒ NOT self-healed
+  });
+});
+
+describe('counts validation — invalid caller values are REJECTED, never forwarded (AUDIT-2026-10)', () => {
+  const DATE = '2026-07-20';
+
+  beforeEach(() => {
+    seedConfig(CIG);
+    seedUser({ lifetimeAggregates: baseAgg(), unitPrice: 0.5 });
+  });
+
+  // firestore.rules requires whole counts in [0, 10000] (`v % 1 == 0`). The old
+  // filter kept 2.5 (it only tested finite/`>= 0`/`<= 10000`), so the write went
+  // to Firestore and came back as an opaque "Missing or insufficient
+  // permissions". A negative count was dropped outright, which turned a
+  // negative manual entry into a ZERO-count log — i.e. a full phantom daily
+  // allowance. Rejecting up-front keeps both failures legible and inert.
+  it('rejects fractional, negative, non-finite and oversized counts before any write', async () => {
+    for (const bad of [{ cig: 2.5 }, { cig: -1 }, { cig: Number.NaN }, { cig: Number.POSITIVE_INFINITY }, { cig: 10_001 }]) {
+      await expect(RegistryService.createManualEntry(UID, DATE, bad, 1.0, DATE)).rejects.toThrow('INVALID_COUNT');
+    }
+    expect(logPaths()).toHaveLength(0);
+    expect(userDoc().lifetimeAggregates).toEqual(baseAgg());
+  });
+
+  it('rejects an unusable tracker id instead of silently dropping that count', async () => {
+    await expect(RegistryService.createManualEntry(UID, DATE, { 'bad id!': 2 }, 1.0, DATE)).rejects.toThrow('INVALID_COUNT');
+    expect(logPaths()).toHaveLength(0);
+  });
+
+  it('still accepts numeric strings from form inputs (backward-compatible coercion)', async () => {
+    await RegistryService.createManualEntry(UID, DATE, { cig: '3' }, 1.0, DATE);
+    expect(fake.store.get(logPaths()[0]).counts).toEqual({ cig: 3 });
+  });
+
+  it('updateHistoricalDay rejects a fractional count and leaves the stored day untouched', async () => {
+    seedDay(DATE, {
+      counts: { cig: 4 },
+      trackerSnapshots: { cig: { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true } },
+      status: 'closed',
+    });
+    await expect(RegistryService.updateHistoricalDay(UID, DATE, { cig: 2.5 })).rejects.toThrow('INVALID_COUNT');
+    expect(dayDoc(DATE).counts).toEqual({ cig: 4 });
+  });
+
+  it('updateHistoricalLog rejects a fractional count and leaves the stored log untouched', async () => {
+    seedLog({
+      id: 'L1',
+      logDate: DATE,
+      counts: { cig: 4 },
+      trackerSnapshots: { cig: { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true } },
+    });
+    await expect(RegistryService.updateHistoricalLog(UID, 'L1', { cig: 2.5 })).rejects.toThrow('INVALID_COUNT');
+    expect(logDoc('L1').counts).toEqual({ cig: 4 });
+  });
+
+  it('restoreLog rejects fractional counts from stale state (never writes a rules-invalid doc)', async () => {
+    const stale = { id: 'GONE', logDate: DATE, counts: { cig: 2.5 } };
+    await expect(RegistryService.restoreLog(UID, stale)).rejects.toThrow('INVALID_COUNT');
+    expect(logDoc('GONE')).toBeUndefined();
+  });
+
+  it('adjustCounter rejects a fractional delta (the tap path is integral by contract)', async () => {
+    await expect(RegistryService.adjustCounter(UID, 'cig', 0.5, DATE, 0.5)).rejects.toThrow('INVALID_COUNT');
+    expect(dayDoc(DATE)).toBeUndefined();
   });
 });

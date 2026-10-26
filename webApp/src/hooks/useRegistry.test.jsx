@@ -16,6 +16,10 @@ const cap = vi.hoisted(() => ({
   dayCb: { current: null },
   avatarCb: { current: null },
   ledgersCb: { current: null },
+  // Counts canonical-ledger subscriptions: a LEGACY account has no ledger by
+  // definition, so subscribing would cost a query + listener for an empty
+  // collection on every app start (Spark read budget).
+  ledgerSubs: { current: 0 },
   unsub: { profile: vi.fn(), configs: vi.fn(), logs: vi.fn(), days: vi.fn(), day: vi.fn(), avatar: vi.fn(), ledgers: vi.fn() },
 }));
 
@@ -55,6 +59,7 @@ vi.mock('../services/registryService', () => ({
       return cap.unsub.avatar;
     },
     subscribeToLedgers: (_uid, cb) => {
+      cap.ledgerSubs.current += 1;
       cap.ledgersCb.current = cb;
       return cap.unsub.ledgers;
     },
@@ -98,7 +103,8 @@ const mountHydrated = ({ user = USER, profile = defaultProfile(), configs = [CIG
     act(() => cap.daysCb.current([]));
     act(() => cap.dayCb.current(day));
     act(() => cap.avatarCb.current({ avatar: null }));
-    act(() => cap.ledgersCb.current(ledgers));
+    // Only an OPTION_B/MIGRATING account subscribes to the canonical ledger.
+    if (cap.ledgersCb.current) act(() => cap.ledgersCb.current(ledgers));
   }
   return view;
 };
@@ -111,6 +117,7 @@ beforeEach(() => {
   cap.dayCb.current = null;
   cap.avatarCb.current = null;
   cap.ledgersCb.current = null;
+  cap.ledgerSubs.current = 0;
   vi.clearAllMocks();
   // Re-establish a resolving default for every action spy (clearAllMocks keeps
   // implementations, but individual tests may override closeDay).
@@ -344,6 +351,43 @@ describe('useRegistry protocol helpers', () => {
     expect(RegistryService.addProtocol).toHaveBeenCalledWith('u1', { name: 'New', order: 2 });
   });
 
+  // AUDIT-2026-10 (tracker-limit TOCTOU): addProtocol is read-then-create, so
+  // two in-flight calls both pass the cap check and each creates a NEW auto-id
+  // doc — a 9th tracker that no tracking day can use. The hook is now
+  // single-flight, so a double-tap cannot create two trackers.
+  it('is single-flight — a second add while one is pending is a no-op', async () => {
+    let release;
+    // Only the FIRST call stays pending; later calls resolve normally.
+    RegistryService.addProtocol.mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; })
+    );
+    const { result } = mountHydrated({ configs: [CIG] });
+
+    let pending;
+    act(() => { pending = result.current.addProtocol({ name: 'First' }); });
+    await act(async () => { await result.current.addProtocol({ name: 'Second' }); });
+
+    expect(RegistryService.addProtocol).toHaveBeenCalledTimes(1);
+    expect(RegistryService.addProtocol).toHaveBeenCalledWith('u1', { name: 'First', order: 1 });
+
+    await act(async () => { release(); await pending; });
+    // Guard released: a later add is accepted again.
+    await act(async () => { await result.current.addProtocol({ name: 'Third' }); });
+    expect(RegistryService.addProtocol).toHaveBeenCalledTimes(2);
+  });
+
+  it('releases the single-flight guard when the add fails', async () => {
+    RegistryService.addProtocol.mockRejectedValueOnce(new Error('offline'));
+    const { result } = mountHydrated({ configs: [CIG] });
+
+    await act(async () => {
+      await expect(result.current.addProtocol({ name: 'Boom' })).rejects.toThrow('offline');
+    });
+
+    await act(async () => { await result.current.addProtocol({ name: 'Retry' }); });
+    expect(RegistryService.addProtocol).toHaveBeenCalledTimes(2);
+  });
+
   it('deleteProtocol passes the current tracking date for live cleanup', () => {
     const { result } = mountHydrated();
     act(() => { result.current.deleteProtocol('cig'); });
@@ -394,6 +438,18 @@ describe('useRegistry lifecycle', () => {
     expect(cap.unsub.days).toHaveBeenCalled();
     expect(cap.unsub.day).toHaveBeenCalled();
     expect(cap.unsub.avatar).toHaveBeenCalled();
+  });
+
+  // Sign-out/unmount must release the conditional ledger listener too — it is
+  // attached by a separate effect, so it needs its own cleanup assertion.
+  it('unsubscribes the canonical ledger listener on unmount for an OPTION_B account', () => {
+    const { unmount } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      ledgers: [LEDGER()],
+    });
+    expect(cap.ledgerSubs.current).toBe(1);
+    unmount();
+    expect(cap.unsub.ledgers).toHaveBeenCalled();
   });
 
   it('tracks connectivity via window online/offline events', () => {
@@ -686,6 +742,82 @@ describe('useRegistry — OPTION_B canonical financial integration', () => {
     expect(result.current.financialMode).toBe('LEGACY');
     expect(result.current.canonical).toBeNull();
     expect(result.current.metrics.financialSource).toBeUndefined();
+  });
+
+  // AUDIT-2026-10 (Spark read budget): a LEGACY account has no canonical ledger
+  // by definition — the ledger is an OPTION_B-only projection and `canonical`
+  // returns null for LEGACY regardless. Subscribing anyway paid for a query
+  // (Firestore bills the minimum 1 read even for an empty result) plus a live
+  // listener for every LEGACY account on every app start, and `ledgersLoaded`
+  // could never become meaningful.
+  it('LEGACY account never subscribes to the canonical ledger collection (Spark reads)', () => {
+    const { result } = mountHydrated({ day: dayData({ cig: 3 }), ledgers: [LEDGER()] });
+    expect(cap.ledgerSubs.current).toBe(0);
+    // "no ledger expected" — not "ledger still loading".
+    expect(result.current.ledgersLoaded).toBe(true);
+    expect(result.current.ledgers).toEqual([]);
+    expect(result.current.canonical).toBeNull();
+  });
+
+  it('OPTION_B account subscribes to the canonical ledger exactly once', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      ledgers: [LEDGER()],
+    });
+    expect(cap.ledgerSubs.current).toBe(1);
+    expect(result.current.ledgersLoaded).toBe(true);
+    expect(result.current.canonical.byDate[TODAY]).toBeTruthy();
+  });
+
+  it('MIGRATING account still reads the ledger per date (partial migration)', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'MIGRATING' }),
+      ledgers: [LEDGER()],
+    });
+    expect(cap.ledgerSubs.current).toBe(1);
+    expect(result.current.metrics.financialSource).toBe('OPTION_B_CANONICAL_SOURCE');
+  });
+
+  // Lifecycle of the conditional listener. The mode arrives asynchronously with
+  // the profile and can change while the app is open (a migration completing, or
+  // an operator resetting the account), so the effect must attach/detach exactly
+  // once per transition and never guess a mode.
+  it('never subscribes to the ledger before the financial mode is resolved', () => {
+    const view = renderHook((props) => useRegistry(props.user, TODAY, 0.5), { initialProps: { user: USER } });
+    expect(cap.ledgerSubs.current).toBe(0);
+    expect(view.result.current.financialMode).toBeNull();
+    expect(view.result.current.canonical).toBeNull();
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ financialMode: 'MIGRATING' }))));
+    expect(cap.ledgerSubs.current).toBe(1);
+  });
+
+  it('attaches the ledger listener when the account transitions LEGACY → OPTION_B', () => {
+    const { result } = mountHydrated({ day: dayData({ cig: 3 }) });
+    expect(cap.ledgerSubs.current).toBe(0);
+
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ financialMode: 'OPTION_B' }))));
+    expect(cap.ledgerSubs.current).toBe(1);
+    expect(result.current.financialMode).toBe('OPTION_B');
+    // Not yet delivered ⇒ gated (null), not an empty projection.
+    expect(result.current.canonical).toBeNull();
+
+    act(() => cap.ledgersCb.current([LEDGER()]));
+    expect(result.current.canonical.byDate[TODAY]).toBeTruthy();
+  });
+
+  it('detaches and clears the projection if the mode reverts to LEGACY', () => {
+    const { result } = mountHydrated({
+      profile: defaultProfile({ financialMode: 'OPTION_B' }),
+      ledgers: [LEDGER()],
+    });
+    expect(cap.ledgerSubs.current).toBe(1);
+
+    act(() => cap.profileCb.current(profileSnap(defaultProfile())));
+    expect(cap.unsub.ledgers).toHaveBeenCalled();
+    expect(result.current.financialMode).toBe('LEGACY');
+    expect(result.current.canonical).toBeNull();
+    expect(result.current.ledgersLoaded).toBe(true);
+    expect(result.current.ledgers).toEqual([]);
   });
 
   it('OPTION_B + source activity but NO ledger ⇒ unavailable (never legacy fallback, never zero)', () => {

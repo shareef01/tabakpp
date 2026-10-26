@@ -8,11 +8,11 @@ PASS · OPEN · BLOCKED · APPROVAL_REQUIRED · PARKED
 | No P1 release blocker | **PASS** | full regression green; the two OPTION_B gaps are now implemented (HISTORICAL_DAY_UPDATE + TRACKER_DELETE), not fail-closed |
 | Trusted financial mutations complete on Web | **VERIFIED** | day close, stale reconciliation, historical-day update and tracker deletion all route through the trusted callable for OPTION_B/MIGRATING |
 | Migration recovery verified | **VERIFIED (interruption/resume + concurrency)** | per-date atomic migration; emulator tests reproduce the pre-fix defect and pass after the fix; classification covered by `financial.test.js` 26 tests. Interrupted finalization + large-history paging remain TODO |
-| Android instrumentation green | **VERIFIED** | 27 executed / **0 failed** / 0 skipped (AVD **and** physical Pixel 7) |
+| Android instrumentation green | **VERIFIED** | **31 executed / 0 failed / 0 errors / 0 skipped** on the reconciled branch (main's 22 `FirebaseRegistryRepositoryTest` + 9 `RegistryErrorStructuredCodeTest`), re-verified on a dedicated AVD (`aus_api36`) with demo-project emulators. History: 28/28 on a physical Mi 9T Pro, 27/27 on an AVD and a Pixel 7 (pre-rewrite base) |
 | Callable + idempotency green | **VERIFIED (tested scenarios)** | `testL` PASS (increment, source, ledger, receipt, duplicate, conflict) |
 | Ledger → repository → ViewModel refresh device-verified | **PARTIAL** | repository live-refresh **VERIFIED on-device** (`testM`); ViewModel projection covered by unit tests, not yet wired on-device |
 | UI/UX preserved, no unapproved visual change | **PASS (so far)** | no UI files touched this engagement |
-| Security: authorization intact, no weakening | **PASS** | rules 108/108; `financialLocked`, ownership, ledger/receipt validation, 50-entry contract all intact |
+| Security: authorization intact, no weakening | **PASS** | rules 131/131; `financialLocked`, ownership, ledger/receipt validation, 50-entry contract all intact |
 | Dependency vulnerabilities | **OPEN (low risk)** | Web prod 0; Web dev 19H/1C/14M (build tooling only); functions prod 8 moderate (GCP SDK transitives) — no high/critical shipped |
 | Production Firebase | **PARTIAL (rules + hosting)** | Firestore rules and LEGACY hosting (ledger off) deployed to `tabakpp-ff036` from `main` 32312ff on 2026-10-20 (OPTION_B/MIGRATING gates live but inert). Functions NOT deployed; no migration; no Option-B activation |
 | Production actions (deploy/migrate/activate Option B) | **PARKED (owner decision, 2026-10-11)** | The project stays on the Spark plan. Option-B needs Cloud Functions (Blaze), so it stays dormant: the code is kept, tested in CI against the emulators, and inert in production |

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import { auth, appCheckReady } from '../firebase';
+import { auth } from '../firebase';
 import { onAuthStateChanged, setPersistence, browserLocalPersistence, getRedirectResult } from 'firebase/auth';
 import { RegistryService } from '../services/registryService';
 import { AUTH_INTENT_KEY, PENDING_DELETE_KEY } from '../utils/platform';
@@ -27,7 +27,6 @@ export const AuthProvider = ({ children }) => {
 
     const initAuth = async () => {
       try {
-        await appCheckReady;
         if (cancelled) return;
         await setPersistence(auth, browserLocalPersistence);
         if (cancelled) return;

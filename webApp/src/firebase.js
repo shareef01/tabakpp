@@ -5,9 +5,13 @@ import { getFirestore } from "firebase/firestore";
 
 /**
  * TABAK++ Firebase Configuration
- * Client config is public (VITE_FIREBASE_*). App Check (reCAPTCHA Enterprise) is
- * strongly recommended on Spark to protect Auth/Firestore quotas:
- * set VITE_FIREBASE_APPCHECK_SITE_KEY from Firebase Console → App Check.
+ * Client config is public (VITE_FIREBASE_*).
+ *
+ * Spark-only by design: Firebase Authentication + Cloud Firestore + Hosting,
+ * with Firestore Security Rules as the single authorization/validation
+ * boundary. App Check is deliberately NOT used (no provider, no token, no
+ * enforcement) — see README → Security and SECURITY.md. The only required
+ * environment variables are the VITE_FIREBASE_* client identifiers below.
  */
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -32,34 +36,6 @@ if (firebaseConfigError) {
 }
 
 const app = firebaseConfigError ? null : initializeApp(firebaseConfig);
-
-/**
- * Resolves when App Check is ready (or immediately if no site key).
- * Auth/Firestore still work without it until you enforce App Check in Console
- * (SETUP_GUIDE.md → Web App Check → Enforce checklist).
- */
-export const appCheckReady = (async () => {
-  if (!app) return null;
-  const siteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
-  if (!siteKey) {
-    if (import.meta.env.PROD) {
-      console.error(
-        '[firebase] App Check site key missing in production. ' +
-        'Configure the site key and follow SETUP_GUIDE.md before enabling enforcement.'
-      );
-    }
-    return null;
-  }
-  if (import.meta.env.DEV) {
-    // Register debug tokens in Firebase Console → App Check → Manage debug tokens
-    self.FIREBASE_APPCHECK_DEBUG_TOKEN = import.meta.env.VITE_FIREBASE_APPCHECK_DEBUG_TOKEN || true;
-  }
-  const { initializeAppCheck, ReCaptchaEnterpriseProvider } = await import("firebase/app-check");
-  return initializeAppCheck(app, {
-    provider: new ReCaptchaEnterpriseProvider(siteKey),
-    isTokenAutoRefreshEnabled: true
-  });
-})();
 
 export const auth = app ? getAuth(app) : null;
 export const db = app ? getFirestore(app) : null;

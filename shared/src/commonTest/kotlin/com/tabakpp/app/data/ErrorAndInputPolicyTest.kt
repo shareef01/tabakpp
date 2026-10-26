@@ -164,6 +164,8 @@ class ErrorAndInputPolicyTest {
             put("negative", -1.0)
             put("infinite", Double.POSITIVE_INFINITY)
             put("excessive", 10_001.0)
+            put("fractional", 2.5)
+            put("notANumber", Double.NaN)
             put("bad key!", 1.0)
             put("x".repeat(65), 1.0)
         }
@@ -174,6 +176,11 @@ class ErrorAndInputPolicyTest {
         assertFalse("negative" in normalized)
         assertFalse("infinite" in normalized)
         assertFalse("excessive" in normalized)
+        // firestore.rules requires whole counts (`v % 1 == 0`); forwarding a
+        // fraction produced an opaque permission-denied instead of a clear
+        // validation failure. Parity with the web `normalizeCounts`.
+        assertFalse("fractional" in normalized)
+        assertFalse("notANumber" in normalized)
         assertFalse("bad key!" in normalized)
         assertFalse("x".repeat(65) in normalized)
     }

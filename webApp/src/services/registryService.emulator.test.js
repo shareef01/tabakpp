@@ -134,6 +134,47 @@ describe('RegistryService against the real SDK and rules', () => {
     expect(await dayDoc('2026-07-30')).toBeUndefined();
   });
 
+  /**
+   * Tracker-limit TOCTOU — documented limitation, graceful degradation.
+   *
+   * `addProtocol` is read-then-create, so two clients adding a tracker at the
+   * same moment can both pass the cap and both write (each uses a NEW auto-id,
+   * so neither overwrites the other). Firestore rules cannot count documents in
+   * a collection, so a client-only architecture cannot make the cap strict.
+   *
+   * What IS enforced: a single tracking day may reference at most 8 trackers
+   * (`firestore.rules` `validSnapshotMap`), and a manual entry stamps a snapshot
+   * for every config, so an over-cap account is refused up-front with a clean
+   * TRACKER_LIMIT instead of a mid-transaction permission-denied. Nothing is
+   * partially written and the aggregates are untouched; deleting a tracker
+   * restores normal use.
+   */
+  it('a 9-tracker account fails closed (TRACKER_LIMIT) with nothing partially written', async () => {
+    await seed();
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      for (let i = 1; i < 9; i++) {
+        await setDoc(doc(adminDb, 'users', UID, 'configs', `extra-${i}`), { ...cigConfig, name: `Extra ${i}`, order: i });
+      }
+    });
+
+    // Manual entry stamps a snapshot per config → 9 > 8 would fail the rules.
+    await expect(RegistryService.createManualEntry(UID, '2026-08-04', { cig: 1 }, 0.5, '2026-08-05'))
+      .rejects.toThrow('TRACKER_LIMIT');
+    expect(await logs()).toHaveLength(0);
+    expect((await profile()).lifetimeAggregates).toEqual(baseProfile.lifetimeAggregates);
+
+    // A day still accepts up to 8 distinct trackers, so the account keeps
+    // working while the user removes one — the cap is per day, not a lockout.
+    const ids = (await getDocs(collection(holder.db, 'users', UID, 'configs'))).docs.map((d) => d.id);
+    expect(ids).toHaveLength(9);
+    for (const id of ids.slice(0, 8)) {
+      await RegistryService.adjustCounter(UID, id, 1, '2026-08-05', 0.5);
+    }
+    await expect(RegistryService.adjustCounter(UID, ids[8], 1, '2026-08-05', 0.5)).rejects.toThrow('TRACKER_LIMIT');
+    expect(Object.keys((await dayDoc('2026-08-05')).trackerSnapshots)).toHaveLength(8);
+  });
+
   it('adjustCounter keeps logging a closed day and moves lifetime by the delta (F-01)', async () => {
     await seed();
     await RegistryService.adjustCounter(UID, 'cig', 4, '2026-07-30', 0.5);

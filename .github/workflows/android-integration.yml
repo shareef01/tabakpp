@@ -73,8 +73,10 @@ jobs:
       # --- Web emulator tests (rules + emulator-backed service tests) ---
       # `npm run test:rules` uses `firebase emulators:exec` (self-contained:
       # starts Firestore, runs vitest.rules.config.js, then shuts down).
-      # vitest.rules.config.js includes *.rules.test.js (35 cases) and
-      # *.emulator.test.js (22 + 2 = 24 cases), for 59 total.
+      # vitest.rules.config.js includes *.rules.test.js (68 cases) and
+      # *.emulator.test.js (46 + 15 + 2 = 63 cases), for 131 total. The script
+      # only asserts that vitest exits 0, so the counts do not need maintenance —
+      # they are recorded here so a shrinking suite is noticeable in review.
       - name: Run Firestore rules and emulator-backed Web tests
         working-directory: webApp
         run: |
@@ -110,6 +112,12 @@ jobs:
       # Clear stale results from prior runs so artifacts reflect only this run's tests.
       - name: Clear stale Android test results
         run: rm -rf androidApp/build/outputs/androidTest-results/
+
+      # The instrumentation result gate is the only thing standing between a failed
+      # runner and a green job, so its own regression suite runs here too (stdlib
+      # unittest, no emulator, no network — a few seconds).
+      - name: Test the instrumentation result gate
+        run: python3 .github/scripts/test-android-test-results-gate.py
 
       # Pre-build the test APKs BEFORE booting the emulator. The Gradle build
       # (Kotlin compile + dex) is CPU-intensive and running it concurrently
@@ -517,11 +525,20 @@ jobs:
           # Run Android instrumentation tests — full androidTest suite.
           # No -Pandroid.testInstrumentationRunnerArguments.class filter: AndroidJUnitRunner
           # discovers all androidTest classes automatically (currently FirebaseRegistryRepositoryTest
-          # + RegistryErrorStructuredCodeTest = 21 tests). This keeps CI in sync with the
-          # complete intended suite and automatically includes future androidTest classes.
+          # 22 tests + RegistryErrorStructuredCodeTest 9 tests = 31 tests). This keeps CI in sync
+          # with the complete intended suite and automatically includes future androidTest classes.
           # timeout_msec=420000: per-test timeout (via AndroidJUnitRunner) catches hanging tests / setup
           # timeout -k 30s 40m: hard kill if tests hang beyond 40 min (within 60m job limit;
-          # 21 androidTest tests take ~16m on software emulator under contention, plus ~7m APK install)
+          # 31 androidTest tests take ~16m on software emulator under contention, plus ~7m APK install)
+
+          # Stale-result protection. The JUnit XML is the authoritative gate below, so a
+          # directory left behind by an earlier run must not be able to satisfy it: clear
+          # the results tree again immediately before the run and drop a freshness marker
+          # (only XML files newer than the marker count as this run's output).
+          RESULTS_DIR="androidApp/build/outputs/androidTest-results/connected"
+          RESULTS_MARKER="$(mktemp)"
+          rm -rf androidApp/build/outputs/androidTest-results
+
           TEST_EXIT=0
           timeout -k 30s 40m ./gradlew :androidApp:connectedDebugAndroidTest \
             --no-daemon \
@@ -534,8 +551,26 @@ jobs:
           # Dump complete test execution logcat from the in-memory ring buffer
           adb logcat -d -v threadtime > test-logcat.log 2>&1 || true
 
-          if [ "$TEST_EXIT" -ne 0 ]; then
-            echo "::error::Instrumentation tests failed (exit code: $TEST_EXIT)"
+          # ---- Result gate -----------------------------------------------------
+          # Gradle's exit code is NOT sufficient: an APK install conflict logs
+          # "AndroidTestRunner failed ... INSTALL_FAILED_UPDATE_INCOMPATIBLE" and the
+          # build still reports BUILD SUCCESSFUL with exit 0 (observed locally). The
+          # JUnit XML is therefore authoritative, and missing, empty, all-skipped,
+          # stale, malformed or failing results all fail the job.
+          #
+          # The checks live in .github/scripts/android-test-results-gate.py (stdlib
+          # xml.etree only) so they are unit-tested in
+          # .github/scripts/test-android-test-results-gate.py, instead of being
+          # re-derived with ad-hoc grep/sed in this shell script.
+          RESULT_GATE_FAILED=""
+          python3 .github/scripts/android-test-results-gate.py \
+            --results-dir "$RESULTS_DIR" \
+            --marker "$RESULTS_MARKER" \
+            --gradle-exit "$TEST_EXIT" \
+            || RESULT_GATE_FAILED="result gate failed (see the INSTRUMENTATION_RESULTS / GATE lines above)"
+
+          if [ "$TEST_EXIT" -ne 0 ] || [ -n "$RESULT_GATE_FAILED" ]; then
+            echo "::error::Instrumentation tests failed (gradle exit: $TEST_EXIT; result gate: ${RESULT_GATE_FAILED:-passed})"
             echo ""
             echo "=== CI failure diagnostics ==="
             echo ""
@@ -587,12 +622,24 @@ jobs:
             echo "=== Full Firebase emulator log ==="
             cat firebase-emulator.log
             echo ""
+            echo "=== JUnit XML files ($RESULTS_DIR) ==="
+            find "$RESULTS_DIR" -type f -name '*.xml' 2>/dev/null || echo "(none)"
+            echo ""
+            echo "=== JUnit XML summary (re-run of the gate parser) ==="
+            python3 .github/scripts/android-test-results-gate.py \
+              --results-dir "$RESULTS_DIR" \
+              --marker "$RESULTS_MARKER" \
+              --gradle-exit "$TEST_EXIT" 2>&1 || true
+            echo ""
             echo "=== Test logcat (last 200 lines) ==="
             tail -200 test-logcat.log 2>/dev/null || echo "No logcat available"
-            exit "$TEST_EXIT"
+            # A non-zero gradle exit is reported as-is; a green gradle exit that
+            # produced no usable/failing results exits 1 so the job still fails.
+            if [ "$TEST_EXIT" -ne 0 ]; then exit "$TEST_EXIT"; fi
+            exit 1
           fi
 
-          echo "Instrumentation tests passed"
+          echo "Instrumentation tests passed (result gate: PASS — totals are in the INSTRUMENTATION_RESULTS line above)"
           exit 0
           SCRIPT
           chmod +x ci-run-tests.sh

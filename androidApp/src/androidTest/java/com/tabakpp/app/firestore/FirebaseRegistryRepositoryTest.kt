@@ -28,7 +28,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.android.gms.tasks.Tasks
 import java.util.concurrent.TimeUnit
 import java.net.HttpURLConnection
@@ -152,17 +151,9 @@ class FirebaseRegistryRepositoryTest {
                     persistenceEnabled = false,
                 )
 
-                // Pre-fetch App Check to cache the DNS failure for
-                // firebaseappcheck.googleapis.com, which is unreachable from the CI
-                // emulator. Uncached, each sign-in eats a multi-second DNS timeout.
-                try {
-                    Tasks.await(
-                        FirebaseAppCheck.getInstance().getToken(true),
-                        15, TimeUnit.SECONDS
-                    )
-                } catch (e: Exception) {
-                    Log.d(TAG, "App Check token pre-fetch failed (expected in CI): ${e.message}")
-                }
+                // App Check is not installed (Spark-only, no attestation), so
+                // there is no token pre-fetch here — sign-in talks to the Auth
+                // emulator directly.
 
                 // ---- The ONE and ONLY signInAnonymously() call in this class ----
                 val signInTask = nativeAuth.signInAnonymously()
@@ -292,8 +283,21 @@ class FirebaseRegistryRepositoryTest {
 
     private fun resetEmulatorDocuments() {
         val projectId = com.google.firebase.FirebaseApp.getInstance().options.projectId
-        check(projectId == "demo-tabakpp-test") { "Fixture reset requires the demo test project" }
-        check(FIRESTORE_HOST == "127.0.0.1") { "Fixture reset requires the loopback emulator" }
+        // Guard rails, not assertions about the code: these fire when the LOCAL
+        // build config does not point at the throwaway emulator project, which is
+        // the usual reason a whole run fails here. Actionable on purpose — the
+        // previous one-liner said what was wrong but not what to do.
+        check(projectId == "demo-tabakpp-test") {
+            "Fixture reset requires the demo test project, but Firebase projectId='${projectId ?: "<null>"}'. " +
+                "Your local androidApp/google-services.json (or src/debug/google-services.json) points at a real " +
+                "project. Instrumentation must never touch it: write the demo config from " +
+                ".github/workflows/android-integration.yml ('Create demo project google-services.json for Android " +
+                "test') into androidApp/src/debug/google-services.json and re-run."
+        }
+        check(FIRESTORE_HOST == "127.0.0.1") {
+            "Fixture reset requires the loopback emulator, but FIRESTORE_HOST='$FIRESTORE_HOST'. " +
+                "Run the Firestore emulator and 'adb reverse tcp:8080 tcp:8080' (plus 9099 Auth and 5001 Functions)."
+        }
         // This class runs sequentially against a dedicated CI emulator. Clearing
         // Firestore keeps the class-scoped Auth session and loaded rules intact.
         val connection = URL(

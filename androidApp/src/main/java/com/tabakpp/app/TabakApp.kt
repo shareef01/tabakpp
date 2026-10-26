@@ -17,12 +17,10 @@ class TabakApp : Application() {
         // be set here to cover the actual initialization path.
         System.setProperty("java.net.preferIPv4Stack", "true")
         super.onCreate()
-        // App Check provider selection is build-variant-aware via source sets:
-        //   debug   → src/debug/.../AppCheckInstaller.kt → DebugAppCheckProviderFactory
-        //   release → src/release/.../AppCheckInstaller.kt → PlayIntegrityAppCheckProviderFactory
-        // Enforcement remains off in Firebase Console; see SETUP_GUIDE.md → "Why App Check is integrated but not enforced".
+        // Spark-only stack: Auth + Firestore, authorized by Firestore Security
+        // Rules. App Check is deliberately NOT installed (no provider, no token,
+        // no enforcement) — see SECURITY.md.
         FirebaseApp.initializeApp(this)
-        AppCheckInstaller.install()
         initKoin {
             androidContext(this@TabakApp)
         }

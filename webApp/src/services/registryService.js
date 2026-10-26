@@ -114,17 +114,70 @@ const CURRENT_SCHEMA_VERSION = 2;
  */
 export const MAX_TRACKERS = 8;
 
+/** Hard per-tracker count bound — mirrors firestore.rules `validCountValue`. */
+const MAX_COUNT_PER_TRACKER = 10_000;
+/** Tracker id shape accepted by firestore.rules `validCountKey`. */
+const COUNT_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+/** firestore.rules `validCountMap` cap. */
+const MAX_COUNT_ENTRIES = 50;
+
+/**
+ * True when `key: value` is writable as a count under firestore.rules
+ * (`validCountValue`/`validCountKey`): a whole number in [0, 10000].
+ *
+ * The integral check is the part that used to be missing on the client. Rules
+ * reject a fractional count (`v % 1 == 0`), so forwarding one surfaced to the
+ * user as the generic "Save blocked by security rules" copy instead of
+ * anything actionable.
+ */
+const isWritableCount = (key, value) => COUNT_KEY_PATTERN.test(key)
+  && Number.isInteger(value)
+  && value >= 0
+  && value <= MAX_COUNT_PER_TRACKER;
+
+/**
+ * Normalizer for counts that came from STORED state (a legacy log, a
+ * deleted-doc undo payload, a migrated profile claim). It FILTERS — anything
+ * the rules could not accept is dropped so an otherwise-legitimate write is
+ * never denied because of an unrelated stale entry.
+ *
+ * Caller-supplied input uses `validateCounts` instead, which REJECTS.
+ */
 const normalizeCounts = (counts) => Object.fromEntries(
   Object.entries(counts || {})
     .map(([key, value]) => [String(key), Number(value)])
-    .filter(([key, value]) =>
-      /^[A-Za-z0-9_-]{1,64}$/.test(key)
-      && Number.isFinite(value)
-      && value >= 0
-      && value <= 10_000
-    )
-    .slice(0, 50)
+    .filter(([key, value]) => isWritableCount(key, value))
+    .slice(0, MAX_COUNT_ENTRIES)
 );
+
+/**
+ * Strict validation for CALLER-SUPPLIED counts, run before any write.
+ *
+ * Every public write path (`createManualEntry`, `updateHistoricalDay`,
+ * `updateHistoricalLog`, `restoreLog`, `adjustCounter`) routes user input
+ * through this. Rejecting is deliberate:
+ *
+ * - a fractional/oversized value used to be forwarded and then denied by the
+ *   rules with an opaque permission error;
+ * - a negative value used to be silently DROPPED, which turned a negative
+ *   manual entry into a zero-count record — a full phantom daily allowance.
+ *
+ * Numeric strings are still accepted (`Number()` first): form inputs have
+ * always handed over strings such as '3', and the value Firestore stores is a
+ * number either way.
+ */
+const validateCounts = (counts) => {
+  const entries = Object.entries(counts || {});
+  if (entries.length > MAX_COUNT_ENTRIES) throw new Error('INVALID_COUNT');
+  const out = {};
+  for (const [rawKey, rawValue] of entries) {
+    const key = String(rawKey);
+    const value = Number(rawValue);
+    if (!isWritableCount(key, value)) throw new Error('INVALID_COUNT');
+    out[key] = value;
+  }
+  return out;
+};
 
 const clampNumber = (value, min, max, fallback) => {
   const n = Number(value);
@@ -271,7 +324,7 @@ const applyLegacyClaim = async (uid, claim, configById) => {
       const previousSnapshots = day?.trackerSnapshots || {};
       if (day?.status !== 'closed'
         && (day?.counts?.[id] || 0) + claim.counts[id] <= 10000
-        && (Object.hasOwn(previousSnapshots, id) || Object.keys(previousSnapshots).length < 8)) {
+        && (Object.hasOwn(previousSnapshots, id) || Object.keys(previousSnapshots).length < MAX_TRACKERS)) {
         const counts = { ...(day?.counts || {}), [id]: (day?.counts?.[id] || 0) + claim.counts[id] };
         const trackerSnapshots = { ...previousSnapshots, [id]: previousSnapshots[id] || SmokingCalculator.buildTrackerSnapshot(
           configById[id] || { name: 'Removed tracker', type: 'SIMPLE', isFinanciallyTracked: false }, claim.price) };
@@ -356,7 +409,7 @@ export const RegistryService = {
   },
 
   addProtocol: async (uid, data) => {
-    if ((await getConfigsOnce(uid)).length >= 8) throw new Error('TRACKER_LIMIT');
+    if ((await getConfigsOnce(uid)).length >= MAX_TRACKERS) throw new Error('TRACKER_LIMIT');
     const ref = doc(collection(db, 'users', uid, 'configs'));
     return setDoc(ref, {
       ...sanitizeConfigPayload(data),
@@ -696,6 +749,9 @@ export const RegistryService = {
     if (!trackingDate || !SmokingCalculator.isValidDate(trackingDate)) {
       throw new Error('INVALID_TRACKING_DATE');
     }
+    // A tap is ±1 by contract; a fractional delta would create a count the
+    // rules reject (`v % 1 == 0`) — fail here, with a legible domain error.
+    if (!Number.isInteger(delta)) throw new Error('INVALID_COUNT');
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
       return trustedExecute(optionB, delta >= 0 ? 'COUNTER_INCREMENT' : 'COUNTER_DECREMENT', {
@@ -722,7 +778,7 @@ export const RegistryService = {
         return applyLateCounterWrite(transaction, uid, dayRef, existing, counterId, delta);
       }
       if (!Object.hasOwn(existing?.trackerSnapshots || {}, counterId)
-        && Object.keys(existing?.trackerSnapshots || {}).length >= 8) throw new Error('TRACKER_LIMIT');
+        && Object.keys(existing?.trackerSnapshots || {}).length >= MAX_TRACKERS) throw new Error('TRACKER_LIMIT');
 
       const counts = { ...(existing?.counts || {}) };
       counts[counterId] = Math.max(0, (counts[counterId] || 0) + delta);
@@ -863,11 +919,12 @@ export const RegistryService = {
    */
   updateHistoricalDay: async (uid, date, counts, operationId = null) => {
     if (!uid || !date) throw new Error('INVALID_REF');
+    // User-supplied counts are validated ONCE, before either write path.
+    const normalized = validateCounts(counts);
     // OPTION_B: the trusted backend recomputes the canonical ledger + lifetime
     // delta from the day's FROZEN snapshots (no client-side money).
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
-      const normalized = normalizeCounts(counts);
       return trustedExecute(optionB, 'HISTORICAL_DAY_UPDATE', {
         operationId: operationId || generateOperationId(`hist_${date}`),
         date, counts: normalized,
@@ -876,7 +933,6 @@ export const RegistryService = {
     if (await financialWritesLocked(uid)) throw new Error('HISTORICAL_DAY_UPDATE_UNSUPPORTED');
     const userRef = doc(db, 'users', uid);
     const dayRef = doc(db, 'users', uid, 'days', date);
-    const normalized = normalizeCounts(counts);
 
     return runTransaction(db, async (transaction) => {
       const daySnap = await transaction.get(dayRef);
@@ -996,7 +1052,7 @@ export const RegistryService = {
     if (!uid || !logId) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', logId);
-    const normalized = normalizeCounts(counts);
+    const normalized = validateCounts(counts);
 
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
@@ -1091,7 +1147,10 @@ export const RegistryService = {
     if (!uid || !log?.id) throw new Error("INVALID_REF");
     const userRef = doc(db, 'users', uid);
     const logRef = doc(db, 'users', uid, 'logs', log.id);
-    const normalizedCounts = normalizeCounts(log.counts || {});
+    // Undo payload: stored state, but it is about to be written back through
+    // rules that require whole counts — reject rather than write a doc the
+    // rules would deny (which would leave the undo silently impossible).
+    const normalizedCounts = validateCounts(log.counts || {});
 
     const optionB = await optionBLedgerActive(uid);
     if (optionB) {
@@ -1151,7 +1210,7 @@ export const RegistryService = {
     }
 
     const userRef = doc(db, 'users', uid);
-    const normalized = normalizeCounts(counts);
+    const normalized = validateCounts(counts);
     const now = Date.now();
     const entropy = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID().replace(/-/g, '').slice(0, 8)
@@ -1168,7 +1227,7 @@ export const RegistryService = {
 
     const logRef = doc(db, 'users', uid, 'logs', logId);
     const configIds = await listConfigIds(uid);
-    if (configIds.length > 8) throw new Error('TRACKER_LIMIT');
+    if (configIds.length > MAX_TRACKERS) throw new Error('TRACKER_LIMIT');
     if (Object.entries(normalized).some(([id, value]) => value > 0 && !configIds.includes(id))) {
       throw new Error('INVALID_TRACKER');
     }

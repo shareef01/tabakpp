@@ -11,9 +11,10 @@
 
 ## WRAP-UP (final state)
 Release-hardening is **wrapped up**. The full automated regression matrix is green and fresh
-(Web 445/62/108 + build · Functions 26 + emulator integration · Kotlin shared/compose ·
-lint/assemble · Android device **27/27** on both AVD and physical Pixel 7). The two
-OPTION_B gaps (`updateHistoricalDay`, `deleteProtocol`) first shipped fail-closed and
+(Web 479 unit / 66 contract / 131 rules+emulator + build + 27 PWA · Functions 26 + emulator
+integration · Kotlin shared/compose · lint/assemble · Android device **31/31 on the reconciled branch** (28/28 pre-rewrite) — last
+re-verified 2026-10-26 on a physical Mi 9T Pro; earlier 27/27 runs on AVD and Pixel 7).
+The two OPTION_B gaps (`updateHistoricalDay`, `deleteProtocol`) first shipped fail-closed and
 are now served by the callable (`HISTORICAL_DAY_UPDATE` / `TRACKER_DELETE` — see
 "W1B-2 / W1B-3 DONE" below). `artifacts_*/` is gitignored.
 
@@ -68,8 +69,8 @@ backend change (the backend `SUPPORTED` set gained two op types but existing ops
 unchanged; `testL` counter-increment still applies), then decide on committing.
 - Fresh-green this session: vitest 451 · contract 62 · rules 108 · build ✓ · functions 26 ·
   emulator integration PASS (incl. historical-day-update + tracker-delete).
-- Not re-run this session (unchanged by this change): Android device (last 27/27),
-  shared/compose unit, lint/assemble.
+- Not re-run this session (unchanged by this change): Android device (last **31/31** on the reconciled branch, 28/28 pre-rewrite, on
+  2026-10-26; 27/27 before that), shared/compose unit, lint/assemble.
 
 ## Phase 4 baseline DONE (this session)
 Web production bundle measured (lazy code-splitting OK; `heic2any` 1.35 MB lazy chunk is the
@@ -81,7 +82,9 @@ biggest). Secrets scan: none. Dependency audit: **Web production 0 vulns**; Web 
 `testM_canonicalLedgerLiveRefresh_afterTrustedIncrement` (device): the real
 `subscribeToLedgers` SDK subscription returns no ledger for a fresh date, and after a
 trusted `COUNTER_INCREMENT` it emits the server-written canonical ledger (counts 1,
-saved €9, wasted €1). `:androidApp:connectedDebugAndroidTest` → **27/27, 0 failed**.
+saved €9, wasted €1). `:androidApp:connectedDebugAndroidTest` → **31/31, 0 failed** on the reconciled branch (28/28 pre-rewrite)
+(19 `FirebaseRegistryRepositoryTest` + 9 `RegistryErrorStructuredCodeTest`, all
+part of the instrumentation run; last re-verified 2026-10-26).
 The ViewModel `canonical`/`ledgers` projection is covered by `RegistryViewModelTest` (unit);
 wiring the real ViewModel on-device is the remaining (minor) W2-1 gap.
 

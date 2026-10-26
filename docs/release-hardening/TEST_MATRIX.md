@@ -16,7 +16,9 @@ Fresh results are recorded only when executed in-session. Historical counts are 
 | Compose | `:composeApp:testDebugUnitTest` | prior session | 50 passed |
 | Android lint/build | `:androidApp:lintDebug :androidApp:assembleDebug` | prior session | SUCCESSFUL |
 | Android trusted Callable lifecycle | `FirebaseRegistryRepositoryTest#testL…` | prior session | **PASS** |
-| Android device instrumentation | `:androidApp:connectedDebugAndroidTest` | **this session** | **27 executed / 0 failed / 0 skipped** (incl. new `testM`) |
+| Android device instrumentation — **reconciled branch (current main)** | `:androidApp:connectedDebugAndroidTest` | **2026-10-26 (v2)** | **31 executed / 0 failed / 0 errors / 0 skipped** on a dedicated AVD (`aus_api36`) with demo-project emulators: 22 `FirebaseRegistryRepositoryTest` (incl. main's `testD2`/`testD3`/`testD4`, `testH`, `testK`, three `testB` contention variants) + 9 `RegistryErrorStructuredCodeTest`. Needs the demo-project `google-services.json` + firestore/auth/functions emulators, otherwise the fixture-reset guard fails every Firebase test (`docs/audit-2026-10-26.md` F3/§9) |
+| Android device instrumentation — original base (historical) | `:androidApp:connectedDebugAndroidTest` | 2026-10-26 (v1) | 28 executed / 0 failed / 0 errors / 0 skipped on a physical Mi 9T Pro (19 + 9); superseded by the v2 row |
+| CI instrumentation result gate (fail-closed parser + fixtures) | `python3 .github/scripts/test-android-test-results-gate.py` | **2026-10-26 (this session)** | **26 tests passed / 0 failed** — covers green 28-test XML, missing/empty/stale results, truncated + malformed XML, wrong root, missing/negative/non-numeric attributes, inconsistent totals, failures, errors, all-skipped, failure-element-with-zero-attr, non-zero gradle exit, multi-file aggregation, and the workflow wiring |
 | Repository ledger live refresh (OPTION_B, trusted mutation) | `testM_canonicalLedgerLiveRefresh_afterTrustedIncrement` | **this session** | **PASS** |
 | Web production build | `npm run build` | prior session | ✓ built |
 | Hygiene | `git diff --check` | this session | clean |

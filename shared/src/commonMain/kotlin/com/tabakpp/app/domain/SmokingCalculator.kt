@@ -1060,8 +1060,26 @@ object SmokingCalculator {
         return if (h == "#FFFFFF" || h == "#FFF") "#E4E4E7" else hex
     }
 
+    /**
+     * Domain-layer count normalizer — the SAME contract as the web
+     * `normalizeCounts` and `InputSanitizer.counts`: keep only what
+     * firestore.rules can store (`^[A-Za-z0-9_-]{1,64}$` keys, finite whole
+     * numbers in [0, 10000], at most 50 entries).
+     *
+     * This used to clamp negatives to 0 and pass everything else through, so a
+     * NaN / infinity / fractional / 10001 value survived and the resulting
+     * write was denied by the rules with an opaque permission error. Nothing
+     * legitimate is lost by filtering — counts are integer taps.
+     */
     fun normalizeCounts(counts: Map<String, Double>): Map<String, Double> {
-        return counts.mapValues { max(0.0, it.value) }
+        val keyPattern = Regex("^[A-Za-z0-9_-]{1,64}$")
+        return counts.entries
+            .asSequence()
+            .filter { (key, value) ->
+                keyPattern.matches(key) && value.isFinite() && value in 0.0..10_000.0 && value % 1.0 == 0.0
+            }
+            .take(50)
+            .associate { it.toPair() }
     }
 
     /**

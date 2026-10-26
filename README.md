@@ -97,7 +97,7 @@ Two clients, one backend. Shared domain logic on Android lives in a Kotlin Multi
 |---|---|
 | **Android** | Kotlin 2.4 · Jetpack Compose (Compose Multiplatform UI) · GitLive Firebase |
 | **Web** | React 19 · Vite 8 · Tailwind CSS 4 · Firebase JS SDK · installable PWA |
-| **Backend** | Firebase Spark plan: Auth (email + Google) · Cloud Firestore · Hosting · App Check (advisory). Cloud Functions (Option B) written and tested, not deployed |
+| **Backend** | Firebase Spark plan: Auth (email + Google) · Cloud Firestore · Hosting. Cloud Functions (Option B) written and tested, not deployed. App Check not used |
 | **Shared (KMP)** | Models, serializers, repositories, day-rollover / streak / spend math |
 | **Build** | Gradle 9.8 · AGP 9.4 · Java 17 bytecode · minSdk 26 · targetSdk 36 · compileSdk 37 |
 | **Toolchain** | Node 24.21.0 ([`.nvmrc`](.nvmrc)) · npm 10.9.8 (`packageManager`) |
@@ -123,16 +123,13 @@ flowchart TB
     Auth["Auth<br/>email · Google"]
     FS["Firestore<br/>users/{uid}"]
     CF["Cloud Functions (Option B)<br/>not deployed · Blaze only"]
-    AC["App Check"]
   end
 
   Android --> kmp
   Web -->|"Firebase JS SDK"| Auth
   Web --> FS
-  Web --> AC
   Repos --> Auth
   Repos --> FS
-  Android --> AC
   Web -. "callable (Option B accounts)" .-> CF
   Repos -. "callable (Option B accounts)" .-> CF
   CF -. "Admin SDK" .-> FS
@@ -219,8 +216,6 @@ flowchart LR
   Rules --> Frozen["Closed days: trackerSnapshots frozen;<br/>status one-way open→closed"]
   Rules --> Writability["Closed days: counts/aggregateCredit<br/>writable by owner (rules-validated);<br/>updateHistoricalDay reconciles lifetimeAggs"]
   Rules --> Deny["Default deny<br/>/{document=**}"]
-
-  AC["App Check<br/>integrated · not enforced"] -. advisory .-> Auth
 ```
 
 In short:
@@ -248,11 +243,9 @@ Engineering controls behind those claims:
 - **Emulator-backed rule testing** — Firestore rules are tested against a real
   Firestore emulator in CI, not mocked.
 
-**On App Check:** integrated on both clients (reCAPTCHA Enterprise on web, Play Integrity in Android release builds / debug provider in Android debug builds) with enforcement **deliberately off**, so it is advisory rather than part of the security boundary.
+**On App Check (not used):** this project runs without Firebase App Check — no attestation provider, no token, and no enforcement on either client. That is a deliberate scope decision, not an oversight: the app is a single-user self-tracking tool on the Spark plan, and the authorization boundary is carried by **Firestore Security Rules** plus defense-in-depth **API key restrictions** (package + signing certificate on Android, HTTP referrer on web).
 
-That is a considered trade, not an oversight. Enforcement is per Firebase product and hits every client at once. Android release APKs now request Play Integrity tokens, but until the Play Integrity / Firebase App Check production configuration and metrics are verified, release requests cannot be assumed to be verified App Check traffic. Enforcement must remain off because it could reject legitimate release clients. Android debug builds still use the debug provider, which mints a random secret per install that has to be registered by hand. Since a working download matters more here than attestation, enforcement stays off and the authorization boundary is carried by **Firestore Security Rules** plus defense-in-depth **API key restrictions** (package + signing certificate on Android, HTTP referrer on web).
-
-Enforcing becomes the right call once Android can attest for real — that means Play Integrity, which needs a Play Console project link. See the upgrade path in [SETUP_GUIDE.md](SETUP_GUIDE.md).
+The trade is explicit: without attestation, a modified client can still talk to Firestore as its own signed-in user (never as another user), and abuse resistance rests on API-key restrictions rather than on attestation. App Check can be added later as a separate, opt-in change — it would require registering the web reCAPTCHA Enterprise and Android Play Integrity providers, registering the production signing SHA-256, and observing verified-traffic metrics *before* enforcement; see [SETUP_GUIDE.md](SETUP_GUIDE.md) → "Adding App Check later (not currently used)". Until then there is nothing to enforce and nothing to misconfigure.
 
 ## Platforms
 
@@ -264,7 +257,7 @@ Enforcing becomes the right call once Android can attest for real — that means
 
 ## Getting started
 
-Full Firebase, signing, and App Check notes: **[SETUP_GUIDE.md](SETUP_GUIDE.md)**
+Full Firebase, signing, and security-boundary notes: **[SETUP_GUIDE.md](SETUP_GUIDE.md)**
 
 ### Prerequisites
 
@@ -311,7 +304,7 @@ adding `google-services.json`, or install a signed APK from
 | PWA offline + freshness | `npm run test:pwa` (after `npm run build`) | Offline navigation and deploy freshness of the production build |
 | Accessibility | `npm run test:a11y` | axe-core over 4 viewports × 4 views, per-accent contrast, and 200% zoom reflow — exits non-zero on any violation |
 | Kotlin unit | `./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest` | KMP domain math, repositories, view models, Compose UI (includes the Kotlin side of the contract fixtures) |
-| Android app unit | `./gradlew :androidApp:testDebugUnitTest` | App Check provider selection guard (no debug provider in release builds) |
+| Android app unit | `./gradlew :androidApp:testDebugUnitTest` | No local unit tests today: the only one was the App Check provider-selection guard, removed together with App Check (the Gradle task is a no-op in CI). App-level behaviour is covered by the `:shared`/`:composeApp` unit suites and the Android instrumentation suite |
 | Cloud Functions | `cd functions && npm test` | Option B financial math and input validation |
 | Functions integration | see the `functions` job in [`ci.yml`](.github/workflows/ci.yml) | Option B callables end-to-end against the Auth/Firestore/Functions emulators |
 | Android instrumentation | `./gradlew :androidApp:connectedDebugAndroidTest` | Android/KMP behavior against a real emulator |
