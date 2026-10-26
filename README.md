@@ -5,6 +5,8 @@
   <strong>how many, how much left, how much spent, and whether you're still on streak.</strong>
 </p>
 
+<p align="center"><em>A personal cross-platform software engineering portfolio project built with React, Kotlin, and Firebase.</em></p>
+
 <p align="center">
   <a href="https://tabakpp.web.app"><strong>Open the web app</strong></a>
   ·
@@ -29,7 +31,7 @@
 
 ---
 
-**Contents:** [Features](#features) · [Screenshots](#screenshots) · [Design principles](#design-principles) · [Stack](#stack) · [Data model](#data-model) · [Security & privacy](#security--privacy) · [Getting started](#getting-started) · [Testing](#testing) · [Known limitations](#known-limitations)
+**Contents:** [Features](#features) · [Screenshots](#screenshots) · [Design principles](#design-principles) · [Engineering decisions](#engineering-decisions) · [Stack](#stack) · [Data model](#data-model) · [Security & privacy](#security--privacy) · [Getting started](#getting-started) · [Testing](#testing) · [Known limitations](#known-limitations)
 
 ## Features
 
@@ -88,6 +90,19 @@ Most quit apps bury you in tips. **tabak++** stays on today's numbers.
   server across the four canonical ledger metrics (`saved`, `wasted`,
   `baselineSaved`, `smokingUnits`), with strict count ownership to prevent double
   counting. The code is kept and tested in CI against the emulators.
+
+## Engineering decisions
+
+Why the stack and the boundaries look the way they do — the short version for reviewers. The trade-offs deliberately not taken are documented in [`docs/`](docs/), with [Design principles](#design-principles) above covering the domain rules.
+
+- **React + Vite for the web PWA.** This is a signed-in client over Firestore, not a content site: no SSR and no server runtime, just static files on Firebase Hosting. Vite keeps that loop fast (≈1 s builds) and the app installs as a PWA with an offline shell.
+- **Kotlin + Jetpack Compose for Android.** Native lifecycle, back-gesture handling, typed models and file import are worth more on a phone than sharing UI code with the web client, so Android is idiomatic Kotlin rather than a web wrapper.
+- **Kotlin Multiplatform for the domain.** Counts, day rollover, streaks and spend math are written and unit-tested once in [`shared/`](shared/), and the Compose UI consumes them directly.
+- **Contract tests are what stop calculation drift.** The web port of that math is hand-mirrored rather than code-shared, so `npm run test:contract` runs one set of semantic fixtures ([`shared-tests/`](shared-tests/)) against both implementations: 76 assertions that fail if the JS and Kotlin results ever disagree.
+- **Firebase Spark was chosen, not inherited.** Auth + Firestore + Hosting cover the whole product on the free tier — no server to run, nothing to bill, no operational surface to maintain.
+- **App Check is intentionally absent.** Both clients talk to Firebase directly and Firestore Rules are the authorization boundary, so the app ships without attestation. That is a scope decision with a real cost, stated plainly: **API-key restrictions (HTTP referrer on web, package + signing certificate on Android) make casual reuse of the public key harder, but they are not App Check and they are not a substitute for authorization.** See [SECURITY.md](SECURITY.md).
+- **CI verifies all three surfaces, not just the web.** `web-and-rules` (lint, unit, contract, rules against the emulator, build, PWA, accessibility, production dependency audit), `mobile` (Kotlin unit, Compose UI, Android lint, four build variants), `functions` (callable unit and emulator integration), `test` (an Android emulator running the instrumentation suite behind a fail-closed JUnit-XML gate), and `validate-action-pins`. **Required on `main`: `mobile` and `web-and-rules`. `functions`, `test` and `validate-action-pins` run on every pull request but are advisory.**
+- **Cloud Functions are kept as a reference, not deployed.** The trusted-totals design needs Blaze, so production stays client-computed; the code path is implemented and exercised in CI so the upgrade stays a deployment decision rather than a rewrite. See [Known limitations](#known-limitations).
 
 ## Stack
 
