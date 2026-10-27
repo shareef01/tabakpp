@@ -31,7 +31,7 @@
 
 ---
 
-**Contents:** [Features](#features) · [Screenshots](#screenshots) · [Design principles](#design-principles) · [Engineering decisions](#engineering-decisions) · [Stack](#stack) · [Data model](#data-model) · [Security & privacy](#security--privacy) · [Getting started](#getting-started) · [Testing](#testing) · [Known limitations](#known-limitations)
+**Contents:** [Features](#features) · [Screenshots](#screenshots) · [Design principles](#design-principles) · [Engineering decisions](#engineering-decisions) · [Stack](#stack) · [Data model](#data-model) · [Security & privacy](#security--privacy) · [Getting started](#getting-started) · [Testing](#testing) · [Project status](#project-status) · [Known limitations](#known-limitations)
 
 ## Features
 
@@ -337,6 +337,16 @@ needed (`cd webApp && npm run test:rules`; requires the Firebase CLI).
 Android instrumentation runs in CI for every pull request and every push to
 `main`, and preserves emulator logs, logcat, and per-run test metadata as a
 downloadable artifact for each attempt — including failed ones.
+
+## Project status
+
+Maintained as a personal-use application. Releases are cut from `main` by a manual
+workflow that runs the full validation suite and is gated on a required reviewer.
+
+- **Current release:** [v1.0.9](https://github.com/shareef01/tabakpp/releases/latest) — Android APK with checksum, plus the web PWA at [tabakpp.web.app](https://tabakpp.web.app)
+- **Deployed:** Firebase Authentication, Cloud Firestore (rules-enforced), Firebase Hosting — Spark plan, no billing
+- **Not deployed:** the Option B Cloud Functions (Blaze-only) and App Check (see [SECURITY.md](SECURITY.md))
+- **Engineering record:** [`docs/REPOSITORY_AUDIT.md`](docs/REPOSITORY_AUDIT.md) holds the current repository audit; [`docs/PORTFOLIO_CASE_STUDY.md`](docs/PORTFOLIO_CASE_STUDY.md) explains the architecture and trade-offs as an interview-style case study
 
 ## Known limitations
 
