@@ -157,7 +157,12 @@ rolled out for the clients **before** any enforcement toggle is touched:
    App Check, then initialize the provider in `webApp/src/firebase.js` with
    `initializeAppCheck(app, { provider: new ReCaptchaEnterpriseProvider(siteKey),
    isTokenAutoRefreshEnabled: true })` and expose the site key as a
-   `VITE_FIREBASE_APPCHECK_SITE_KEY` environment variable.
+   `VITE_FIREBASE_APPCHECK_SITE_KEY` environment variable. The hosting CSP in
+   `firebase.json` / `firebase.staging.json` no longer allows
+   `https://www.google.com` — add it back to `script-src`, `frame-src`, and
+   `connect-src` first, or the reCAPTCHA script is blocked. The same applies
+   if reCAPTCHA protection is ever turned on for email/password sign-in in
+   Firebase Authentication.
 2. **Android:** add `firebase-appcheck-playintegrity` for release builds and
    `firebase-appcheck-debug` for debug builds as **variant-scoped** Gradle
    dependencies, and install the matching provider factory in `TabakApp`
