@@ -1,19 +1,12 @@
 rules_version = '2';
 // Deploy: firebase deploy --only firestore:rules
 //
-// App Check is integrated on both clients but enforcement is DELIBERATELY OFF —
-// do not turn it on in the Console as a "hardening" pass. Android release APKs
-// use PlayIntegrityAppCheckProviderFactory; Play Integrity supports apps
-// distributed inside or outside Google Play, so sideloading is not a blocker.
-// Enforcement is withheld until external prerequisites are verified: Play
-// Integrity/App Check registration, production signing SHA-256, App Check
-// metrics, and client compatibility (v1.0.6 uses the Debug provider and is not
-// suitable for production enforcement; ordinary installations would not have
-// their per-installation debug token registered). Firestore Security Rules
-// remain the authorization/data-validation boundary. App Check adds app
-// attestation and abuse resistance; Firebase API-key restrictions limit API
-// usage but do not authorize Firestore access. See README → Security and
-// SETUP_GUIDE.md for the upgrade path.
+// App Check is NOT used: neither client installs a provider or sends a token,
+// so do not turn on enforcement in the Console as a "hardening" pass — it
+// would reject every request from the released clients. These Security Rules
+// are the authorization/data-validation boundary. Firebase API-key
+// restrictions limit API usage but do not authorize Firestore access. See
+// SECURITY.md and SETUP_GUIDE.md → "Adding App Check later" for the opt-in path.
 //
 // SCHEMA (v2 — dated daily-document model):
 //   users/{uid}                    profile + settings + lifetimeAggregates rollup.
@@ -289,8 +282,9 @@ service cloud.firestore {
 
     /**
      * 'LEGACY' | 'MIGRATING' | 'OPTION_B' — authoritative server-side state.
-     * Reads the pre-commit user document. `database`/`userId` are passed in
-     * because rules functions cannot see the enclosing match's wildcards.
+     * Reads the pre-commit user document. `database` is in scope here (see
+     * accountWritable); `userId` is passed in because this function is
+     * declared above the `users/{userId}` match that binds it.
      */
     function financialModeOf(database, userId) {
       return get(/databases/$(database)/documents/users/$(userId)).data.get('financialMode', 'LEGACY');
@@ -475,7 +469,8 @@ service cloud.firestore {
     // Spark-safe defense (no Cloud Functions): settings writes cannot touch
     // counters/aggregates, and mutation writes cannot touch identity/economics.
     // Owners can still forge aggregates in a dedicated mutation write on Spark;
-    // App Check + API key restrictions are the remaining mitigations.
+    // this is an accepted residual (own data only), not something a client
+    // control can close — App Check is not used.
     // 'createdAt' is deliberately absent: it is set once at profile creation and
     // a settings save has no business rewriting account age.
     function isSettingsOnlyUpdate() {
