@@ -116,7 +116,7 @@ CI workflows: `ci.yml` (jobs `validate-action-pins`, `mobile`, `web-and-rules`, 
 | Firebase web API key | public by design; protection is the HTTP-referrer restriction plus rules — **not** a secret, and **not** an authorization boundary | Verified |
 | App Check | **not present**: no provider, no token, no enforcement; Console shows Firestore *Monitoring*, Auth *Monitoring*, Storage *Unenforced* | Verified |
 | `@grpc/grpc-js` override | **still required** — `@firebase/firestore@4.18.0` declares `~1.9.0`, which resolves to 1.9.0 inside a published vulnerable range; the `1.14.5` override is what keeps `npm audit --omit=dev` at 0 | Verified |
-| Dev-dependency advisories | 9 (1 low, 6 moderate, 2 high: `body-parser`, `undici`, both via `firebase-tools`); no production or bundle impact | Verified, accepted |
+| Dev-dependency advisories | 9 (1 low, 6 moderate, 2 high: `body-parser`, `undici`, both via `firebase-tools`); no production or bundle impact. **14 as of 2026-10-28** — see §8 | Verified, accepted |
 | Functions advisory | `body-parser` pinned at `2.4.0` (GHSA-27r3-jxmh-p828) | Verified |
 | Android signing | keystore supplied only through the protected `release` environment; decoded, used, then removed in the same job | Verified |
 | Trust model | totals are client-computed on Spark; an owner can rewrite their own aggregates. Documented, not fixable in rules | Verified |
@@ -153,3 +153,21 @@ CI workflows: `ci.yml` (jobs `validate-action-pins`, `mobile`, `web-and-rules`, 
 **Not proposed:** App Check re-introduction, Blaze/Functions deployment, rules changes,
 schema changes, UI redesign, or new dependencies. None are needed for this project's
 purpose, and several would break the currently released clients.
+
+---
+
+## 8. Re-audit — 2026-10-28 (`main` = `eb3efd4`)
+
+Re-run locally: web lint (0 errors, 17 warnings), web unit tests 584/584, production
+build, `npm audit --omit=dev` 0 (web and functions), functions unit tests 62/62; CI on
+`main` green on all five checks. Rules emulator and Gradle suites were not run locally
+(they run in CI). Items §2 and §7.4 are done: `main` is the only remote branch.
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| `firestore.rules` header still described App Check as integrated on both clients (contradicts code and every other doc); two further comments were inaccurate | Medium (accuracy) | fixed — comments only, no rule logic changed |
+| Hosting CSP still allowed `https://www.google.com` (script/frame/connect) and `https://*.google.com` (frame) — reCAPTCHA leftovers. Live `recaptchaConfig` reports enforcement unspecified for email/password and phone | Low (hardening) | fixed in both hosting configs; `SETUP_GUIDE.md` notes the re-add for App Check. `www.gstatic.com` kept |
+| Dev-dependency advisories now 14 (5 low, 7 moderate, 2 high); the new ones arrive via `vite-plugin-pwa` → `workbox-build` (`serialize-javascript`, `deepmerge`) | Low | accepted — dev tooling only |
+| 15 of 17 lint warnings are `react-hooks/exhaustive-deps` on hooks keyed by `user?.uid` that only read `user.uid` (false positives); `HistoryScreen.jsx:313` (`olderLogs`) is refreshed in practice via `olderCursor` | Low | left as is |
+| `compose-ui-test-manifest` hard-pinned to `1.7.5` while Compose Multiplatform is `1.12.2` | Low | open — needs a Gradle run to verify |
+| A release build without a keystore silently produces an unsigned APK | Low | accepted — `release-android.yml` excludes `*unsigned*` |
