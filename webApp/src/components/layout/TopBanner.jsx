@@ -20,7 +20,7 @@ const initialsFrom = (name, email) => {
 };
 
 const AvatarFace = ({ user, size = 'md', className }) => {
-  const dims = size === 'lg' ? 'w-10 h-10 text-[11px]' : 'w-8 h-8 text-[10px]';
+  const dims = size === 'lg' ? 'w-10 h-10 text-[11px]' : 'w-8 h-8 text-[11px]';
   const initials = initialsFrom(user?.displayName, user?.email);
   return (
     <div
@@ -76,7 +76,9 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
 
   return (
     <header className="w-full bg-bg-panel border-b border-white/[0.05] shadow-2xl">
-      <div className="w-full h-16 md:h-20 flex items-center justify-between px-6 md:px-12 lg:px-16 mx-auto">
+      {/* Same column as the page content (App.jsx: max-w-5xl + gutters), so
+          the logo and avatar line up with the cards on wide screens. */}
+      <div className="max-w-5xl w-full h-16 md:h-20 flex items-center justify-between px-4 md:px-6 lg:px-8 mx-auto">
 
         {/* LOGO IDENTITY */}
         <Logo size="sm" className="scale-90 md:scale-100 origin-left" />
@@ -175,7 +177,7 @@ export const TopBanner = ({ user, onNavigate, widgetSize, onUpdateSettings, onRe
                         {user?.displayName || shortName || 'Account'}
                       </span>
                       {user?.email && (
-                        <span className="mt-1.5 text-[10px] font-medium text-neutral-400 truncate">
+                        <span className="mt-1.5 text-[11px] font-medium text-neutral-400 truncate">
                           {user.email}
                         </span>
                       )}
