@@ -16,8 +16,8 @@ export const niceAxis = (max, maxIntervals = 5) => {
   const intervals = Math.ceil(top / step);
   const ticks = Array.from({ length: intervals + 1 }, (_, i) => i * step);
   const last = ticks[ticks.length - 1];
-  // Recharts YAxis width: ~6px per 9px-font digit plus tick spacing, so the
+  // Recharts YAxis width: ~7px per 10px-font digit plus tick spacing, so the
   // widest label is never clipped by the chart's left edge.
-  const width = Math.max(32, 8 + 6 * String(last).length);
+  const width = Math.max(32, 8 + 7 * String(last).length);
   return { domain: [0, last], ticks, width };
 };

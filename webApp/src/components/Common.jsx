@@ -92,9 +92,14 @@ export const Card = React.memo(({ children, className, danger, noPadding }) => (
 
 export const Button = React.memo(({ children, onClick, className, variant = 'primary', disabled, size = 'md', style, type = "button" }) => {
   const variants = {
-    primary: "bg-accent/10 text-accent border border-accent/30 shadow-lg shadow-accent/5 hover:bg-accent/15",
+    // Solid accent, matching the inline "+ Add" buttons; every accent swatch
+    // is light enough for black text.
+    primary: "bg-accent text-black border border-transparent shadow-lg shadow-accent/10 hover:brightness-110",
     secondary: "bg-white/[0.04] text-white border border-white/[0.08] hover:bg-white/[0.06]",
+    // Solid red is reserved for the final confirm step of a destructive action.
     danger: "bg-red-600 text-white shadow-lg shadow-red-600/20",
+    // Entry point to a destructive flow: visible, but quieter than primary.
+    dangerOutline: "bg-transparent text-red-400 border border-red-500/40 hover:bg-red-500/10",
     ghost: "bg-transparent text-neutral-400 hover:text-white hover:bg-white/5",
     outline: "bg-transparent border-2 border-accent/20 text-inherit hover:border-accent/40 hover:bg-accent/5"
   };

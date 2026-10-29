@@ -16,9 +16,10 @@ describe('niceAxis', () => {
     expect(niceAxis(undefined).ticks).toEqual([0, 1, 2, 3, 4]);
   });
 
-  it('widens the axis for labels with five or more digits', () => {
+  it('widens the axis for labels with four or more digits', () => {
     expect(niceAxis(292).width).toBe(32);
-    expect(niceAxis(12000).width).toBe(38);
+    expect(niceAxis(1234).width).toBe(36);
+    expect(niceAxis(12000).width).toBe(43);
   });
 
   it('never steps by a fraction', () => {
