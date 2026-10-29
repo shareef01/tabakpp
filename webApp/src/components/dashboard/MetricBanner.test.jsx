@@ -22,7 +22,7 @@ describe('MetricBanner tracking streak', () => {
   it('renders both goal streak and tracking streak', () => {
     render(<MetricBanner m={makeMetrics({ streak: 8, trackingStreak: 12 })} onEndDay={vi.fn()} />);
     expect(screen.getByText('Goal Streak')).toBeTruthy();
-    expect(screen.getByText('Tracking')).toBeTruthy();
+    expect(screen.getByText('Log Streak')).toBeTruthy();
     expect(screen.getByTitle(/Consecutive days within target/)).toBeTruthy();
     expect(screen.getByTitle(/Consecutive days you recorded activity/)).toBeTruthy();
   });
@@ -176,6 +176,6 @@ describe('MetricBanner — mobile layout hierarchy and responsive ordering', () 
 
     // Secondary tracking metrics
     expect(screen.getByText('Goal Streak')).toBeInTheDocument();
-    expect(screen.getByText('Tracking')).toBeInTheDocument();
+    expect(screen.getByText('Log Streak')).toBeInTheDocument();
   });
 });

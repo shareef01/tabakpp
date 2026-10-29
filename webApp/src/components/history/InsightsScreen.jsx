@@ -6,6 +6,7 @@ import {
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
+import { niceAxis } from '../../utils/chartAxis';
 
 const RECENT_PERIOD_DAYS = 7;
 
@@ -46,7 +47,9 @@ const TrendBadge = ({ trend }) => {
     <span
       className={cn(
         'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider',
-        isGood ? 'text-accent bg-accent/10 ring-accent/20' : 'text-rose-400/90 bg-rose-500/10 ring-rose-500/20'
+        // Fixed semantic colours, not the accent: a red accent would make a
+        // reduction look like a warning.
+        isGood ? 'text-emerald-400 bg-emerald-500/10 ring-emerald-500/20' : 'text-rose-400/90 bg-rose-500/10 ring-rose-500/20'
       )}
       aria-label={trend.direction === 'down' || trend.direction === 'to_zero'
         ? `Consumption decreased: ${trend.text}`
@@ -105,6 +108,10 @@ export const InsightsScreen = React.memo(({
       isCurrentMonth: month.isCurrentMonth,
     }));
   }, [insightData.completedMonths]);
+  const monthlyAxis = useMemo(
+    () => niceAxis(Math.max(0, ...monthlyChartData.map((d) => d.units || 0))),
+    [monthlyChartData]
+  );
 
   const hasAnyHistory = (logs || []).length > 0 || (dayDocs || []).length > 0;
 
@@ -250,7 +257,7 @@ export const InsightsScreen = React.memo(({
                   Monthly consumption chart: {monthlyChartData.map((d) => `${d.monthLabel}: ${d.units} units`).join('; ')}
                 </p>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={monthlyChartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                  <BarChart data={monthlyChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="insightBar" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.6} />
@@ -268,10 +275,9 @@ export const InsightsScreen = React.memo(({
                     <YAxis
                       axisLine={false}
                       tickLine={false}
-                      width={36}
                       tick={{ fill: '#A1A1AA', fontSize: 9, fontWeight: 600 }}
                       allowDecimals={false}
-                      domain={[0, (max) => Math.max(4, Math.ceil((max || 0) * 1.15))]}
+                      {...monthlyAxis}
                     />
                     <Tooltip
                       cursor={{ stroke: 'rgba(255,255,255,0.12)', strokeWidth: 1, strokeDasharray: '4 4' }}

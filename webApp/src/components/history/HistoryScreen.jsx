@@ -8,6 +8,7 @@ import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
 import { formatDateDisplay } from '../../utils/formatters';
+import { niceAxis } from '../../utils/chartAxis';
 import { InsightsScreen } from './InsightsScreen';
 import { mapFirestoreError } from '../../utils/errorHandlers';
 import { UndoToast, UNDO_TOAST_MS } from '../feedback/UndoToast';
@@ -77,7 +78,8 @@ export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = [
     });
   }
   series.push({
-    name: 'NOW',
+    // Not 'NOW': in small bold caps it reads as the month "NOV".
+    name: 'TODAY',
     date: today,
     dateLabel: 'Today',
     // projectLoggedCounts already projected the live session over today's
@@ -317,6 +319,10 @@ export const HistoryScreen = React.memo(({
     () => buildVelocitySeries(completeLogs, today, velocityPeriod.days, m.activeCounts, completeDays),
     [completeLogs, m.activeCounts, today, velocityPeriod.days, completeDays]
   );
+  const velocityAxis = useMemo(
+    () => niceAxis(Math.max(0, ...chartData.map((d) => d.val || 0))),
+    [chartData]
+  );
 
   const velocityStats = useMemo(() => {
     const prior = chartData.filter((p) => !p.isNow);
@@ -419,7 +425,7 @@ export const HistoryScreen = React.memo(({
                     ? "text-neutral-400"
                     : velocityStats.delta > 0
                       ? "text-rose-400"
-                      : "text-accent"
+                      : "text-emerald-400"
                 )}
               >
                 <TrendIcon size={12} strokeWidth={2.75} />
@@ -508,7 +514,7 @@ export const HistoryScreen = React.memo(({
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart key={velocityPeriod.days} data={chartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+              <AreaChart key={velocityPeriod.days} data={chartData} margin={{ top: 8, right: 20, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="velocityFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.28} />
@@ -529,10 +535,9 @@ export const HistoryScreen = React.memo(({
                 <YAxis
                   axisLine={false}
                   tickLine={false}
-                  width={36}
                   tick={{ fill: '#A1A1AA', fontSize: 9, fontWeight: 600 }}
                   allowDecimals={false}
-                  domain={[0, (max) => Math.max(4, Math.ceil((max || 0) * 1.15))]}
+                  {...velocityAxis}
                 />
                 <Tooltip
                   cursor={{ stroke: 'rgba(255,255,255,0.12)', strokeWidth: 1, strokeDasharray: '4 4' }}
