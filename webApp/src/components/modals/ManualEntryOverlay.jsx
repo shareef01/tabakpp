@@ -144,7 +144,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
 
         <div className="mt-10 space-y-4">
           {error ? (
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-rose-400 text-center leading-relaxed">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-rose-400 text-center leading-relaxed">
               {error}
             </p>
           ) : null}

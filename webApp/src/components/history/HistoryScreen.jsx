@@ -8,12 +8,14 @@ import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
 import { formatDateDisplay } from '../../utils/formatters';
+import { niceAxis } from '../../utils/chartAxis';
 import { InsightsScreen } from './InsightsScreen';
 import { mapFirestoreError } from '../../utils/errorHandlers';
 import { UndoToast, UNDO_TOAST_MS } from '../feedback/UndoToast';
 import { ConfirmModal } from '../modals/ConfirmModal';
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const LOG_PAGE_SIZE = 20;
 
 const VELOCITY_PERIODS = [
   { days: 7, label: '7D', title: 'Last 7 days' },
@@ -77,7 +79,8 @@ export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = [
     });
   }
   series.push({
-    name: 'NOW',
+    // Not 'NOW': in small bold caps it reads as the month "NOV".
+    name: 'TODAY',
     date: today,
     dateLabel: 'Today',
     // projectLoggedCounts already projected the live session over today's
@@ -135,7 +138,7 @@ const StatTile = ({ icon: Icon, value, label, hint, tone = 'neutral' }) => (
         {value}
       </span>
       {hint && (
-        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-400 leading-none truncate">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-400 leading-none truncate">
           {hint}
         </span>
       )}
@@ -170,6 +173,9 @@ export const HistoryScreen = React.memo(({
   const [olderExhausted, setOlderExhausted] = useState(false);
   const [olderDayCursor, setOlderDayCursor] = useState(null);
   const [daysExhausted, setDaysExhausted] = useState(false);
+  // The log grows with the page in steps instead of scrolling inside a box —
+  // a nested scroller traps touch scrolling on phones.
+  const [shownLogCount, setShownLogCount] = useState(LOG_PAGE_SIZE);
   const activeUser = useRef(userId);
   const previousHead = useRef({ uid: userId, days: [], logs: [] });
   activeUser.current = userId;
@@ -317,6 +323,10 @@ export const HistoryScreen = React.memo(({
     () => buildVelocitySeries(completeLogs, today, velocityPeriod.days, m.activeCounts, completeDays),
     [completeLogs, m.activeCounts, today, velocityPeriod.days, completeDays]
   );
+  const velocityAxis = useMemo(
+    () => niceAxis(Math.max(0, ...chartData.map((d) => d.val || 0))),
+    [chartData]
+  );
 
   const velocityStats = useMemo(() => {
     const prior = chartData.filter((p) => !p.isNow);
@@ -341,6 +351,8 @@ export const HistoryScreen = React.memo(({
     return combined;
   }, [logs, olderLogs, closedDayRows]);
   const visibleLogs = useMemo(() => allRows.filter((log) => !hiddenLogIds.has(log.id)), [allRows, hiddenLogIds]);
+  const shownLogs = visibleLogs.slice(0, shownLogCount);
+  const hiddenLogCount = visibleLogs.length - shownLogs.length;
 
   const TrendIcon = velocityStats.delta == null || velocityStats.delta === 0
     ? Minus
@@ -361,7 +373,7 @@ export const HistoryScreen = React.memo(({
           aria-pressed={subView === 'history'}
           onClick={() => setSubView('history')}
           className={cn(
-            'h-10 min-w-[2.75rem] px-4 rounded-full text-[10px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
+            'h-10 min-w-[2.75rem] px-4 rounded-full text-[11px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
             subView === 'history'
               ? 'bg-white text-black shadow-xs'
               : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
@@ -374,7 +386,7 @@ export const HistoryScreen = React.memo(({
           aria-pressed={subView === 'insights'}
           onClick={() => setSubView('insights')}
           className={cn(
-            'h-10 min-w-[2.75rem] px-4 rounded-full text-[10px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
+            'h-10 min-w-[2.75rem] px-4 rounded-full text-[11px] font-black uppercase tracking-[0.14em] transition-all duration-200 touch-manipulation',
             subView === 'insights'
               ? 'bg-white text-black shadow-xs'
               : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
@@ -419,7 +431,7 @@ export const HistoryScreen = React.memo(({
                     ? "text-neutral-400"
                     : velocityStats.delta > 0
                       ? "text-rose-400"
-                      : "text-accent"
+                      : "text-emerald-400"
                 )}
               >
                 <TrendIcon size={12} strokeWidth={2.75} />
@@ -446,7 +458,7 @@ export const HistoryScreen = React.memo(({
                   aria-pressed={selected}
                   onClick={() => setVelocityDays(period.days)}
                   className={cn(
-                    'h-11 min-w-[2.75rem] px-3 rounded-full text-[10px] font-black tracking-[0.14em] transition-all duration-200 outline-hidden focus-visible:ring-2 focus-visible:ring-accent touch-manipulation',
+                    'h-11 min-w-[2.75rem] px-3 rounded-full text-[11px] font-black tracking-[0.14em] transition-all duration-200 outline-hidden focus-visible:ring-2 focus-visible:ring-accent touch-manipulation',
                     selected
                       ? 'bg-white text-black shadow-xs'
                       : 'text-neutral-400 hover:text-white hover:bg-white/[0.04]'
@@ -474,7 +486,7 @@ export const HistoryScreen = React.memo(({
             <table className="w-full text-left text-xs">
               <caption className="sr-only">Usage data for {velocityPeriod.title}</caption>
               <thead>
-                <tr className="border-b border-white/[0.08] text-[10px] font-black uppercase tracking-wider text-neutral-400">
+                <tr className="border-b border-white/[0.08] text-[11px] font-black uppercase tracking-wider text-neutral-400">
                   <th scope="col" className="py-2 px-3">Date</th>
                   <th scope="col" className="py-2 px-3 text-right">Units</th>
                 </tr>
@@ -508,7 +520,7 @@ export const HistoryScreen = React.memo(({
             </div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart key={velocityPeriod.days} data={chartData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+              <AreaChart key={velocityPeriod.days} data={chartData} margin={{ top: 8, right: 20, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="velocityFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.28} />
@@ -521,7 +533,7 @@ export const HistoryScreen = React.memo(({
                   dataKey="name"
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fill: '#A1A1AA', fontSize: velocityPeriod.days > 30 ? 8 : 10, fontWeight: 700 }}
+                  tick={{ fill: '#A1A1AA', fontSize: velocityPeriod.days > 30 ? 9 : 11, fontWeight: 700 }}
                   dy={10}
                   interval={velocityPeriod.days <= 7 ? 0 : velocityPeriod.days <= 14 ? 1 : 'preserveStartEnd'}
                   minTickGap={velocityPeriod.days > 30 ? 12 : 4}
@@ -529,10 +541,9 @@ export const HistoryScreen = React.memo(({
                 <YAxis
                   axisLine={false}
                   tickLine={false}
-                  width={36}
-                  tick={{ fill: '#A1A1AA', fontSize: 9, fontWeight: 600 }}
+                  tick={{ fill: '#A1A1AA', fontSize: 10, fontWeight: 600 }}
                   allowDecimals={false}
-                  domain={[0, (max) => Math.max(4, Math.ceil((max || 0) * 1.15))]}
+                  {...velocityAxis}
                 />
                 <Tooltip
                   cursor={{ stroke: 'rgba(255,255,255,0.12)', strokeWidth: 1, strokeDasharray: '4 4' }}
@@ -639,7 +650,7 @@ export const HistoryScreen = React.memo(({
               tone="neutral"
             />
           </div>
-          <p className="flex items-start gap-1.5 px-1 pt-1 text-[10px] leading-relaxed text-neutral-400">
+          <p className="flex items-start gap-1.5 px-1 pt-1 text-[11px] leading-relaxed text-neutral-400">
             <Info size={12} className="shrink-0 mt-0.5" strokeWidth={2} />
             "Est. Recovered"/"lost" are population-level life-expectancy
             estimates (≈11 min per unit, from published smoking-mortality
@@ -661,7 +672,7 @@ export const HistoryScreen = React.memo(({
                 type="button"
                 onClick={onAddEntry}
                 aria-label="Add manual history entry"
-                className="inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all touch-manipulation"
+                className="inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-accent text-black text-[11px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all touch-manipulation"
                 title="Add manual entry"
               >
                 <Plus size={15} strokeWidth={3} />
@@ -670,8 +681,8 @@ export const HistoryScreen = React.memo(({
             )}
           </div>
 
-          <div className="divide-y divide-white/[0.05] rounded-2xl ring-1 ring-inset ring-white/[0.06] overflow-hidden max-h-[min(28rem,60vh)] overflow-y-auto custom-scrollbar">
-            {visibleLogs.length > 0 ? visibleLogs.map((log) => {
+          <div className="divide-y divide-white/[0.05] rounded-2xl ring-1 ring-inset ring-white/[0.06] overflow-hidden">
+            {visibleLogs.length > 0 ? shownLogs.map((log) => {
               const units = Object.values(log.counts ?? {}).reduce((a, b) => a + (b || 0), 0);
               const isToday = log.logDate === today;
               const origin = originMeta(log.origin);
@@ -690,20 +701,20 @@ export const HistoryScreen = React.memo(({
                         {isToday ? 'Today' : formatDateDisplay(log.logDate)}
                       </span>
                       <span className={cn(
-                        "shrink-0 inline-flex items-center px-1.5 h-5 rounded-md text-[10px] font-black uppercase tracking-[0.12em] ring-1 ring-inset",
+                        "shrink-0 inline-flex items-center px-1.5 h-5 rounded-md text-[11px] font-black uppercase tracking-[0.12em] ring-1 ring-inset",
                         origin.tone
                       )}>
                         {origin.label}
                       </span>
                     </div>
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-400">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-400">
                       {isToday ? 'Open day' : 'Logged session'}
                     </span>
                   </div>
 
                   <div className="flex flex-col items-end gap-0.5 shrink-0 mr-1">
                     <span className="text-lg font-black tabular-nums text-white leading-none">{units}</span>
-                    <span className="text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">units</span>
+                    <span className="text-[11px] font-black uppercase tracking-[0.12em] text-neutral-400">units</span>
                   </div>
 
                   <div className="flex items-center gap-0.5 shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
@@ -740,7 +751,7 @@ export const HistoryScreen = React.memo(({
                   <button
                     type="button"
                     onClick={onAddEntry}
-                    className="mt-5 inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-white/[0.06] text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors touch-manipulation"
+                    className="mt-5 inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-white/[0.06] text-white text-[11px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors touch-manipulation"
                   >
                     <Plus size={14} strokeWidth={3} />
                     Add entry
@@ -750,13 +761,23 @@ export const HistoryScreen = React.memo(({
             )}
           </div>
 
-          {userId && !(olderExhausted && daysExhausted) && (
+          {hiddenLogCount > 0 ? (
             <div className="mt-4 flex justify-center">
               <button
                 type="button"
-                onClick={handleLoadOlder}
+                onClick={() => setShownLogCount((n) => n + LOG_PAGE_SIZE)}
+                className="inline-flex items-center gap-2 min-h-11 h-11 px-5 rounded-full bg-white/[0.04] text-neutral-300 text-[11px] font-black uppercase tracking-widest hover:bg-white/[0.08] hover:text-white transition-colors touch-manipulation"
+              >
+                Show {Math.min(LOG_PAGE_SIZE, hiddenLogCount)} more
+              </button>
+            </div>
+          ) : userId && !(olderExhausted && daysExhausted) && (
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={() => { setShownLogCount(visibleLogs.length + LOG_PAGE_SIZE); handleLoadOlder(); }}
                 disabled={loadingOlder}
-                className="inline-flex items-center gap-2 min-h-11 h-11 px-5 rounded-full bg-white/[0.04] text-neutral-300 text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.08] hover:text-white transition-colors disabled:opacity-50 touch-manipulation"
+                className="inline-flex items-center gap-2 min-h-11 h-11 px-5 rounded-full bg-white/[0.04] text-neutral-300 text-[11px] font-black uppercase tracking-widest hover:bg-white/[0.08] hover:text-white transition-colors disabled:opacity-50 touch-manipulation"
               >
                 {loadingOlder ? 'Loading…' : 'Load older entries'}
               </button>

@@ -86,9 +86,9 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
 
       <div className={cn('flex flex-col w-full', density.stack)}>
         <div className="w-full flex items-center justify-between gap-2">
-          <span className="text-xs md:text-sm font-bold text-white tracking-tight truncate">
+          <h2 className="text-xs md:text-sm font-bold text-white tracking-tight truncate">
             {config?.name || 'Tracker'}
-          </span>
+          </h2>
           <div className="shrink-0 flex items-center gap-1.5">
             {isPending && (
               <Loader2 size={13} className="animate-spin text-accent" strokeWidth={2.5} aria-label="Syncing…" title="Syncing with cloud" />
@@ -142,7 +142,7 @@ export const TrackerCard = React.memo(({ config, count = 0, onInc, onDec, index,
               </div>
             </div>
             {reduction && (
-              <span className="text-[10px] font-semibold text-accent/90 leading-none">
+              <span className="text-[11px] font-semibold text-accent/90 leading-none">
                 {reduction.avoided} under baseline
               </span>
             )}

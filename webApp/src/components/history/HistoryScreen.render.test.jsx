@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { HistoryScreen } from './HistoryScreen';
 
 // jsdom does not implement matchMedia; recharts/a11y helpers may call it.
@@ -75,5 +75,22 @@ describe('HistoryScreen — canonical financial rendering (Task B)', () => {
     expect(container.textContent).not.toContain('dailyFinancials');
     expect(container.textContent).not.toContain('null');
     expect(container.textContent).not.toContain('NaN');
+  });
+});
+
+describe('HistoryScreen — session log paging', () => {
+  const manyLogs = Array.from({ length: 25 }, (_, i) => ({
+    id: `L${i}`,
+    logDate: `2026-06-${String(i + 1).padStart(2, '0')}`,
+    counts: { cig: 1 },
+    origin: 'MANUAL_ENTRY',
+  }));
+
+  it('shows 20 entries in the page flow, then reveals the rest on demand', () => {
+    renderHistory({ logs: manyLogs, dayDocs: [] });
+    expect(screen.getAllByRole('button', { name: /^Edit entry for/ })).toHaveLength(20);
+    fireEvent.click(screen.getByRole('button', { name: 'Show 5 more' }));
+    expect(screen.getAllByRole('button', { name: /^Edit entry for/ })).toHaveLength(25);
+    expect(screen.queryByRole('button', { name: /^Show \d+ more$/ })).toBeNull();
   });
 });

@@ -93,7 +93,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
             <div key={c.id} className="flex items-center justify-between p-5 bg-black/40 border border-white/5 rounded-2xl hover:border-white/10 transition-colors">
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-bold text-white uppercase tracking-wider">{c.name}</span>
-                <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">
+                <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-widest">
                   {c.type ? (c.type === 'CIGARETTE' ? 'Cigarette' : c.type === 'RYO_ROLL' ? 'RYO' : 'Custom') : 'Counter'}
                 </span>
               </div>
@@ -124,7 +124,7 @@ export const EditOverlay = ({ log, configs, onClose, onSave }) => {
 
         <div className="mt-10 space-y-4">
           {error ? (
-            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-rose-400 text-center leading-relaxed">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-rose-400 text-center leading-relaxed">
               {error}
             </p>
           ) : null}

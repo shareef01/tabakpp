@@ -96,7 +96,7 @@ export const UndoToast = ({
                 {message}
               </p>
               {detail ? (
-                <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-400 truncate">
+                <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-neutral-400 truncate">
                   {detail}
                 </p>
               ) : null}
@@ -107,7 +107,7 @@ export const UndoToast = ({
               onClick={handleUndo}
               disabled={busy}
               className={cn(
-                'shrink-0 h-11 px-4 rounded-xl text-[10px] font-black uppercase tracking-[0.18em]',
+                'shrink-0 h-11 px-4 rounded-xl text-[11px] font-black uppercase tracking-[0.18em]',
                 'bg-white text-black hover:bg-neutral-100 active:scale-95',
                 'transition-all duration-150 touch-manipulation',
                 'disabled:opacity-50 disabled:pointer-events-none',

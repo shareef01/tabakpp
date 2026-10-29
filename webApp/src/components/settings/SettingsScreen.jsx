@@ -84,7 +84,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
 
       <div className="flex flex-col items-end gap-0.5 shrink-0 mr-1">
         <span className="text-lg font-black tabular-nums text-white leading-none">{config.limit}</span>
-        <span className="text-[10px] font-black uppercase tracking-[0.14em] text-neutral-400">/ day</span>
+        <span className="text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400">/ day</span>
       </div>
 
       <div className="flex items-center gap-0.5 shrink-0">
@@ -408,7 +408,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                 </h2>
               </div>
               {user?.email && (
-                <span className="text-[10px] font-medium text-neutral-400 truncate max-w-[50%] text-right">
+                <span className="text-[11px] font-medium text-neutral-400 truncate max-w-[50%] text-right">
                   {user.email}
                 </span>
               )}
@@ -470,7 +470,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                   isDark
                   placeholder="Your name"
                 />
-                {nameError && <p role="alert" className="text-[10px] font-bold text-rose-400">{nameError}</p>}
+                {nameError && <p role="alert" className="text-[11px] font-bold text-rose-400">{nameError}</p>}
                 <div className="flex flex-col sm:flex-row gap-2.5">
                   <Button className="flex-1" onClick={handleApplyName}>
                     Save name
@@ -503,7 +503,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               <div className="space-y-3">
                 <div className="flex items-baseline justify-between gap-3">
                   <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Accent</span>
-                  <span className="text-[10px] font-black uppercase tracking-[0.18em] text-accent tabular-nums">
+                  <span className="text-[11px] font-black uppercase tracking-[0.18em] text-accent tabular-nums">
                     {ACCENTS.find((a) => a.v === settings.accent)?.n || 'Custom'}
                   </span>
                 </div>
@@ -550,7 +550,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                         </span>
                         <span
                           className={cn(
-                            "text-[10px] font-black uppercase tracking-[0.12em] leading-none",
+                            "text-[11px] font-black uppercase tracking-[0.12em] leading-none",
                             selected ? "text-white" : "text-neutral-400 group-hover:text-neutral-200"
                           )}
                         >
@@ -563,7 +563,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
 
                 <div className="flex items-center gap-2.5 px-0.5">
                   <span className="w-2 h-2 rounded-full bg-accent shadow-[0_0_12px_var(--accent)]" />
-                  <span className="text-[10px] font-semibold text-neutral-400">
+                  <span className="text-[11px] font-semibold text-neutral-400">
                     Applied to buttons, gauges, and highlights
                   </span>
                 </div>
@@ -572,7 +572,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               <div className="space-y-3">
                 <div className="flex items-baseline justify-between gap-3">
                   <span className={cn(UI.LABEL, 'mb-0 ml-0')}>Card density</span>
-                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-neutral-400">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-neutral-400">
                     {DENSITY_OPTIONS.find((d) => d.id === settings.widgetSize)?.label || 'Comfortable'}
                   </span>
                 </div>
@@ -609,7 +609,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                             />
                           )}
                           <sz.icon size={14} strokeWidth={selected ? 2.5 : 2} className="relative z-1" />
-                          <span className="relative z-1 text-[10px] font-black uppercase tracking-widest hidden sm:inline">
+                          <span className="relative z-1 text-[11px] font-black uppercase tracking-widest hidden sm:inline">
                             {sz.label}
                           </span>
                         </button>
@@ -673,7 +673,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                   backgroundRepeat: 'no-repeat',
                 }}
               />
-              <div className="flex justify-between px-0.5 text-[10px] font-black uppercase tracking-[0.12em] text-neutral-400">
+              <div className="flex justify-between px-0.5 text-[11px] font-black uppercase tracking-[0.12em] text-neutral-400">
                 {[0, 6, 12, 18, 23].map((hour) => (
                   <span
                     key={hour}
@@ -704,7 +704,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                       commitDayStart(preset.hour);
                     }}
                     className={cn(
-                      "min-h-11 h-11 px-4 rounded-full text-[10px] font-black uppercase tracking-widest transition-all touch-manipulation",
+                      "min-h-11 h-11 px-4 rounded-full text-[11px] font-black uppercase tracking-widest transition-all touch-manipulation",
                       "ring-1 ring-inset outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50",
                       selected
                         ? "bg-accent text-black ring-accent"
@@ -731,7 +731,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               <button
                 type="button"
                 onClick={onAdd}
-                className="inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-accent text-black text-[10px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all touch-manipulation"
+                className="inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-accent text-black text-[11px] font-black uppercase tracking-widest shadow-md hover:brightness-110 active:scale-95 transition-all touch-manipulation"
               >
                 <Plus size={15} strokeWidth={3} />
                 Add
@@ -756,7 +756,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
                   <button
                     type="button"
                     onClick={onAdd}
-                    className="mt-5 inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-white/[0.06] text-white text-[10px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors touch-manipulation"
+                    className="mt-5 inline-flex items-center gap-2 min-h-11 h-11 px-4 rounded-full bg-white/[0.06] text-white text-[11px] font-black uppercase tracking-widest hover:bg-white/[0.1] transition-colors touch-manipulation"
                   >
                     <Plus size={14} strokeWidth={3} />
                     Add counter
@@ -828,8 +828,8 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
               </h2>
             </div>
             <div className="flex p-1 bg-black/60 rounded-full border border-white/5 mb-6 shadow-inner" role="radiogroup" aria-label="Purchase type">
-              <button type="button" role="radio" aria-checked={ecoMode === 'PACK'} onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Package size={14} /> Pack</button>
-              <button type="button" role="radio" aria-checked={ecoMode === 'POUCH'} onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Wind size={14} /> Pouch</button>
+              <button type="button" role="radio" aria-checked={ecoMode === 'PACK'} onClick={() => setEcoMode('PACK')} className={cn("flex-1 h-11 rounded-full text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'PACK' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Package size={14} /> Pack</button>
+              <button type="button" role="radio" aria-checked={ecoMode === 'POUCH'} onClick={() => setEcoMode('POUCH')} className={cn("flex-1 h-11 rounded-full text-[11px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 outline-hidden focus-visible:ring-2 focus-visible:ring-accent/50", ecoMode === 'POUCH' ? "bg-white text-black shadow-xl" : "text-neutral-400 hover:text-white")}><Wind size={14} /> Pouch</button>
             </div>
             <div className="grid grid-cols-2 gap-4 md:gap-6">
               <Input label={ecoMode === 'PACK' ? "Pack price (€)" : "Pouch price (€)"} type="number" step="0.01" min="0" inputMode="decimal" value={ecoMode === 'PACK' ? packPrice : pouchPrice} onChange={ecoMode === 'PACK' ? setPackPrice : setPouchPrice} isDark />
@@ -883,7 +883,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
             </ul>
 
             <Button
-              variant="danger"
+              variant="dangerOutline"
               className="w-full"
               onClick={() => { setDeletePassword(''); setShowDeleteAccount(true); }}
             >

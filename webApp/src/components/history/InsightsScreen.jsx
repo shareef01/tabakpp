@@ -6,6 +6,7 @@ import {
 import { SmokingCalculator } from '../../utils/smokingCalculator';
 import { UI, Card } from '../Common';
 import { cn } from '../../utils/utils';
+import { niceAxis } from '../../utils/chartAxis';
 
 const RECENT_PERIOD_DAYS = 7;
 
@@ -45,8 +46,10 @@ const TrendBadge = ({ trend }) => {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider',
-        isGood ? 'text-accent bg-accent/10 ring-accent/20' : 'text-rose-400/90 bg-rose-500/10 ring-rose-500/20'
+        'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-black uppercase tracking-wider',
+        // Fixed semantic colours, not the accent: a red accent would make a
+        // reduction look like a warning.
+        isGood ? 'text-emerald-400 bg-emerald-500/10 ring-emerald-500/20' : 'text-rose-400/90 bg-rose-500/10 ring-rose-500/20'
       )}
       aria-label={trend.direction === 'down' || trend.direction === 'to_zero'
         ? `Consumption decreased: ${trend.text}`
@@ -105,6 +108,10 @@ export const InsightsScreen = React.memo(({
       isCurrentMonth: month.isCurrentMonth,
     }));
   }, [insightData.completedMonths]);
+  const monthlyAxis = useMemo(
+    () => niceAxis(Math.max(0, ...monthlyChartData.map((d) => d.units || 0))),
+    [monthlyChartData]
+  );
 
   const hasAnyHistory = (logs || []).length > 0 || (dayDocs || []).length > 0;
 
@@ -158,9 +165,13 @@ export const InsightsScreen = React.memo(({
               <TrendBadge trend={recentTrend.trend} />
             </div>
 
-            <p className="text-[11px] text-neutral-500 leading-relaxed mb-4">
-              {recentTrend.label}
-            </p>
+            {/* With a trend the badge already says it; the line is only for
+                the no-comparison message. */}
+            {!recentTrend.trend && (
+              <p className="text-[11px] text-neutral-500 leading-relaxed mb-4">
+                {recentTrend.label}
+              </p>
+            )}
 
             {recentTrend.currentAvg != null && (
               <div className="flex items-baseline gap-4 text-sm">
@@ -193,7 +204,7 @@ export const InsightsScreen = React.memo(({
                   {insightData.currentMonthMtd.unknownEconomics && <p className="text-xs text-neutral-400">Some historical money is unknown.</p>}
                 </div>
                 {insightData.currentMonthMtd.hasBaseline && (
-                  <span className="text-[10px] font-black uppercase tracking-wider text-accent">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-accent">
                     Baseline active
                   </span>
                 )}
@@ -201,22 +212,22 @@ export const InsightsScreen = React.memo(({
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mt-4">
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] font-black uppercase tracking-[0.16em] text-neutral-500">Units</span>
+                  <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-500">Units</span>
                   <span className="text-2xl font-black tabular-nums text-white">{insightData.currentMonthMtd.units}</span>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] font-black uppercase tracking-[0.16em] text-neutral-500">Tracked days</span>
+                  <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-500">Tracked days</span>
                   <span className="text-2xl font-black tabular-nums text-white">{insightData.currentMonthMtd.trackedDays}</span>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] font-black uppercase tracking-[0.16em] text-neutral-500">Avg/day</span>
+                  <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-500">Avg/day</span>
                   <span className="text-2xl font-black tabular-nums text-white">
                     {insightData.currentMonthMtd.avgUnitsPerTrackedDay.toFixed(1)}
                   </span>
                 </div>
                 {insightData.currentMonthMtd.hasBaseline && (
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-black uppercase tracking-[0.16em] text-neutral-500">Saved</span>
+                    <span className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-500">Saved</span>
                     <span className="text-2xl font-black tabular-nums text-accent">
                       {SmokingCalculator.formatCurrency(insightData.currentMonthMtd.baselineSaved)}
                     </span>
@@ -250,7 +261,7 @@ export const InsightsScreen = React.memo(({
                   Monthly consumption chart: {monthlyChartData.map((d) => `${d.monthLabel}: ${d.units} units`).join('; ')}
                 </p>
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={monthlyChartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                  <BarChart data={monthlyChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="insightBar" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.6} />
@@ -262,16 +273,15 @@ export const InsightsScreen = React.memo(({
                       dataKey="monthLabel"
                       axisLine={false}
                       tickLine={false}
-                      tick={{ fill: '#A1A1AA', fontSize: 10, fontWeight: 700 }}
+                      tick={{ fill: '#A1A1AA', fontSize: 11, fontWeight: 700 }}
                       dy={10}
                     />
                     <YAxis
                       axisLine={false}
                       tickLine={false}
-                      width={36}
-                      tick={{ fill: '#A1A1AA', fontSize: 9, fontWeight: 600 }}
+                      tick={{ fill: '#A1A1AA', fontSize: 10, fontWeight: 600 }}
                       allowDecimals={false}
-                      domain={[0, (max) => Math.max(4, Math.ceil((max || 0) * 1.15))]}
+                      {...monthlyAxis}
                     />
                     <Tooltip
                       cursor={{ stroke: 'rgba(255,255,255,0.12)', strokeWidth: 1, strokeDasharray: '4 4' }}
@@ -300,13 +310,13 @@ export const InsightsScreen = React.memo(({
                       <Calendar size={14} className="text-neutral-500" />
                       <span className="font-black text-white text-sm tabular-nums">{month.label}</span>
                       {month.unknownEconomics && <span className="text-xs text-neutral-400">Some historical money is unknown.</span>}
-                      <span className="text-[10px] font-black uppercase tracking-[0.12em] text-neutral-500">
+                      <span className="text-[11px] font-black uppercase tracking-[0.12em] text-neutral-500">
                         {month.trackedDays} {month.trackedDays === 1 ? 'day' : 'days'}
                       </span>
                     </div>
                     <div className="flex items-center gap-4 text-right">
                       <span className="text-lg font-black text-white tabular-nums">{month.units}</span>
-                      <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">units</span>
+                      <span className="text-[11px] font-black uppercase tracking-widest text-neutral-500">units</span>
                       {month.hasBaseline && (
                         <span className="text-sm font-black text-accent tabular-nums">
                           {SmokingCalculator.formatCurrency(month.baselineSaved)}
