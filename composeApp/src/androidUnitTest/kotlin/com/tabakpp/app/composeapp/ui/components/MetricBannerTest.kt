@@ -53,7 +53,7 @@ class MetricBannerTest {
         rule.onNodeWithText("13").assertIsDisplayed()          // limit - count
         rule.onNodeWithText("GOAL STREAK").assertIsDisplayed()
         rule.onNodeWithText("8").assertIsDisplayed()
-        rule.onNodeWithText("TRACKING").assertIsDisplayed()
+        rule.onNodeWithText("LOG STREAK").assertIsDisplayed()
         rule.onNodeWithText("12").assertIsDisplayed()
         rule.onNodeWithText("ENGAGEMENT").assertIsDisplayed()
         rule.onNodeWithText("DAILY USE").assertIsDisplayed()
@@ -94,7 +94,7 @@ class MetricBannerTest {
         // Goal streak 0, tracking streak 9 — consistent tracking despite over goal.
         setBanner(metrics(count = 50, limit = 10, streak = 0, trackingStreak = 9, progress = 1.0))
         rule.onNodeWithText("GOAL STREAK").assertIsDisplayed()
-        rule.onNodeWithText("TRACKING").assertIsDisplayed()
+        rule.onNodeWithText("LOG STREAK").assertIsDisplayed()
         rule.onNodeWithText("9").assertIsDisplayed()
     }
 

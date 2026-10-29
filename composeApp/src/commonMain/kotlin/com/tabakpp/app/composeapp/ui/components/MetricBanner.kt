@@ -114,7 +114,7 @@ fun MetricBanner(
                         modifier = Modifier.weight(1f)
                     )
                     MetricItem(
-                        label = "TRACKING",
+                        label = "LOG STREAK",
                         value = "${metrics.trackingStreak}",
                         suffix = if (metrics.trackingStreak == 1) "DAY" else "DAYS",
                         valueColor = accentColor,

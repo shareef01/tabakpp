@@ -92,7 +92,7 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success,
  *
  * Tier 2 (Supporting Consistency):
  * - Goal Streak: consecutive days within target
- * - Tracking Streak: consecutive days active
+ * - Log Streak: consecutive days with logged activity
  * - Engagement: consistency XP & tier
  * - Daily Use: percentage quota utilization
  */
@@ -194,7 +194,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
         />
         <MetricColumn
           icon={TrendingUp}
-          label="Tracking"
+          label="Log Streak"
           value={`${m.trackingStreak || 0}`}
           sub={m.trackingStreak === 1 ? 'Day' : 'Days'}
           title="Consecutive days you recorded activity — consistency, not goal success"
