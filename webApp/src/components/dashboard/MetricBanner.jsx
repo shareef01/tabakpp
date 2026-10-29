@@ -51,7 +51,7 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success,
         />
         <span className={cn(
           "font-bold uppercase tracking-wider text-neutral-400 whitespace-nowrap truncate",
-          isPrimary ? "text-[11px]" : "text-[10px]"
+          isPrimary ? "text-[11px]" : "text-[11px]"
         )}>
           {label}
         </span>
@@ -71,7 +71,7 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success,
       {sub && (
         <span className={cn(
           "font-semibold text-neutral-400/90 leading-none truncate max-w-full",
-          isPrimary ? "text-[11px] uppercase tracking-wider" : "text-[10px]"
+          isPrimary ? "text-[11px] uppercase tracking-wider" : "text-[11px]"
         )}>
           {sub}
         </span>
@@ -92,7 +92,7 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success,
  *
  * Tier 2 (Supporting Consistency):
  * - Goal Streak: consecutive days within target
- * - Tracking Streak: consecutive days active
+ * - Log Streak: consecutive days with logged activity
  * - Engagement: consistency XP & tier
  * - Daily Use: percentage quota utilization
  */
@@ -124,24 +124,18 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
       <div className="flex items-center justify-between px-4 md:px-6 py-2.5 bg-white/[0.02] border-b border-white/[0.06]">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-          <span className="text-[11px] font-bold text-neutral-300 uppercase tracking-wider">
+          <h2 className="text-[11px] font-bold text-neutral-300 uppercase tracking-wider">
             Today's Overview
-          </span>
+          </h2>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={cn(
-            'text-[11px] font-bold tabular-nums',
-            isOver ? 'text-danger' : quotaWarning ? 'text-amber-400' : 'text-neutral-300'
-          )}>
-            {m.count || 0} / {m.limit || 0} units
-          </span>
-          <span className={cn(
-            'text-[10px] font-bold px-1.5 py-0.5 rounded-sm ring-1 ring-inset',
-            isOver ? 'bg-rose-500/10 text-rose-400 ring-rose-500/20' : isAtLimit ? 'bg-amber-500/10 text-amber-300 ring-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 ring-emerald-500/20'
-          )}>
-            {quotaPct}% quota
-          </span>
-        </div>
+        {/* The percentage lives in the Daily Use tile and the bar below; the
+            header only carries the raw count. */}
+        <span className={cn(
+          'text-[11px] font-bold tabular-nums',
+          isOver ? 'text-danger' : quotaWarning ? 'text-amber-400' : 'text-neutral-300'
+        )}>
+          {m.count || 0} / {m.limit || 0} units
+        </span>
       </div>
 
       {/* TIER 1: PRIMARY TRACKING METRICS */}
@@ -194,7 +188,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
         />
         <MetricColumn
           icon={TrendingUp}
-          label="Tracking"
+          label="Log Streak"
           value={`${m.trackingStreak || 0}`}
           sub={m.trackingStreak === 1 ? 'Day' : 'Days'}
           title="Consecutive days you recorded activity — consistency, not goal success"
@@ -217,12 +211,6 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
 
       {/* VISUAL QUOTA PROGRESS BAR */}
       <div className="flex items-center gap-3 px-4 md:px-5 py-2.5 bg-black/30 border-t border-white/[0.04]">
-        <span className={cn(
-          'shrink-0 text-[11px] font-bold tabular-nums',
-          isOver ? 'text-danger' : quotaWarning ? 'text-amber-400' : 'text-neutral-400'
-        )}>
-          {quotaPct}%
-        </span>
         <div
           className="h-1.5 flex-1 rounded-full bg-white/[0.08] overflow-hidden"
           role="progressbar"

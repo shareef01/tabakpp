@@ -42,7 +42,7 @@ androidx-credentials-play-services-auth = { module = "androidx.credentials:crede
 googleid = { module = "com.google.android.libraries.identity.googleid:googleid", version.ref = "googleid" }
 androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "androidx-core-splashscreen" }
 compose-ui-test-junit4-android = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose-multiplatform" }
-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest", version = "1.7.5" }
+compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest", version = "1.12.1" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidx-test" }
 
