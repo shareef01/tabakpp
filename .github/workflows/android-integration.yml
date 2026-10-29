@@ -851,12 +851,22 @@ jobs:
           EMULATOR_PID=$!
           echo "Emulator launched (pid $EMULATOR_PID)"
 
+          # Every teardown step is bounded: an unbounded `emu kill` + `wait`
+          # once held a fully passed run (31/31, gate PASS) for 12 minutes
+          # until the step timeout failed it (run 40608462696).
           cleanup_emulator() {
-            "$ADB" -s emulator-5554 emu kill > /dev/null 2>&1 || true
+            timeout 30s "$ADB" -s emulator-5554 emu kill > /dev/null 2>&1 || true
             if [ -n "${EMULATOR_PID:-}" ]; then
               kill "$EMULATOR_PID" > /dev/null 2>&1 || true
+              for _ in $(seq 1 20); do
+                kill -0 "$EMULATOR_PID" 2>/dev/null || break
+                sleep 1
+              done
+              kill -9 "$EMULATOR_PID" > /dev/null 2>&1 || true
+              pkill -9 -f qemu-system > /dev/null 2>&1 || true
               wait "$EMULATOR_PID" 2>/dev/null || true
             fi
+            timeout 10s "$ADB" kill-server > /dev/null 2>&1 || true
           }
           trap cleanup_emulator EXIT
 
