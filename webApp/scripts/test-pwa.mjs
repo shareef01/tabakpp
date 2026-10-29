@@ -11,7 +11,7 @@ import puppeteer from 'puppeteer-core';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'tabakpp-pwa-'));
-const evidence = { builds: {}, scenarios: [], documents: [], workerErrors: [], consoleErrors: [], warnings: [], caches: {} };
+const evidence = { builds: {}, scenarios: [], documents: [], scripts: [], workerErrors: [], consoleErrors: [], warnings: [], caches: {} };
 const output = process.env.PWA_TEST_REPORT || path.join(temporary, 'results.json');
 const sessions = new WeakMap();
 const deniedNavigationURLs = new Set();
@@ -122,6 +122,7 @@ async function pageFor(context) {
   await session.send('Network.enable', { maxTotalBufferSize: 4 * 1024 * 1024, maxResourceBufferSize: 1024 * 1024, enableDurableMessages: true });
   session.on('Network.responseReceived', event => {
     if (event.type === 'Document') evidence.documents.push({ requestId: event.requestId, url: event.response.url, worker: event.response.fromServiceWorker, status: event.response.status });
+    if (event.type === 'Script') evidence.scripts.push({ url: event.response.url, worker: event.response.fromServiceWorker });
   });
   await session.send('ServiceWorker.enable');
   session.on('ServiceWorker.workerVersionUpdated', event => {
@@ -282,9 +283,20 @@ async function run() {
           });
         }
       });
+      // Cross-origin scripts (e.g. apis.google.com for Google sign-in) must
+      // bypass the worker: a worker-made fetch is bound by sw.js's CSP
+      // connect-src, which does not list script hosts.
+      const crossOrigin = `https://${host === 'tabakpp.web.app' ? 'tabakpp.firebaseapp.com' : 'tabakpp.web.app'}:${secureServer.address().port}/__/cross-origin-probe.js`;
+      await hosting.evaluate(src => new Promise((resolve, reject) => {
+        const element = document.createElement('script');
+        element.src = src; element.onload = resolve; element.onerror = reject; document.head.append(element);
+      }), crossOrigin);
       await hosting.waitForNetworkIdle({ idleTime: 500 });
+      const probe = evidence.scripts.find(script => script.url === crossOrigin);
+      assert(probe, 'cross-origin probe script response observed');
+      assert.equal(probe.worker, false, 'cross-origin script is fetched by the browser, not the SW');
       await caches(hosting, `${host}-reserved-resources`);
-      evidence.scenarios.push({ host, reservedScriptsAndStylesUncached: true });
+      evidence.scenarios.push({ host, reservedScriptsAndStylesUncached: true, crossOriginBypassesWorker: true });
       online = false;
       await hosting.setOfflineMode(true);
       for (const route of ['/', '/index.html', '/history', '/settings']) await shell(hosting, hostingBase, route, 'pwa-regression-B', true);

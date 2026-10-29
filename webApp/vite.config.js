@@ -45,26 +45,25 @@ export default defineConfig({
         // runtime strategy. Use one network-first route with an error fallback.
         navigateFallback: null,
         runtimeCaching: [
+          // Every route is same-origin only. Cross-origin Firebase/Google
+          // traffic matches no route, so the browser fetches it directly: a
+          // worker-made fetch is governed by the CSP connect-src served with
+          // sw.js, which (correctly) does not list script hosts such as
+          // apis.google.com — routing them here broke Google sign-in.
           {
             // Reserved hosting helpers/APIs stay network-only, including script
-            // and style requests. Cross-origin Firebase/Google traffic must not
-            // shadow the app's own firebaseapp.com navigation or static assets.
+            // and style requests.
             urlPattern: ({ url }) =>
-              (url.origin === self.location.origin && /^\/(?:api|__)/.test(url.pathname)) ||
-              (url.origin !== self.location.origin && (
-                url.hostname.includes('googleapis.com') ||
-                url.hostname.includes('firebaseio.com') ||
-                url.hostname.includes('firebaseapp.com') ||
-                url.hostname.includes('gstatic.com') ||
-                url.hostname.includes('google.com'))),
+              url.origin === self.location.origin && /^\/(?:api|__)/.test(url.pathname),
             handler: 'NetworkOnly',
           },
           {
             // Hashed static assets
             urlPattern: ({ request, url }) =>
-              request.destination === 'script' ||
-              request.destination === 'style' ||
-              url.pathname.startsWith('/assets/'),
+              url.origin === self.location.origin && (
+                request.destination === 'script' ||
+                request.destination === 'style' ||
+                url.pathname.startsWith('/assets/')),
             handler: 'CacheFirst',
             options: {
               cacheName: 'tabak-assets',
