@@ -385,6 +385,11 @@ export const executeFinancialOperation = onCall(async (request) => {
       // `updateHistoricalDay` — merge counts, recompute credit, and (below) apply
       // the ledger's old→new canonicalCredit delta to lifetime.
       if (!day) throw new HttpsError('not-found', 'DAY_NOT_FOUND');
+      // Only a closed day is historical. An open day (today, or a past day not
+      // yet reconciled) changes through COUNTER_* — which stamp the tracker
+      // snapshot — and is folded once by DAY_CLOSE; editing it here would
+      // bypass both. Both clients only offer closed days for editing.
+      if (day.status !== 'closed') throw new HttpsError('failed-precondition', 'DAY_NOT_CLOSED');
       const incoming = sanitizeHistoricalCounts(data.counts);
       const merged = { ...(day.counts || {}), ...incoming };
       // FIX 12: Harmonize with Firestore rules constraints (validDayCountMap / MAX_DAY_TRACKERS)
