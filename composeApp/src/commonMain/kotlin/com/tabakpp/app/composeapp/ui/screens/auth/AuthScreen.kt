@@ -130,7 +130,7 @@ fun AuthScreen(viewModel: AuthViewModel) {
                                     style = TabakTypography.labelSmall.copy(
                                         fontWeight = FontWeight.Black,
                                         letterSpacing = 1.sp,
-                                        color = Color.White.copy(alpha = 0.45f)
+                                        color = Color.White.copy(alpha = 0.6f)
                                     )
                                 )
                             }
@@ -177,11 +177,12 @@ fun AuthScreen(viewModel: AuthViewModel) {
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             if (loading) {
-                                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.Black, strokeWidth = 2.dp)
                             } else {
+                                // Black, not white, on the emerald accent: 8.3:1 vs 2.5:1.
                                 Text(
                                     text = if (isSignUp) "CREATE ACCOUNT" else "SIGN IN",
-                                    style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = Color.White)
+                                    style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = Color.Black)
                                 )
                             }
                         }
@@ -247,7 +248,9 @@ fun AuthScreen(viewModel: AuthViewModel) {
                                 style = TabakTypography.labelSmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 1.sp,
-                                    color = Color.White.copy(alpha = if (email.isNotBlank()) 0.5f else 0.25f)
+                                    // Readable even while disabled (it waits for an email);
+                                    // 0.5 ≈ 5.3:1, 0.7 ≈ 9.8:1 on the card.
+                                    color = Color.White.copy(alpha = if (email.isNotBlank()) 0.7f else 0.5f)
                                 )
                             )
                         }
@@ -301,8 +304,8 @@ private fun BrandedHero(accentColor: Color) {
         Text(
             text = "EXECUTIVE HABIT TRACKING",
             style = TabakTypography.labelSmall.copy(
-                letterSpacing = 4.sp, 
-                color = Color.White.copy(alpha = 0.3f),
+                letterSpacing = 4.sp,
+                color = Color.White.copy(alpha = 0.55f),
                 fontWeight = FontWeight.Bold
             )
         )
@@ -342,7 +345,7 @@ private fun TabItem(label: String, selected: Boolean, modifier: Modifier, accent
             text = label,
             style = TabakTypography.labelSmall.copy(
                 fontWeight = if (selected) FontWeight.Black else FontWeight.Bold,
-                color = if (selected) accentColor else Color.White.copy(alpha = 0.4f)
+                color = if (selected) accentColor else Color.White.copy(alpha = 0.6f)
             )
         )
     }
