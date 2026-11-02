@@ -1163,7 +1163,19 @@ const main = async () => {
   r = await call(rlUser.idToken, { operationId: 'rl1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig' });
   assert.ok(r.ok && r.body.result.applied === false, `a replay must not be throttled: ${JSON.stringify(r.body)}`);
 
-  console.log('✅ integration: ALL 27 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
+  // 28) HISTORICAL_DAY_UPDATE only edits CLOSED days: today's open day is
+  //     refused, left untouched, and gets no receipt.
+  const hoUser = await signIn();
+  const hoUid = hoUser.localId;
+  await seedOptionB(hoUid);
+  r = await call(hoUser.idToken, { operationId: 'ho1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig' });
+  assert.ok(r.ok, `seed increment failed: ${JSON.stringify(r.body)}`);
+  r = await call(hoUser.idToken, { operationId: 'ho2', type: 'HISTORICAL_DAY_UPDATE', date: TODAY, counts: { cig: 7 } });
+  assert.equal(r.body.error?.message, 'DAY_NOT_CLOSED', `an open day must not be edited as history: ${JSON.stringify(r.body)}`);
+  assert.equal((await readDoc(`users/${hoUid}/days/${TODAY}`)).counts.cig, 1, 'the open day must be left untouched');
+  assert.equal(await readDoc(`users/${hoUid}/trustedOperations/ho2`), null, 'a refused edit must not write a receipt');
+
+  console.log('✅ integration: ALL 28 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });
