@@ -76,15 +76,16 @@ export const AuthProvider = ({ children }) => {
     };
   }, []);
 
+  const uid = user?.uid;
   // Complete Google reauth → delete after redirect. Lives here (not in
   // SettingsScreen) so it runs regardless of which tab is active on landing.
   useEffect(() => {
-    if (!user || sessionStorage.getItem(PENDING_DELETE_KEY) !== '1') return undefined;
+    if (!uid || sessionStorage.getItem(PENDING_DELETE_KEY) !== '1') return undefined;
     sessionStorage.removeItem(PENDING_DELETE_KEY);
     let cancelled = false;
     (async () => {
       try {
-        await RegistryService.deleteAllUserData(user.uid);
+        await RegistryService.deleteAllUserData(uid);
         if (cancelled) return;
         try {
           await deleteAuthUserAfterWipe(auth, auth.currentUser);
@@ -108,7 +109,7 @@ export const AuthProvider = ({ children }) => {
       }
     })();
     return () => { cancelled = true; };
-  }, [user?.uid]);
+  }, [uid]);
 
   const clearDeleteError = useCallback(() => setDeleteError(null), []);
 

@@ -30,17 +30,18 @@ const emptyRegistry = () => ({
  * decides which date a count belongs to (that already happened at write
  * time).
  *
- * ## On the remaining `react-hooks/exhaustive-deps` warnings
+ * ## Why everything keys on `uid`, never `user`
  *
- * `npm run lint` reports "missing dependency: 'user'" on most effects and
- * callbacks here. That is deliberate and must stay: these subscribe/mutate on
- * `user?.uid`, while `user` is a Firebase `User` object whose identity changes
- * on every token refresh (~hourly). Depending on the whole object would tear
- * down and rebuild all six Firestore listeners mid-session. The lint rule
- * cannot see that the narrower key is the correct one, so the warnings are
- * left visible rather than suppressed — they are a useful signal elsewhere.
+ * Effects and callbacks here subscribe/mutate on `uid` (`user?.uid`), while
+ * `user` is a Firebase `User` object whose identity changes on every token
+ * refresh (~hourly). Depending on the whole object would tear down and rebuild
+ * all six Firestore listeners mid-session. Reading only `uid` inside them lets
+ * `react-hooks/exhaustive-deps` check the dependency lists for real instead of
+ * reporting `user` as missing on every one.
  */
 export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = null, nowFn = () => new Date(), listenerEpoch = 0) => {
+  // The narrow key every effect and callback below depends on (see above).
+  const uid = user?.uid;
   const [configs, setConfigs] = useState([]);
   const [logs, setLogs] = useState([]);
   const [dayDocs, setDayDocs] = useState([]);
@@ -163,7 +164,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   // the separate day-doc and profile-extra (avatar) listeners below.
   useEffect(() => {
     accountWriteState.current = null;
-    if (!user) {
+    if (!uid) {
       const cleared = emptyRegistry();
       setConfigs(cleared.configs);
       setLogs(cleared.logs);
@@ -214,7 +215,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     };
 
     const unsubProfile = onSnapshot(
-      doc(db, 'users', user.uid),
+      doc(db, 'users', uid),
       (s) => {
         setProfileLoaded(true);
         if (!s.exists()) {
@@ -287,7 +288,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       onListenerError
     );
 
-    const unsubConfigs = RegistryService.subscribeToConfigs(user.uid, (data, metadata) => {
+    const unsubConfigs = RegistryService.subscribeToConfigs(uid, (data, metadata) => {
       setConfigs(data);
       setLoading(false);
       setRegistryError(null);
@@ -295,15 +296,15 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       setPendingConfigIds(metadata?.pendingIds ?? []);
     }, onListenerError);
 
-    const unsubLogs = RegistryService.subscribeToLogs(user.uid, (data) => {
+    const unsubLogs = RegistryService.subscribeToLogs(uid, (data) => {
       setLogs(data);
     }, onListenerError);
 
-    const unsubDays = RegistryService.subscribeToDays(user.uid, (data) => {
+    const unsubDays = RegistryService.subscribeToDays(uid, (data) => {
       setDayDocs(data);
     }, onListenerError);
 
-    const unsubAvatar = RegistryService.subscribeToProfileExtra(user.uid, (data) => {
+    const unsubAvatar = RegistryService.subscribeToProfileExtra(uid, (data) => {
       setAvatar(data?.avatar ?? null);
     }, () => { /* non-fatal — avatar is decorative */ });
 
@@ -314,7 +315,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       unsubDays();
       unsubAvatar();
     };
-  }, [user?.uid, listenerEpoch]);
+  }, [uid, listenerEpoch]);
 
   /**
    * Canonical (OPTION B) daily ledgers — subscribed ONLY for accounts whose
@@ -332,7 +333,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
    * `ledgersLoaded` explicitly means "no ledger expected" for LEGACY.
    */
   useEffect(() => {
-    if (!user?.uid) return undefined;
+    if (!uid) return undefined;
     if (!financialMode) return undefined;
     if (financialMode === 'LEGACY') {
       setLedgers([]);
@@ -345,13 +346,13 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     // which would render every date as unavailable/unknown money for a frame.
     setLedgers([]);
     setLedgersLoaded(false);
-    return RegistryService.subscribeToLedgers(user.uid, (data) => {
+    return RegistryService.subscribeToLedgers(uid, (data) => {
       setLedgers(data);
       setLedgersLoaded(true);
     }, () => { /* a ledger read failure must not silently imply "no ledger" */
       setLedgersLoaded(false);
     });
-  }, [user?.uid, financialMode]);
+  }, [uid, financialMode]);
 
   // Live "today" bucket — the dated day doc `today` currently points at. This
   // is the entire fix for item 1: `today` is recomputed independently of this
@@ -416,11 +417,11 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   // new date's doc, which starts empty until the first tap creates it. There
   // is nothing to "reset" — the previous date's doc simply stops changing.
   useEffect(() => {
-    if (!user || !today) return undefined;
+    if (!uid || !today) return undefined;
     latestServerCountsRef.current = {};
     publishCounterOverlay();
 
-    const unsub = RegistryService.subscribeToDay(user.uid, today, (dayData) => {
+    const unsub = RegistryService.subscribeToDay(uid, today, (dayData) => {
       const newCounts = dayData?.counts || {};
       latestServerCountsRef.current = newCounts;
 
@@ -451,10 +452,10 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     // Best-effort, idempotent: fold any day the tracking date has already
     // moved past into lifetimeAggregates. Safe to call every time `today`
     // changes or the app (re)starts — see reconcileStaleDays.
-    RegistryService.reconcileStaleDays(user.uid, today).catch(() => { /* best-effort */ });
+    RegistryService.reconcileStaleDays(uid, today).catch(() => { /* best-effort */ });
 
     return () => unsub();
-  }, [user?.uid, today, publishCounterOverlay, purgeAcknowledgedOrCanceledOps]);
+  }, [uid, today, publishCounterOverlay, purgeAcknowledgedOrCanceledOps]);
 
   const avatarValue = avatar ?? profileSettings?.legacyAvatar ?? null;
   const effectiveUnitPrice = profileSettings?.unitPrice ?? unitPrice;
@@ -574,7 +575,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   isOnlineRef.current = isOnline;
 
   const increment = useCallback(async (id) => {
-    if (!user) return;
+    if (!uid) return;
     requireOnline('increment');
     if (!guardDayStartKnown()) return;
     // Date derived from the clock at THIS moment (Android parity) — see
@@ -600,7 +601,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     publishCounterOverlay();
     try {
       await runMutation(
-        () => RegistryService.adjustCounter(user.uid, id, 1, trackingDate, effectiveUnitPrice, op.id),
+        () => RegistryService.adjustCounter(uid, id, 1, trackingDate, effectiveUnitPrice, op.id),
         'Could not update counter.'
       );
       op.settled = true;
@@ -614,10 +615,10 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
         : 'Could not save that change. Your count was restored.');
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
+  }, [uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   const decrement = useCallback(async (id) => {
-    if (!user || (activeCountsRef.current[id] || 0) <= 0) return;
+    if (!uid || (activeCountsRef.current[id] || 0) <= 0) return;
     requireOnline('decrement');
     if (!guardDayStartKnown()) return;
     const trackingDate = resolveTrackingDateForMutation();
@@ -641,7 +642,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     publishCounterOverlay();
     try {
       await runMutation(
-        () => RegistryService.adjustCounter(user.uid, id, -1, trackingDate, effectiveUnitPrice, op.id),
+        () => RegistryService.adjustCounter(uid, id, -1, trackingDate, effectiveUnitPrice, op.id),
         'Could not update counter.'
       );
       op.settled = true;
@@ -655,7 +656,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
         : 'Could not save that change. Your count was restored.');
       throw e;
     }
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
+  }, [uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   /**
    * "Close day" — a UX affordance only (see registryService.closeDay). It
@@ -665,83 +666,83 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
    * archive the wrong day.
    */
   const endDay = useCallback(async () => {
-    if (!user || isEndingDayRef.current) return;
+    if (!uid || isEndingDayRef.current) return;
     requireOnline('endDay');
     if (!guardDayStartKnown()) return;
     const closeDate = resolveTrackingDateForMutation();
     setIsEndingDay(true);
     try {
       await runMutation(
-        () => RegistryService.closeDay(user.uid, closeDate),
+        () => RegistryService.closeDay(uid, closeDate),
         'Could not close the tracking day. Try again.'
       );
     } finally {
       setIsEndingDay(false);
     }
-  }, [user?.uid, runMutation, requireOnline, resolveTrackingDateForMutation, guardDayStartKnown]);
+  }, [uid, runMutation, requireOnline, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   const updateHistoricalLog = useCallback(async (logId, counts) => {
-    if (!user) return;
+    if (!uid) return;
     requireOnline('updateHistoricalLog');
     const opId = nextOpId();
     return runMutation(
-      () => RegistryService.updateHistoricalLog(user.uid, logId, counts, effectiveUnitPrice, opId),
+      () => RegistryService.updateHistoricalLog(uid, logId, counts, effectiveUnitPrice, opId),
       'Could not update history.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
+  }, [uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
 
   const updateHistoricalDay = useCallback(async (date, counts) => {
-    if (!user) return;
+    if (!uid) return;
     requireOnline('updateHistoricalDay');
     return runMutation(
-      () => RegistryService.updateHistoricalDay(user.uid, date, counts),
+      () => RegistryService.updateHistoricalDay(uid, date, counts),
       'Could not update history.'
     );
-  }, [user?.uid, runMutation, requireOnline]);
+  }, [uid, runMutation, requireOnline]);
 
   const deleteLog = useCallback(async (logId) => {
-    if (!user) return;
+    if (!uid) return;
     requireOnline('deleteLog');
     const opId = nextOpId();
     return runMutation(
-      () => RegistryService.deleteLog(user.uid, logId, effectiveUnitPrice, opId),
+      () => RegistryService.deleteLog(uid, logId, effectiveUnitPrice, opId),
       'Could not delete entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
+  }, [uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
 
   const restoreLog = useCallback(async (log, allowUnresolved = false) => {
-    if (!user) return;
+    if (!uid) return;
     requireOnline('restoreLog');
     const opId = nextOpId();
     return runMutation(
-      () => RegistryService.restoreLog(user.uid, log, effectiveUnitPrice, opId, allowUnresolved || log?.allowUnresolved === true),
+      () => RegistryService.restoreLog(uid, log, effectiveUnitPrice, opId, allowUnresolved || log?.allowUnresolved === true),
       'Could not restore entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
+  }, [uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId]);
 
   const createManualEntry = useCallback(async (date, counts) => {
-    if (!user) return;
+    if (!uid) return;
     requireOnline('createManualEntry');
     const opId = nextOpId();
     // Compare backfill against the freshly derived day (Android parity), not
     // the possibly stale cached one.
     return runMutation(
-      () => RegistryService.createManualEntry(user.uid, date, counts, effectiveUnitPrice, resolveTrackingDateForMutation(), opId),
+      () => RegistryService.createManualEntry(uid, date, counts, effectiveUnitPrice, resolveTrackingDateForMutation(), opId),
       'Could not create entry.'
     );
-  }, [user?.uid, effectiveUnitPrice, runMutation, requireOnline, resolveTrackingDateForMutation, nextOpId]);
+  }, [uid, effectiveUnitPrice, runMutation, requireOnline, resolveTrackingDateForMutation, nextOpId]);
 
   const reorder = useCallback(async (id, dir) => {
-    if (!user) return;
+    if (!uid) return;
     requireOnline('reorder');
     const idx = configs.findIndex(x => x.id === id);
     const targetIdx = dir === 'up' ? idx - 1 : idx + 1;
     if (targetIdx < 0 || targetIdx >= configs.length) return;
     return runMutation(
-      () => RegistryService.reorderConfigs(user.uid, configs[idx], configs[targetIdx]),
+      () => RegistryService.reorderConfigs(uid, configs[idx], configs[targetIdx]),
       'Could not reorder trackers.'
     );
-  }, [user?.uid, configs, runMutation, requireOnline]);
+  }, [uid, configs, runMutation, requireOnline]);
 
   /**
    * Single-flight guard for tracker creation.
@@ -761,7 +762,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
    */
   const addInFlightRef = useRef(false);
   const addProtocol = useCallback(async (data) => {
-    if (!user) return undefined;
+    if (!uid) return undefined;
     if (addInFlightRef.current) return undefined;
     // Client-side cap matching firestore.rules' trackerSnapshots bound (AUD-005)
     // so a 9th tracker is rejected up-front instead of failing a day write.
@@ -772,38 +773,38 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     addInFlightRef.current = true;
     try {
       return await runMutation(
-        () => RegistryService.addProtocol(user.uid, { ...data, order: configs.length }),
+        () => RegistryService.addProtocol(uid, { ...data, order: configs.length }),
         'Could not add tracker.'
       );
     } finally {
       addInFlightRef.current = false;
     }
-  }, [user?.uid, configs.length, runMutation]);
+  }, [uid, configs.length, runMutation]);
 
   const updateProtocol = useCallback(async (id, data) => {
-    if (!user) return;
+    if (!uid) return;
     return runMutation(
-      () => RegistryService.updateProtocol(user.uid, id, data),
+      () => RegistryService.updateProtocol(uid, id, data),
       'Could not update tracker.'
     );
-  }, [user?.uid, runMutation]);
+  }, [uid, runMutation]);
 
   const deleteProtocol = useCallback(async (id) => {
-    if (!user) return;
+    if (!uid) return;
     requireOnline('deleteProtocol');
     return runMutation(
-      () => RegistryService.deleteProtocol(user.uid, id, resolveTrackingDateForMutation()),
+      () => RegistryService.deleteProtocol(uid, id, resolveTrackingDateForMutation()),
       'Could not delete tracker.'
     );
-  }, [user?.uid, runMutation, requireOnline, resolveTrackingDateForMutation]);
+  }, [uid, runMutation, requireOnline, resolveTrackingDateForMutation]);
 
   const updateAvatar = useCallback(async (nextAvatar) => {
-    if (!user) return;
+    if (!uid) return;
     return runMutation(
-      () => RegistryService.updateAvatar(user.uid, nextAvatar),
+      () => RegistryService.updateAvatar(uid, nextAvatar),
       'Could not update avatar.'
     );
-  }, [user?.uid, runMutation]);
+  }, [uid, runMutation]);
 
   return {
     configs, logs, dayDocs, metrics, loading, isEndingDay, isOnline, profileSettings, profileLoaded,

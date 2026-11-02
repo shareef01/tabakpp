@@ -316,7 +316,7 @@ export const HistoryScreen = React.memo(({
     } finally {
       if (activeUser.current === userId) setLoadingOlder(false);
     }
-  }, [userId, loadingOlder, olderExhausted, olderCursor, logs, daysExhausted, olderDayCursor, dayDocs]);
+  }, [userId, loadingOlder, olderExhausted, olderCursor, olderLogs, logs, daysExhausted, olderDayCursor, dayDocs]);
 
   // Aggregate by date (dated day docs + legacy archives/manual entries) — Android chart parity.
   const chartData = useMemo(

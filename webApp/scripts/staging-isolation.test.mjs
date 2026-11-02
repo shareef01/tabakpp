@@ -73,6 +73,9 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       expect(cspHeader).toBeDefined();
       expect(cspHeader.value).not.toContain('tabakpp-ff036');
       expect(cspHeader.value).not.toContain('europe-west1-tabakpp-ff036.cloudfunctions.net');
+      // ...but it must allow staging's own callable origin, or Option B could
+      // never be exercised on staging hosting.
+      expect(cspHeader.value).toContain('https://europe-west1-tabakpp-staging.cloudfunctions.net');
     });
 
     it('defines dedicated, isolated firebase.staging.firestore.json for Firestore Rules', () => {
