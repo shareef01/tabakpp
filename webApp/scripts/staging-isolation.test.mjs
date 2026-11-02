@@ -78,6 +78,17 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       expect(cspHeader.value).toContain('https://europe-west1-tabakpp-staging.cloudfunctions.net');
     });
 
+    it('limits img-src to data/blob avatars and Google profile photos (prod and staging)', () => {
+      for (const file of ['firebase.json', 'firebase.staging.json']) {
+        const config = JSON.parse(readFileSync(join(rootDir, file), 'utf8'));
+        const csp = config.hosting.headers
+          .find((h) => h.source === '/**').headers
+          .find((h) => h.key === 'Content-Security-Policy').value;
+        const imgSrc = csp.split(';').map((d) => d.trim()).find((d) => d.startsWith('img-src '));
+        expect(imgSrc, file).toBe("img-src 'self' data: blob: https://*.googleusercontent.com");
+      }
+    });
+
     it('defines dedicated, isolated firebase.staging.firestore.json for Firestore Rules', () => {
       const firestoreStagingPath = join(rootDir, 'firebase.staging.firestore.json');
       expect(existsSync(firestoreStagingPath)).toBe(true);
