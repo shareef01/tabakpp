@@ -404,8 +404,8 @@ approach can be discussed — those areas carry invariants that are easy to brea
 silently.
 
 Read **[CONTRIBUTING.md](CONTRIBUTING.md)** before your first PR: it lists the
-eight invariants a change must not break, the exact commands to run, and why the
-`react-hooks/exhaustive-deps` warnings in `npm run lint` are intentional.
+eight invariants a change must not break, the exact commands to run, and why
+hooks key on the user's `uid` rather than the `user` object.
 
 By contributing you agree that your work is licensed under the [MIT License](LICENSE).
 

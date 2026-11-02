@@ -25,7 +25,7 @@ old document means after this change, or write "no schema/interpretation change"
 
 <!-- Delete what you did not run. Paste the numbers. -->
 
-- [ ] `cd webApp && npm run lint` (only the intentional `exhaustive-deps` warnings)
+- [ ] `cd webApp && npm run lint` (no warnings)
 - [ ] `cd webApp && npm run coverage` — __ tests passed
 - [ ] `cd webApp && npm run test:contract`
 - [ ] `cd webApp && npm run build && npm run test:pwa`

@@ -56,12 +56,13 @@ cd functions && npm test
 
 ### About `npm run lint` warnings
 
-`npm run lint` reports ~17 `react-hooks/exhaustive-deps` warnings of the form
-*"missing dependency: 'user'"*. **These are intentional — do not "fix" them.**
-Those effects and callbacks key on `user?.uid`, while the `user` object is a
-Firebase `User` whose identity changes on every token refresh; depending on the
-whole object would tear down all six Firestore listeners mid-session. The
-reasoning is documented at the top of `webApp/src/hooks/useRegistry.js`.
+`npm run lint` should report **no warnings**; treat a new one as a real signal.
+Hooks that depend on the signed-in user key on a `uid` constant
+(`const uid = user?.uid`), never on `user`: the Firebase `User` object's
+identity changes on every token refresh, so depending on it would tear down all
+six Firestore listeners mid-session. Do not "fix" a warning by adding `user` to
+a dependency list. The reasoning is documented at the top of
+`webApp/src/hooks/useRegistry.js`.
 
 `react-hooks/rules-of-hooks` is an **error**: a violation there is a runtime
 crash, so it must never land.
