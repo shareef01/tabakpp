@@ -819,6 +819,12 @@ service cloud.firestore {
       match /trustedDeletedLogs/{logId} {
         allow read, write: if false;
       }
+
+      // Per-user rate-limit counters for the trusted callable. A client that
+      // could write here could reset its own limit. Explicit deny.
+      match /trustedRateLimits/{limiterId} {
+        allow read, write: if false;
+      }
     }
 
     // Everything else is denied.

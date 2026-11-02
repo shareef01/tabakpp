@@ -1040,7 +1040,10 @@ const main = async () => {
   assert.equal(await readDoc(`users/${pdUid}/trustedOperations/pd_COUNTER_INCREMENT`), null, 'no receipt for a rejected op');
   const _tomorrow = new Date(`${TODAY}T12:00:00Z`); _tomorrow.setUTCDate(_tomorrow.getUTCDate() + 1);
   r = await call(pdUser.idToken, { operationId: 'pd_close_future', type: 'DAY_CLOSE', date: _tomorrow.toISOString().slice(0, 10) });
-  assert.equal(r.body.error?.message, 'DAY_CLOSE_FUTURE_DATE', `closing a later date must be rejected: ${JSON.stringify(r.body)}`);
+  // Before 10:00 UTC "tomorrow" is beyond every zone's lead (UTC+14), so the
+  // generic FUTURE_DATE guard fires first; either way the close is refused.
+  assert.ok(['DAY_CLOSE_FUTURE_DATE', 'FUTURE_DATE'].includes(r.body.error?.message), `closing a later date must be rejected: ${JSON.stringify(r.body)}`);
+  assert.equal(await readDoc(`users/${pdUid}/days/${_tomorrow.toISOString().slice(0, 10)}`), null, 'a refused close must not write the day');
   r = await call(pdUser.idToken, { operationId: 'pd_today', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig', delta: 1 });
   assert.ok(r.ok, `a current-date tap must still succeed: ${JSON.stringify(r.body)}`);
 
@@ -1121,7 +1124,46 @@ const main = async () => {
   r = await call(rbUser.idToken, { operationId: 'rb2', ...rbPayload });
   assert.equal(r.body.error?.message, 'COUNTER_MUST_TARGET_CURRENT_DATE', `a new stale tap must be rejected: ${JSON.stringify(r.body)}`);
 
-  console.log('✅ integration: ALL 25 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
+  // 26) Editing an unstamped legacy manual log on a past date must not keep
+  //     the old-count spend (price re-derived as oldWasted / newCount and
+  //     reported resolved): the money becomes unknown instead.
+  const leUser = await signIn();
+  const leUid = leUser.localId;
+  await seedOptionB(leUid);
+  await writeDoc(`users/${leUid}/logs/LEGACY_EDIT`, {
+    id: 'LEGACY_EDIT', logDate: PAST, counts: { cig: 2 }, isManual: true, origin: 'MANUAL_ENTRY',
+    aggregateCredit: { saved: 8, wasted: 2, smokingUnits: 2, baselineSaved: 0 },
+  });
+  r = await call(leUser.idToken, { operationId: 'le1', type: 'MANUAL_UPDATE', date: PAST, logId: 'LEGACY_EDIT', counts: { cig: 5 } });
+  assert.ok(r.ok, `legacy log edit failed: ${JSON.stringify(r.body)}`);
+  const leLog = await readDoc(`users/${leUid}/logs/LEGACY_EDIT`);
+  assert.equal(leLog.counts.cig, 5);
+  assert.equal(leLog.unresolvedEconomics, true, 'an unstamped past edit must be marked unknown money');
+  assert.equal(leLog.aggregateCredit.wasted, 0, 'the old-count spend must not be kept');
+  const leLedger = await readDoc(`users/${leUid}/dailyFinancials/${PAST}`);
+  assert.equal(leLedger.canonicalCredit.wasted, 0, `stale spend leaked into the ledger: ${JSON.stringify(leLedger)}`);
+  assert.equal(leLedger.unresolvedComponents.spent, true, 'unknown spend must be reported unresolved');
+
+  // 27) Per-user rate limit: an applied operation records the limiter, and a
+  //     full window rejects new operations without writing a receipt.
+  const rlUser = await signIn();
+  const rlUid = rlUser.localId;
+  await seedOptionB(rlUid);
+  r = await call(rlUser.idToken, { operationId: 'rl1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig' });
+  assert.ok(r.ok, `rate-limited account's first op failed: ${JSON.stringify(r.body)}`);
+  const rl = await readDoc(`users/${rlUid}/trustedRateLimits/executeFinancialOperation`);
+  assert.equal(rl.minute.count, 1, `limiter not recorded: ${JSON.stringify(rl)}`);
+  await writeDoc(`users/${rlUid}/trustedRateLimits/executeFinancialOperation`, {
+    minute: { windowStart: Date.now(), count: 120 }, day: { windowStart: Date.now(), count: 120 },
+  }, true);
+  r = await call(rlUser.idToken, { operationId: 'rl2', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig' });
+  assert.equal(r.body.error?.message, 'RATE_LIMITED', `a full window must reject: ${JSON.stringify(r.body)}`);
+  assert.equal(await readDoc(`users/${rlUid}/trustedOperations/rl2`), null, 'a rejected op must not write a receipt');
+  // A replay of an already-applied op still succeeds while throttled.
+  r = await call(rlUser.idToken, { operationId: 'rl1', type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig' });
+  assert.ok(r.ok && r.body.result.applied === false, `a replay must not be throttled: ${JSON.stringify(r.body)}`);
+
+  console.log('✅ integration: ALL 27 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });

@@ -4,7 +4,7 @@ import {
   isCalendarDate, requireTrackingDate, requireId, sanitizeCounts, sanitizeHistoricalCounts, resolveDayStartHour,
   requireRecentLogin, resolveCurrentTrackingDate,
   isValidIanaTimeZone, getZonedDateTimeParts, computeTrackingDateForZone, resolveUserTrackingDate,
-  requireCounterDate, COUNTER_GRACE_MS, counterGraceTrackingDate,
+  requireCounterDate, COUNTER_GRACE_MS, counterGraceTrackingDate, consumeRateLimit, RATE_LIMITS,
 } from './validation.js';
 
 const code = (fn) => {
@@ -356,4 +356,24 @@ test('counterGraceTrackingDate is null without a zone and the boundary date with
   const edge = new Date(Date.parse('2026-10-23T06:00:00Z') + COUNTER_GRACE_MS);
   assert.equal(counterGraceTrackingDate(edge, 'UTC', 6), '2026-10-23', 'exactly COUNTER_GRACE_MS after the boundary the window has closed');
   assert.equal(counterGraceTrackingDate(new Date(edge.getTime() - 1), 'UTC', 6), '2026-10-22');
+});
+
+test('consumeRateLimit: counts per window and rejects once a window is full', () => {
+  const limits = [{ key: 'minute', windowMs: 60000, max: 3 }];
+  let s = null;
+  for (let i = 0; i < 3; i += 1) s = consumeRateLimit(s, 1000 + i, limits);
+  assert.deepEqual(s, { minute: { windowStart: 1000, count: 3 } });
+  assert.throws(() => consumeRateLimit(s, 2000, limits), (e) => e.code === 'resource-exhausted' && e.message === 'RATE_LIMITED');
+  // The window rolls over.
+  assert.deepEqual(consumeRateLimit(s, 61000, limits), { minute: { windowStart: 61000, count: 1 } });
+  // A corrupt or future-dated state never locks the account out.
+  assert.deepEqual(consumeRateLimit({ minute: { windowStart: 'x', count: 99 } }, 5, limits), { minute: { windowStart: 5, count: 1 } });
+  assert.deepEqual(consumeRateLimit({ minute: { windowStart: 9e15, count: 99 } }, 5, limits), { minute: { windowStart: 5, count: 1 } });
+});
+
+test('consumeRateLimit: the day window caps a sustained burst that each minute allows', () => {
+  const day = RATE_LIMITS.find((l) => l.key === 'day');
+  const full = { minute: { windowStart: 0, count: 0 }, day: { windowStart: 0, count: day.max } };
+  assert.throws(() => consumeRateLimit(full, 120000), (e) => e.code === 'resource-exhausted');
+  assert.equal(consumeRateLimit(full, day.windowMs).day.count, 1);
 });

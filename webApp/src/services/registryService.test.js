@@ -527,8 +527,8 @@ describe('RegistryService.deleteAllUserData', () => {
   it('wipes every subcollection firestore.rules defines under users/{uid}', () => {
     // Firestore does not cascade deletes: a subcollection added to the rules
     // but not to the wipe list silently survives account deletion.
-    // AUD-016 exception: `trustedOperations` and `trustedDeletedLogs` are
-    // server-only namespaces — clients cannot touch them (rules deny unconditionally),
+    // AUD-016 exception: `trustedOperations`, `trustedDeletedLogs` and
+    // `trustedRateLimits` are server-only namespaces — clients cannot touch them (rules deny unconditionally),
     // a LEGACY account can never own any, and locked accounts (the only ones
     // that can) delete via deleteAccountData's Admin recursiveDelete, which
     // removes the whole users/{uid} subtree. Listing them in the client wipe
@@ -539,7 +539,9 @@ describe('RegistryService.deleteAllUserData', () => {
     expect(defined.length).toBeGreaterThan(0);
     expect(defined).toContain('trustedOperations');
     expect(defined).toContain('trustedDeletedLogs');
-    const clientWipeable = defined.filter((c) => c !== 'trustedOperations' && c !== 'trustedDeletedLogs');
+    expect(defined).toContain('trustedRateLimits');
+    const serverOnly = ['trustedOperations', 'trustedDeletedLogs', 'trustedRateLimits'];
+    const clientWipeable = defined.filter((c) => !serverOnly.includes(c));
     expect([...USER_SUBCOLLECTIONS].sort()).toEqual([...clientWipeable].sort());
   });
 });

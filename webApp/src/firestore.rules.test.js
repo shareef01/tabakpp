@@ -863,6 +863,30 @@ describe('OPTION B / MIGRATING trusted-write lock (Phase 3)', () => {
     });
   });
 
+  // The callable's per-user rate limiter: a client able to write it could
+  // reset its own limit, so no client operation is permitted in any mode.
+  describe('trustedRateLimits — server-only limiter namespace', () => {
+    const limiterPath = 'users/alice/trustedRateLimits/executeFinancialOperation';
+    const limiter = { minute: { windowStart: 0, count: 120 }, day: { windowStart: 0, count: 120 } };
+
+    for (const mode of [null, 'OPTION_B', 'MIGRATING']) {
+      it(`${mode || 'LEGACY'}: owner create/reset is REJECTED`, async () => {
+        const db = await seed(mode);
+        await assertFails(setDoc(doc(db, limiterPath), { minute: { windowStart: 0, count: 0 } }));
+      });
+    }
+
+    it('owner read, update and delete are REJECTED', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), limiterPath), limiter);
+      });
+      const db = await seed('OPTION_B');
+      await assertFails(getDoc(doc(db, limiterPath)));
+      await assertFails(updateDoc(doc(db, limiterPath), { 'minute.count': 0 }));
+      await assertFails(deleteDoc(doc(db, limiterPath)));
+    });
+  });
+
   for (const mode of ['OPTION_B', 'MIGRATING']) {
     it(`${mode}: client log create is REJECTED`, async () => {
       const db = await seed(mode);
