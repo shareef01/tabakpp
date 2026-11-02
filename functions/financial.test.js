@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {
   computeDayCredit, calculateDailyFinancials, applyDelta, fingerprintOf, migrationPlan,
-  deriveSnapshotFromLog, roundMoney, stampFromConfig,
+  deriveSnapshotFromLog, manualUpdateCredit, roundMoney, stampFromConfig,
 } from './financial.js';
 
 const snap = (target, baseline, unitPrice, type = 'CIGARETTE') => ({
@@ -449,4 +449,39 @@ test('stampFromConfig: a tracker without its own price is stamped at the profile
   assert.equal(fin.unresolved.saved, false);
   // Parity with the client formula over the same stamp.
   assert.deepEqual(computeDayCredit(day.counts, day.trackerSnapshots, 0.5), fin.canonicalCredit);
+});
+
+test('manualUpdateCredit: a past-date edit of an unstamped legacy log never keeps the old-count spend', () => {
+  const cfg = [{ id: 'a', type: 'CIGARETTE', limit: 10, pricePerUnit: 0.5 }];
+  const opts = { currentTrackingDate: '2026-11-02' };
+  // Pre-stamp legacy log: 2 cigs, €1 spent, no trackerSnapshots.
+  const before = { id: 'L1', logDate: '2026-10-01', counts: { a: 2 }, aggregateCredit: { wasted: 1, saved: 4, smokingUnits: 2, baselineSaved: 0 } };
+  assert.equal(calculateDailyFinancials(null, [before], cfg, 0.5, opts).canonicalCredit.wasted, 1);
+
+  const { credit, unresolvedEconomics } = manualUpdateCredit({ a: 5 }, {}, false, 0.5);
+  assert.equal(unresolvedEconomics, true);
+  assert.equal(credit.wasted, 0);
+  const after = { ...before, counts: { a: 5 }, trackerSnapshots: {}, aggregateCredit: credit };
+  const fin = calculateDailyFinancials(null, [after], cfg, 0.5, opts);
+  // Previously €1 (price silently re-derived as €0.20) and reported as resolved.
+  assert.equal(fin.canonicalCredit.wasted, 0);
+  assert.equal(fin.unresolved.spent, true, 'unknown spend must be reported as unresolved, not as a wrong number');
+});
+
+test('manualUpdateCredit: a past-date edit re-prices from the log\'s own stamps', () => {
+  const stamps = { a: snap(10, null, 0.5) };
+  const { credit, unresolvedEconomics } = manualUpdateCredit({ a: 5 }, stamps, false, 2);
+  assert.equal(unresolvedEconomics, false);
+  assert.deepEqual(credit, { saved: 0, wasted: 2.5, smokingUnits: 5, baselineSaved: 0 });
+  // A partially stamped edit is still unknown money.
+  assert.equal(manualUpdateCredit({ a: 5, b: 1 }, stamps, false, 2).unresolvedEconomics, true);
+  // An untracked tracker needs no price.
+  assert.equal(manualUpdateCredit({ a: 1 }, { a: { ...stamps.a, unitPrice: null, isFinanciallyTracked: false } }, false, 2).unresolvedEconomics, false);
+});
+
+test('manualUpdateCredit: the current tracking date prices from its (live) stamps', () => {
+  const { credit, unresolvedEconomics } = manualUpdateCredit({ a: 3 }, { a: snap(10, null, 1) }, true, 0.5);
+  assert.equal(unresolvedEconomics, false);
+  assert.equal(credit.wasted, 3);
+  assert.equal(credit.saved, 0, 'the allowance is day-level, never per log');
 });

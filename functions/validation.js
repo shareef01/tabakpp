@@ -262,6 +262,34 @@ export const requireCounterDate = (date, currentTrackingDate, graceTrackingDate 
   throw new HttpsError('failed-precondition', 'COUNTER_MUST_TARGET_CURRENT_DATE');
 };
 
+/**
+ * Per-user ceilings for applied trusted operations. App Check is not used, so
+ * without these any signed-in account could mint unbounded receipts (one
+ * Firestore write each) with fresh operationIds. Far above human use: a fast
+ * tapper manages ~2 taps/s, and a day of real tracking is well under 1000 ops.
+ */
+export const RATE_LIMITS = [
+  { key: 'minute', windowMs: 60 * 1000, max: 120 },
+  { key: 'day', windowMs: 24 * 60 * 60 * 1000, max: 5000 },
+];
+
+/**
+ * Fixed-window counters: returns the next state, or throws resource-exhausted
+ * when any window is full. `state` is the stored limiter document (or null).
+ */
+export const consumeRateLimit = (state, nowMs, limits = RATE_LIMITS) => {
+  const next = {};
+  for (const { key, windowMs, max } of limits) {
+    const cur = state?.[key];
+    const start = Number(cur?.windowStart);
+    const fresh = !Number.isFinite(start) || nowMs < start || nowMs - start >= windowMs;
+    const count = fresh ? 0 : Number(cur?.count) || 0;
+    if (count >= max) throw new HttpsError('resource-exhausted', 'RATE_LIMITED');
+    next[key] = { windowStart: fresh ? nowMs : start, count: count + 1 };
+  }
+  return next;
+};
+
 /** The profile's day-start hour; 0 (midnight) is a valid setting, not "unset". */
 export const resolveDayStartHour = (v) => {
   const n = Number(v);

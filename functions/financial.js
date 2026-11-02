@@ -166,6 +166,29 @@ export const stampFromConfig = (cfg, defaultUnitPrice) => ({
   isPrimaryTracked: cfg?.isPrimaryTracked === true,
 });
 
+/**
+ * The own credit a MANUAL_UPDATE stores on the edited log. A past-date edit may
+ * only re-price from the log's own stamps: the old aggregateCredit describes the
+ * OLD counts, and keeping it beside new counts made an unstamped legacy log
+ * derive price = oldWasted / newCount and report that wrong spend as resolved.
+ * Without a priced stamp for every edited tracker the money becomes UNKNOWN,
+ * exactly like a MANUAL_CREATE backfill. `saved` stays 0: the allowance is
+ * day-level and credited once by calculateDailyFinancials.
+ */
+export const manualUpdateCredit = (counts, logSnapshots, isCurrent, defaultUnitPrice) => {
+  const stamped = isCurrent || Object.keys(counts || {}).every((id) => {
+    const s = (logSnapshots || {})[id];
+    return s != null && (s.unitPrice != null || s.isFinanciallyTracked === false);
+  });
+  const own = stamped
+    ? computeDayCredit(counts, logSnapshots, defaultUnitPrice)
+    : { wasted: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 };
+  return {
+    credit: { saved: 0, wasted: own.wasted, smokingUnits: own.smokingUnits, baselineSaved: 0 },
+    unresolvedEconomics: !stamped,
+  };
+};
+
 const ZERO_CREDIT = { wasted: 0, saved: 0, smokingUnits: 0, baselineSaved: 0 };
 
 /**

@@ -16,11 +16,11 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
-  calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, migrationPlan, roundMoney,
-  stampFromConfig,
+  calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, manualUpdateCredit, migrationPlan,
+  roundMoney, stampFromConfig,
 } from './financial.js';
 import {
-  MAX_COUNT, MAX_DAY_TRACKERS, counterGraceTrackingDate, requireCounterDate, requireId,
+  MAX_COUNT, MAX_DAY_TRACKERS, consumeRateLimit, counterGraceTrackingDate, requireCounterDate, requireId,
   requireRecentLogin, requireTrackingDate, resolveCurrentTrackingDate, resolveUserTrackingDate, isValidIanaTimeZone,
   sanitizeCounts, sanitizeHistoricalCounts,
 } from './validation.js';
@@ -148,8 +148,16 @@ export const executeFinancialOperation = onCall(async (request) => {
       return { applied: false, result: receiptSnap.get('result') || null };
     }
 
-    // Resolve user's tracking date and timezone authoritatively from server time + account/request timezone
+    // Only applied operations count (a replay above writes nothing). Checked
+    // after the OPTION_B guard so a LEGACY account never gets a limiter doc
+    // its client-side wipe could not delete; deleteAccountData's recursive
+    // delete removes it. Clients can never read or write it (catch-all rule).
     const now = new Date();
+    const limiterRef = userRef.collection('trustedRateLimits').doc('executeFinancialOperation');
+    const limiterSnap = await t.get(limiterRef);
+    const limiterState = consumeRateLimit(limiterSnap.exists ? limiterSnap.data() : null, now.getTime());
+
+    // Resolve user's tracking date and timezone authoritatively from server time + account/request timezone
     const { trackingDate: currentTrackingDate, timeZone: resolvedZone, shouldPersist } = resolveUserTrackingDate({
       now,
       profileTimeZone: profileSnap.get('timeZone'),
@@ -284,19 +292,13 @@ export const executeFinancialOperation = onCall(async (request) => {
           logSnapshots[id] = newSnapshots[id];
         }
       });
-      const own = isCurrent
-        ? computeDayCredit(counts, logSnapshots, defaultUnitPrice)
-        : (target.aggregateCredit || { wasted: 0, saved: 0, smokingUnits: computeDayCredit(counts, {}, defaultUnitPrice).smokingUnits, baselineSaved: 0 });
+      const { credit, unresolvedEconomics } = manualUpdateCredit(counts, logSnapshots, isCurrent, defaultUnitPrice);
       const updatedLogData = {
         ...target,
+        ...(unresolvedEconomics ? { unresolvedEconomics: true } : {}),
         counts,
         trackerSnapshots: logSnapshots,
-        aggregateCredit: {
-          saved: 0,
-          wasted: own.wasted,
-          smokingUnits: own.smokingUnits,
-          baselineSaved: 0,
-        },
+        aggregateCredit: credit,
         updatedAt: new Date(),
       };
       t.set(logRef, updatedLogData, { merge: true });
@@ -503,6 +505,7 @@ export const executeFinancialOperation = onCall(async (request) => {
     }
 
     const result = { canonicalCredit: fin.canonicalCredit, counts: fin.counts };
+    t.set(limiterRef, limiterState);
     t.set(receiptRef, {
       operationId, operationType: type, trackingDate: date,
       sourceDocumentPath: `users/${uid}/dailyFinancials/${date}`,
