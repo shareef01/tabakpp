@@ -241,7 +241,7 @@ class HistoryScreenTest {
 
 // --- Fakes (in-memory, no Firebase) ---------------------------------------
 
-private class FakeAuth : AuthRepository {
+internal class FakeAuth : AuthRepository {
     override val currentUser: Flow<User?> = flowOf(User(uid = "u1", email = "t@e.st", displayName = "Tester", photoUrl = null))
     override val isGoogleSignInAvailable: Boolean = false
     override suspend fun signInWithGoogle(): Result<Unit> = Result.success(Unit)
@@ -253,19 +253,19 @@ private class FakeAuth : AuthRepository {
     override suspend fun deleteAccount(password: String?): Result<Unit> = Result.success(Unit)
 }
 
-private class FakeSettings : LocalSettings {
+internal class FakeSettings : LocalSettings {
     private val map = mutableMapOf<String, String>()
     override fun getString(key: String, defaultValue: String): String = map[key] ?: defaultValue
     override fun putString(key: String, value: String) { map[key] = value }
 }
 
-private class FakeNetwork : NetworkObserver {
+internal class FakeNetwork : NetworkObserver {
     override val isOnline: StateFlow<Boolean> = MutableStateFlow(true)
 
 
 }
 
-private class FakeRepo(
+internal class FakeRepo(
     private val days: List<DayDocument>,
     private val logEntries: List<LogEntry>,
     private val cfg: List<TrackerConfig>,
