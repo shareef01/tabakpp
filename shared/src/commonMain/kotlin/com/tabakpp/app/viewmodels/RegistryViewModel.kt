@@ -704,7 +704,11 @@ class RegistryViewModel(
     }
 
 
-    fun increment(trackerId: String, onSuccess: () -> Unit = {}) {
+    /**
+     * [onSuccess] receives the tracking date the increment was written to, so
+     * Undo can reverse exactly that date (see [undoIncrement]).
+     */
+    fun increment(trackerId: String, onSuccess: (trackingDate: String) -> Unit = {}) {
         if (mutationBlocked()) return
         val uid = authUser.value?.uid ?: return
         if (!networkObserver.isOnline.value) {
@@ -754,7 +758,7 @@ class RegistryViewModel(
                     op.settled = true
                     purgeAcknowledgedOrCanceledOps()
                     publishCounterOverlay()
-                    onSuccess()
+                    onSuccess(trackingDate)
                 } catch (e: Exception) {
                     pendingOps.removeAll { it.id == op.id }
                     publishCounterOverlay()
@@ -764,8 +768,44 @@ class RegistryViewModel(
         }
     }
 
-    fun undoIncrement(trackerId: String) {
-        decrement(trackerId)
+    /**
+     * Reverse one increment ON THE DATE IT WAS WRITTEN TO (F-01, web parity).
+     *
+     * Undo used to call [decrement], which re-derives the tracking date at tap
+     * time: an increment at 05:59:58 (06:00 day start) undone at 06:00:02 hit
+     * the NEW day - a silent no-op if it was still empty (the 0-count guard),
+     * otherwise a decrement of the wrong day. Same date -> ordinary optimistic
+     * decrement. Earlier date -> a direct write to that date; the repository's
+     * late-write path reconciles a day that has meanwhile been closed/folded,
+     * and the trusted backend accepts the previous date within its grace window.
+     */
+    fun undoIncrement(trackerId: String, originalTrackingDate: String? = null) {
+        if (originalTrackingDate == null) return decrement(trackerId)
+        if (mutationBlocked()) return
+        val uid = authUser.value?.uid ?: return
+        if (!networkObserver.isOnline.value) {
+            setError(Exception("offline"), "Connect to the internet to update this count.")
+            return
+        }
+        if (_loading.value && userProfile.value == null) {
+            _error.value = "Still syncing your profile — try again in a moment."
+            return
+        }
+        if (trackingDateForMutation() == originalTrackingDate) return decrement(trackerId)
+        val price = userProfile.value?.unitPrice ?: 0.5
+        viewModelScope.launch {
+            counterWriteMutex.withLock {
+                try {
+                    if (optionBActive(uid)) {
+                        gateway().execute("COUNTER_DECREMENT", mapOf("operationId" to nextOpId(), "date" to originalTrackingDate, "trackerId" to trackerId, "delta" to -1.0, "defaultUnitPrice" to price))
+                    } else {
+                        registryRepository.updateLiveCounter(uid, trackerId, -1.0, originalTrackingDate, price)
+                    }
+                } catch (e: Exception) {
+                    setError(e, "Could not undo that change. Edit the day in History instead.")
+                }
+            }
+        }
     }
 
     fun decrement(trackerId: String) {
@@ -947,16 +987,22 @@ class RegistryViewModel(
         }
     }
 
-    fun addTracker(config: TrackerConfig) {
-        if (mutationBlocked()) return
-        val uid = authUser.value?.uid ?: return
+    /**
+     * Returns false when the tracker was rejected up-front (cap, blocked,
+     * signed out, blank name) so the caller keeps its form open (F-09) - the
+     * sheet used to close as if the tracker had been saved. True means the
+     * write was started; a later failure still surfaces via [error].
+     */
+    fun addTracker(config: TrackerConfig): Boolean {
+        if (mutationBlocked()) return false
+        val uid = authUser.value?.uid ?: return false
         val currentConfigs = configs.value
         // Client-side cap matching firestore.rules' trackerSnapshots bound
         // (AUD-005) so a 9th tracker is rejected up-front instead of failing a
         // later day write with permission-denied.
         if (currentConfigs.size >= MAX_TRACKERS) {
             _error.value = "You can track up to $MAX_TRACKERS counters at once."
-            return
+            return false
         }
         val nextOrder = if (currentConfigs.isEmpty()) 0 else currentConfigs.maxOf { it.order } + 1
         val sanitized = config.copy(
@@ -965,7 +1011,7 @@ class RegistryViewModel(
             pricePerUnit = config.pricePerUnit?.takeIf { it.isFinite() }?.coerceIn(0.0, 1_000.0),
             baseline = config.baseline?.coerceIn(0, 10_000)
         )
-        if (sanitized.name.isBlank()) return
+        if (sanitized.name.isBlank()) return false
 
         viewModelScope.launch {
             try {
@@ -974,6 +1020,7 @@ class RegistryViewModel(
                 setError(e, "Could not add the tracker. Try again.")
             }
         }
+        return true
     }
 
     fun updateTracker(config: TrackerConfig) {

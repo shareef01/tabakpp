@@ -550,8 +550,9 @@ fun SettingsScreen(
                 accentColor = accentColor,
                 onSave = { config ->
                     savingTracker = true
-                    viewModel.addTracker(config)
-                    showAddTrackerSheet = false
+                    // An up-front rejection (8-tracker cap) keeps the sheet open (F-09).
+                    if (viewModel.addTracker(config)) showAddTrackerSheet = false
+                    savingTracker = false
                 },
                 onDismiss = { if (!savingTracker) showAddTrackerSheet = false },
                 saving = savingTracker
@@ -787,10 +788,11 @@ fun EconomicsSettings(
     var packQty by rememberSaveable(profile?.unitsPerPack) {
         mutableStateOf((profile?.unitsPerPack ?: 20).coerceAtLeast(1).toString())
     }
-    var pouchPrice by rememberSaveable(profile?.pouchPrice) {
-        mutableStateOf(
-            profile?.pouchPrice?.takeIf { it > 0 }?.let { twoDecimals(it) } ?: "6.50"
-        )
+    // A POUCH account's saved price - including a deliberate 0 - is
+    // authoritative; `takeIf { it > 0 }` turned a saved 0 back into 6.50 on
+    // every load and the next save persisted it (F-10, web parity).
+    var pouchPrice by rememberSaveable(profile?.pouchPrice, profile?.purchaseType) {
+        mutableStateOf(pouchPriceText(profile?.purchaseType, profile?.pouchPrice))
     }
     var estimatedYield by rememberSaveable(profile?.estimatedYield) {
         mutableStateOf(
@@ -946,6 +948,16 @@ fun EconomicsSettings(
         }
     }
 }
+
+/**
+ * Pouch price shown in the economics editor (F-10). A POUCH account's saved
+ * price - including a deliberate 0 - is authoritative; "6.50" is only a
+ * suggestion for an account that never saved POUCH economics (a PACK save
+ * writes pouchPrice 0, which means "not configured", not a price).
+ */
+internal fun pouchPriceText(purchaseType: String?, pouchPrice: Double?): String =
+    if (purchaseType == "POUCH" && pouchPrice != null && pouchPrice.isFinite()) twoDecimals(pouchPrice.coerceAtLeast(0.0))
+    else "6.50"
 
 private fun twoDecimals(value: Double): String {
     val cents = kotlin.math.round(value * 100.0).toLong()

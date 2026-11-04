@@ -45,8 +45,9 @@ vi.mock('../services/registryService', () => ({
       cap.logsErr = errCb;
       return cap.unsub.logs;
     },
-    subscribeToDays: (_uid, cb) => {
+    subscribeToDays: (_uid, cb, errCb) => {
       cap.daysCb.current = cb;
+      cap.daysErr = errCb;
       return cap.unsub.days;
     },
     subscribeToDay: (_uid, _date, cb, errCb) => {
@@ -58,9 +59,10 @@ vi.mock('../services/registryService', () => ({
       cap.avatarCb.current = cb;
       return cap.unsub.avatar;
     },
-    subscribeToLedgers: (_uid, cb) => {
+    subscribeToLedgers: (_uid, cb, errCb) => {
       cap.ledgerSubs.current += 1;
       cap.ledgersCb.current = cb;
+      cap.ledgersErr = errCb;
       return cap.unsub.ledgers;
     },
     reconcileStaleDays: vi.fn(),
@@ -355,7 +357,7 @@ describe('useRegistry protocol helpers', () => {
   // two in-flight calls both pass the cap check and each creates a NEW auto-id
   // doc — a 9th tracker that no tracking day can use. The hook is now
   // single-flight, so a double-tap cannot create two trackers.
-  it('is single-flight — a second add while one is pending is a no-op', async () => {
+  it('is single-flight — a second add while one is pending shares its outcome', async () => {
     let release;
     // Only the FIRST call stays pending; later calls resolve normally.
     RegistryService.addProtocol.mockImplementationOnce(
@@ -364,13 +366,20 @@ describe('useRegistry protocol helpers', () => {
     const { result } = mountHydrated({ configs: [CIG] });
 
     let pending;
+    let second;
+    let secondSettled = false;
     act(() => { pending = result.current.addProtocol({ name: 'First' }); });
-    await act(async () => { await result.current.addProtocol({ name: 'Second' }); });
+    act(() => { second = result.current.addProtocol({ name: 'Second' }); second.then(() => { secondSettled = true; }); });
+    await act(async () => { await Promise.resolve(); });
 
     expect(RegistryService.addProtocol).toHaveBeenCalledTimes(1);
     expect(RegistryService.addProtocol).toHaveBeenCalledWith('u1', { name: 'First', order: 1 });
+    // F-09: the duplicate must NOT resolve before the real save — a caller that
+    // closes its form on resolve would otherwise close before anything saved.
+    expect(secondSettled).toBe(false);
 
-    await act(async () => { release(); await pending; });
+    await act(async () => { release(); await pending; await second; });
+    expect(secondSettled).toBe(true);
     // Guard released: a later add is accepted again.
     await act(async () => { await result.current.addProtocol({ name: 'Third' }); });
     expect(RegistryService.addProtocol).toHaveBeenCalledTimes(2);
@@ -690,10 +699,12 @@ describe('useRegistry effective-today state model (AUD-001)', () => {
 describe('useRegistry tracker limit (AUD-005)', () => {
   const eight = Array.from({ length: 8 }, (_, i) => ({ ...CIG, id: `c${i}`, order: i }));
 
-  it('refuses to add a 9th tracker and surfaces a message', async () => {
+  it('refuses to add a 9th tracker: rejects (so the form stays open) and surfaces a message', async () => {
     const { result } = mountHydrated({ configs: eight });
     await act(async () => {
-      await result.current.addProtocol({ name: 'Ninth', limit: 5, type: 'SIMPLE' });
+      // F-09: resolving here let the add form close although nothing was saved.
+      await expect(result.current.addProtocol({ name: 'Ninth', limit: 5, type: 'SIMPLE' }))
+        .rejects.toThrow('TRACKER_LIMIT');
     });
     expect(RegistryService.addProtocol).not.toHaveBeenCalled();
     expect(result.current.registryError).toMatch(/up to 8 counters/);
@@ -841,7 +852,51 @@ describe('useRegistry — OPTION_B canonical financial integration', () => {
     act(() => cap.dayCb.current(dayData({ cig: 3 })));
     // cap.ledgersCb is NOT invoked → ledgersLoaded stays false
     expect(view.result.current.canonical).toBeNull();
-    expect(view.result.current.metrics.financialSource).toBeUndefined();
+    // No legacy estimate stands in for the not-yet-loaded authoritative ledger.
+    expect(view.result.current.metrics.todayAvailable).toBe(false);
+    expect(view.result.current.metrics.spentToday).toBeNull();
+    expect(view.result.current.metrics.saved).toBeNull();
+    expect(view.result.current.metrics.financialComplete).toBe(false);
+  });
+
+  // F-03 regression: a FAILED ledger subscription used to leave canonical null,
+  // so metrics silently fell back to the legacy derivation (valid-looking money
+  // for an account whose authoritative source could not be read).
+  it('OPTION_B, ledger listener FAILS ⇒ money unavailable, error surfaced, retry re-subscribes', () => {
+    const view = renderHook((props) => useRegistry(props.user, TODAY, 0.5, null, undefined, props.epoch), { initialProps: { user: USER, epoch: 0 } });
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ financialMode: 'OPTION_B' }))));
+    act(() => cap.configsCb.current([CIG]));
+    act(() => cap.logsCb.current([]));
+    act(() => cap.daysCb.current([dayData({ cig: 3 })]));
+    act(() => cap.dayCb.current(dayData({ cig: 3 })));
+    act(() => cap.ledgersErr(new Error('permission-denied')));
+
+    const m = view.result.current.metrics;
+    expect(view.result.current.canonical).toBeNull();
+    expect(m.todayAvailable).toBe(false);
+    expect(m.spentToday).toBeNull();
+    expect(m.budgetLeft).toBeNull();
+    expect(view.result.current.syncError).toMatch(/financial ledger/);
+    expect(view.result.current.registryError).toMatch(/financial ledger/);
+
+    // Retry bumps listenerEpoch: every listener re-attaches and re-delivers.
+    const subsBefore = cap.ledgerSubs.current;
+    act(() => view.rerender({ user: USER, epoch: 1 }));
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ financialMode: 'OPTION_B' }))));
+    act(() => cap.configsCb.current([CIG]));
+    act(() => cap.logsCb.current([]));
+    act(() => cap.daysCb.current([dayData({ cig: 3 })]));
+    act(() => cap.dayCb.current(dayData({ cig: 3 })));
+    expect(cap.ledgerSubs.current).toBeGreaterThan(subsBefore);
+    act(() => cap.ledgersCb.current([LEDGER()]));
+    expect(view.result.current.syncError).toBeNull();
+    expect(view.result.current.metrics.spentToday).toBe(6);
+  });
+
+  it('LEGACY account: an unloaded ledger never blanks legacy money', () => {
+    const { result } = mountHydrated({ day: dayData({ cig: 3 }) });
+    expect(result.current.metrics.todayAvailable).not.toBe(false);
+    expect(result.current.metrics.spentToday).toBeGreaterThan(0);
   });
 
   it('unresolved savings: spending stays known, savings are flagged (not a confident zero)', () => {
@@ -902,5 +957,103 @@ describe('useRegistry — lifetime accounting + MIGRATING ownership (Task C/E)',
     expect(result.current.financialMode).toBe('MIGRATING');
     expect(result.current.metrics.financialSource).toBe('OPTION_B_CANONICAL_SOURCE');
     expect(result.current.canonical.resolve(other).source).toBe('LEGACY_FINANCIAL_SOURCE');
+  });
+});
+
+// --- 2026-11-04 audit regressions -------------------------------------------
+
+const mountWithClock = (nowRef, epoch = 0) => {
+  const view = renderHook(
+    (props) => useRegistry(props.user, props.today, 0.5, null, () => nowRef.current, props.epoch),
+    { initialProps: { user: USER, today: TODAY, epoch } },
+  );
+  act(() => cap.profileCb.current(profileSnap(defaultProfile())));
+  act(() => cap.configsCb.current([CIG]));
+  act(() => cap.logsCb.current([]));
+  act(() => cap.daysCb.current([]));
+  act(() => cap.dayCb.current(dayData()));
+  return view;
+};
+
+describe('F-01 — Undo reverses the original dated increment', () => {
+  it('increment just before the 06:00 day start, Undo just after ⇒ decrements the ORIGINAL date', async () => {
+    const now = { current: new Date('2026-07-21T05:59:58') }; // tracking date 2026-07-20
+    const { result } = mountWithClock(now);
+
+    let inc;
+    await act(async () => { inc = await result.current.increment('cig'); });
+    expect(inc.trackingDate).toBe(TODAY);
+    expect(RegistryService.adjustCounter).toHaveBeenLastCalledWith('u1', 'cig', 1, TODAY, 0.5, expect.any(String));
+
+    now.current = new Date('2026-07-21T06:00:02'); // tracking date is now 2026-07-21
+    await act(async () => { await result.current.undoIncrement('cig', inc.trackingDate); });
+
+    expect(RegistryService.adjustCounter).toHaveBeenLastCalledWith('u1', 'cig', -1, TODAY, 0.5, expect.any(String));
+    // Never the new day — that was the bug (wrong-day decrement or silent no-op).
+    expect(RegistryService.adjustCounter).not.toHaveBeenCalledWith('u1', 'cig', -1, '2026-07-21', expect.anything(), expect.anything());
+  });
+
+  it('same-day Undo uses the ordinary optimistic decrement', async () => {
+    const now = { current: new Date('2026-07-20T12:00:00') };
+    const { result } = mountWithClock(now);
+    let inc;
+    await act(async () => { inc = await result.current.increment('cig'); });
+    await act(async () => { await result.current.undoIncrement('cig', inc.trackingDate); });
+    expect(RegistryService.adjustCounter).toHaveBeenCalledTimes(2);
+    expect(RegistryService.adjustCounter).toHaveBeenLastCalledWith('u1', 'cig', -1, TODAY, 0.5, expect.any(String));
+  });
+
+  it('a cross-boundary Undo that the server rejects surfaces an error and rejects', async () => {
+    const now = { current: new Date('2026-07-21T05:59:58') };
+    const { result } = mountWithClock(now);
+    let inc;
+    await act(async () => { inc = await result.current.increment('cig'); });
+    now.current = new Date('2026-07-21T06:00:02');
+    RegistryService.adjustCounter.mockRejectedValueOnce(new Error('DAY_CLOSED'));
+    await act(async () => {
+      await expect(result.current.undoIncrement('cig', inc.trackingDate)).rejects.toThrow('DAY_CLOSED');
+    });
+    expect(result.current.registryError).toMatch(/already closed/);
+  });
+});
+
+describe('F-05 / F-02 — listener errors are independent and visible', () => {
+  it('a later healthy configs snapshot does NOT clear a logs listener failure', () => {
+    const { result } = mountHydrated();
+    act(() => cap.logsErr(new Error('unavailable')));
+    expect(result.current.syncError).toMatch(/Could not sync/);
+    act(() => cap.configsCb.current([CIG]));
+    act(() => cap.dayCb.current(dayData({ cig: 1 })));
+    expect(result.current.syncError).toMatch(/Could not sync/);
+    expect(result.current.registryError).toMatch(/Could not sync/);
+  });
+
+  it('a successful mutation does not clear an unrelated listener failure', async () => {
+    const { result } = mountHydrated();
+    act(() => cap.daysErr(new Error('unavailable')));
+    await act(async () => { await result.current.increment('cig'); });
+    expect(result.current.syncError).toMatch(/Could not sync/);
+  });
+
+  it("a live-day listener failure reaches the UI and Retry (listenerEpoch) re-subscribes", () => {
+    const now = { current: new Date('2026-07-20T12:00:00') };
+    const view = mountWithClock(now);
+    act(() => cap.dayErr(new Error('permission-denied')));
+    expect(view.result.current.syncError).toMatch(/today's counts/);
+
+    const firstDayCb = cap.dayCb.current;
+    act(() => view.rerender({ user: USER, today: TODAY, epoch: 1 }));
+    expect(cap.unsub.day).toHaveBeenCalled();
+    expect(cap.dayCb.current).not.toBe(firstDayCb);
+    act(() => cap.dayCb.current(dayData({ cig: 2 })));
+    expect(view.result.current.syncError).toBeNull();
+    expect(view.result.current.metrics.activeCounts.cig).toBe(2);
+  });
+
+  it('the listener that failed clears its own error when it recovers', () => {
+    const { result } = mountHydrated();
+    act(() => cap.logsErr(new Error('unavailable')));
+    act(() => cap.logsCb.current([]));
+    expect(result.current.syncError).toBeNull();
   });
 });

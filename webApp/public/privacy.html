@@ -19,7 +19,7 @@
         same notice, and this is the copy users actually reach from Settings.
       -->
       <h1>tabak++ privacy notice</h1>
-      <p>Last updated: 19 October 2026</p>
+      <p>Last updated: 4 November 2026</p>
       <p>tabak++ stores account identifiers, profile settings, smoking-tracker counts, history entries, financial estimates, and an optional avatar in Firebase Authentication and Cloud Firestore. This information is used only to provide sign-in, synchronization, history, and calculated insights across your devices.</p>
       <h2>Data handling</h2>
       <ul>
@@ -27,6 +27,7 @@
         <li>Sign-in uses Firebase Authentication with email and password or Google sign-in.</li>
         <li>Avatars are stored as compressed image data in your profile metadata (<code>meta/profile</code>).</li>
         <li>The app does not intentionally sell personal data or use tracker data for ads.</li>
+        <li>The web app loads the Inter font from Google Fonts (<code>fonts.googleapis.com</code>, <code>fonts.gstatic.com</code>), so your browser sends its IP address and user agent to Google when the page loads. For Google sign-in accounts without a custom avatar, the profile photo is loaded from <code>*.googleusercontent.com</code>. The Android app makes neither request.</li>
       </ul>
       <h2>Retention and deletion</h2>
       <p>Data remains until you delete individual history entries or use Delete Account in Settings. Account deletion erases your tracker configurations, history logs, daily dated records, ledgers, operation receipts and profile metadata (including the avatar), then deletes your Firebase Authentication account. Your profile document is replaced by a one-field marker (<code>{ deleting: true }</code>) keyed by your anonymous user ID. It holds no name, email or usage data, stops an old sign-in on another device from recreating data, and is kept after deletion. If deletion is interrupted, sign in again and repeat Delete Account. If final Authentication deletion fails after data erasure, the app reports the partial failure so you can retry.</p>

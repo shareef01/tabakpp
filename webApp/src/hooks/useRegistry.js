@@ -64,7 +64,28 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [loading, setLoading] = useState(!!user);
   const [isEndingDay, setIsEndingDay] = useState(false);
+  // Errors from mutations (taps, edits, guards). Cleared by the next successful
+  // mutation — never by a listener snapshot.
   const [registryError, setRegistryError] = useState(null);
+  /**
+   * Per-listener sync failures, keyed by listener ('profile', 'configs',
+   * 'logs', 'days', 'day', 'ledgers'). Each key is cleared ONLY by a success
+   * from that same listener (F-05): a healthy configs snapshot used to call
+   * `setRegistryError(null)` and wipe a fatal error raised by a different,
+   * still-dead listener, so the UI read as "in sync" while it was not.
+   */
+  const [listenerErrors, setListenerErrors] = useState({});
+  const reportListenerError = useCallback((key, message) => {
+    setListenerErrors((prev) => (prev[key] === message ? prev : { ...prev, [key]: message }));
+  }, []);
+  const clearListenerError = useCallback((key) => {
+    setListenerErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
   const [configsHasPendingWrites, setConfigsHasPendingWrites] = useState(false);
   // Ids of tracker documents with unsynced local writes (see subscribeToConfigs).
   const [pendingConfigIds, setPendingConfigIds] = useState([]);
@@ -182,6 +203,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       latestServerCountsRef.current = {};
       setLoading(false);
       setRegistryError(null);
+      setListenerErrors({});
       setProfileLoaded(false);
       return undefined;
     }
@@ -202,12 +224,13 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     setPendingConfigIds([]);
     setLoading(true);
     setRegistryError(null);
+    setListenerErrors({});
     latestServerCountsRef.current = {};
     pendingOpsRef.current = [];
 
-    const onListenerError = (err) => {
-      console.error('[REGISTRY] listener error', err);
-      setRegistryError('Could not sync registry. Check your connection and try again.');
+    const onListenerError = (key) => (err) => {
+      console.error(`[REGISTRY] ${key} listener error`, err);
+      reportListenerError(key, 'Could not sync registry. Check your connection and try again.');
       // Terminal for the loading gate: leave the skeleton so the UI can offer
       // a retry (App.jsx renders SyncFailedState when profileLoaded && error).
       setProfileLoaded(true);
@@ -218,6 +241,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       doc(db, 'users', uid),
       (s) => {
         setProfileLoaded(true);
+        clearListenerError('profile');
         if (!s.exists()) {
           setLifetimeAggregates({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
           setFinancialMode('LEGACY');
@@ -285,24 +309,26 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
           return next;
         });
       },
-      onListenerError
+      onListenerError('profile')
     );
 
     const unsubConfigs = RegistryService.subscribeToConfigs(uid, (data, metadata) => {
       setConfigs(data);
       setLoading(false);
-      setRegistryError(null);
+      clearListenerError('configs');
       setConfigsHasPendingWrites(metadata ? metadata.hasPendingWrites : false);
       setPendingConfigIds(metadata?.pendingIds ?? []);
-    }, onListenerError);
+    }, onListenerError('configs'));
 
     const unsubLogs = RegistryService.subscribeToLogs(uid, (data) => {
       setLogs(data);
-    }, onListenerError);
+      clearListenerError('logs');
+    }, onListenerError('logs'));
 
     const unsubDays = RegistryService.subscribeToDays(uid, (data) => {
       setDayDocs(data);
-    }, onListenerError);
+      clearListenerError('days');
+    }, onListenerError('days'));
 
     const unsubAvatar = RegistryService.subscribeToProfileExtra(uid, (data) => {
       setAvatar(data?.avatar ?? null);
@@ -315,7 +341,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       unsubDays();
       unsubAvatar();
     };
-  }, [uid, listenerEpoch]);
+  }, [uid, listenerEpoch, reportListenerError, clearListenerError]);
 
   /**
    * Canonical (OPTION B) daily ledgers — subscribed ONLY for accounts whose
@@ -349,10 +375,17 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     return RegistryService.subscribeToLedgers(uid, (data) => {
       setLedgers(data);
       setLedgersLoaded(true);
-    }, () => { /* a ledger read failure must not silently imply "no ledger" */
+      clearListenerError('ledgers');
+    }, (err) => {
+      // A ledger read failure must not silently imply "no ledger", and must
+      // not let the legacy estimate stand in for authoritative money (F-03):
+      // `ledgersLoaded` stays false (metrics render as unavailable) and the
+      // failure is surfaced with a retry path (listenerEpoch re-subscribes).
+      console.error('[REGISTRY] ledger listener error', err);
       setLedgersLoaded(false);
+      reportListenerError('ledgers', 'Could not load your financial ledger. Totals are unavailable until it syncs.');
     });
-  }, [uid, financialMode]);
+  }, [uid, financialMode, listenerEpoch, reportListenerError, clearListenerError]);
 
   // Live "today" bucket — the dated day doc `today` currently points at. This
   // is the entire fix for item 1: `today` is recomputed independently of this
@@ -447,7 +480,14 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
 
       purgeAcknowledgedOrCanceledOps();
       publishCounterOverlay();
-    }, (err) => console.error('[REGISTRY] day listener error', err));
+      clearListenerError('day');
+    }, (err) => {
+      // F-02: a dead live-day listener means today's counts are frozen at
+      // their last value. That must reach the user (it used to be console-only)
+      // and be recoverable (listenerEpoch, bumped by Retry, re-subscribes).
+      console.error('[REGISTRY] day listener error', err);
+      reportListenerError('day', "Could not sync today's counts. Check your connection and try again.");
+    });
 
     // Best-effort, idempotent: fold any day the tracking date has already
     // moved past into lifetimeAggregates. Safe to call every time `today`
@@ -455,7 +495,12 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
     RegistryService.reconcileStaleDays(uid, today).catch(() => { /* best-effort */ });
 
     return () => unsub();
-  }, [uid, today, publishCounterOverlay, purgeAcknowledgedOrCanceledOps]);
+  }, [uid, today, listenerEpoch, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, reportListenerError, clearListenerError]);
+
+  // First failing listener, in a stable order. Exposed separately so the UI
+  // can offer Retry (re-subscribe) for sync failures, not just Dismiss.
+  const syncError = ['profile', 'configs', 'logs', 'days', 'day', 'ledgers']
+    .map((k) => listenerErrors[k]).find(Boolean) ?? null;
 
   const avatarValue = avatar ?? profileSettings?.legacyAvatar ?? null;
   const effectiveUnitPrice = profileSettings?.unitPrice ?? unitPrice;
@@ -500,7 +545,23 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       ...base,
       budgetLeft: base.budgetLeftToday,
     };
-    if (!canonical || !canonical.ready) return merged;
+    if (!canonical || !canonical.ready) {
+      // LEGACY (or mode not resolved yet): the legacy derivation owns money.
+      if (!financialMode || financialMode === 'LEGACY') return merged;
+      // MIGRATING/OPTION_B whose canonical ledger has not loaded — or whose
+      // listener FAILED (F-03). The legacy base is not authoritative for this
+      // account, so presenting it would disguise a failed read as a valid
+      // estimate. Render money as unavailable instead.
+      merged.financialSource = FinancialSource.MISSING_LEDGER;
+      merged.financialComplete = false;
+      merged.todayAvailable = false;
+      merged.spentToday = null;
+      merged.saved = null;
+      merged.budgetLeftToday = null;
+      merged.budgetLeft = null;
+      merged.baselineSavedToday = null;
+      return merged;
+    }
     const t = canonical.today;
     merged.financialSource = t.source;
     merged.financialComplete = canonical.totals.complete && !canonical.windowTruncated;
@@ -543,7 +604,7 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       }
     }
     return merged;
-  }, [logs, configs, activeCounts, effectiveUnitPrice, today, lifetimeAggregates, dayDocs, canonical]);
+  }, [logs, configs, activeCounts, effectiveUnitPrice, today, lifetimeAggregates, dayDocs, canonical, financialMode]);
 
   const runMutation = useCallback(async (fn, fallback) => {
     try {
@@ -607,6 +668,9 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       op.settled = true;
       purgeAcknowledgedOrCanceledOps();
       publishCounterOverlay();
+      // The date this increment was written to — Undo must reverse exactly
+      // this date, not whatever the tracking date is when Undo is clicked (F-01).
+      return { trackingDate, operationId: op.id };
     } catch (e) {
       pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.id !== op.id);
       publishCounterOverlay();
@@ -616,6 +680,42 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       throw e;
     }
   }, [uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
+
+  /**
+   * Reverse one increment ON THE DATE IT WAS WRITTEN TO (F-01).
+   *
+   * Undo used to call `decrement(id)`, which re-derives the tracking date at
+   * click time. An increment at 05:59:58 with a 06:00 day start, undone at
+   * 06:00:02, therefore decremented the NEW day: a silent no-op when that day
+   * was still empty (the 0-count guard), or a decrement of the wrong day's
+   * count when it was not — the original increment survived either way.
+   *
+   * Same date as now → the ordinary optimistic decrement. Earlier date → a
+   * direct write to that date: `adjustCounter` handles both a still-open past
+   * day and one that `reconcileStaleDays` has meanwhile closed and folded
+   * (late write: credit and lifetime are reconciled in one transaction); the
+   * trusted backend accepts the previous date within its counter grace window.
+   * It is not mirrored into the live overlay, which only shows today.
+   */
+  const undoIncrement = useCallback(async (id, originalTrackingDate) => {
+    if (!uid) return undefined;
+    if (!originalTrackingDate) return decrementRef.current(id);
+    requireOnline('undoIncrement');
+    if (!guardDayStartKnown()) return undefined;
+    const fresh = resolveTrackingDateForMutation();
+    if (fresh === originalTrackingDate) return decrementRef.current(id);
+    try {
+      return await runMutation(
+        () => RegistryService.adjustCounter(uid, id, -1, originalTrackingDate, effectiveUnitPrice, nextOpId()),
+        'Could not undo that change.'
+      );
+    } catch (e) {
+      setRegistryError(e?.message === 'DAY_CLOSED_NO_SNAPSHOT' || e?.message === 'DAY_CLOSED'
+        ? mapFirestoreError(e)
+        : 'Could not undo that change. Edit the day in History instead.');
+      throw e;
+    }
+  }, [uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, resolveTrackingDateForMutation, guardDayStartKnown]);
 
   const decrement = useCallback(async (id) => {
     if (!uid || (activeCountsRef.current[id] || 0) <= 0) return;
@@ -657,6 +757,8 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
       throw e;
     }
   }, [uid, effectiveUnitPrice, runMutation, requireOnline, nextOpId, publishCounterOverlay, purgeAcknowledgedOrCanceledOps, setRegistryError, resolveTrackingDateForMutation, guardDayStartKnown]);
+  const decrementRef = useRef(decrement);
+  decrementRef.current = decrement;
 
   /**
    * "Close day" — a UX affordance only (see registryService.closeDay). It
@@ -760,25 +862,26 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
    * cross-device half is a documented limitation (rules cannot count documents,
    * so a Spark/client-only architecture cannot enforce a collection cap).
    */
-  const addInFlightRef = useRef(false);
+  const addInFlightRef = useRef(null);
   const addProtocol = useCallback(async (data) => {
     if (!uid) return undefined;
-    if (addInFlightRef.current) return undefined;
+    // A second call while one is in flight shares its outcome, so a caller
+    // that awaits it can never treat "skipped" as "saved".
+    if (addInFlightRef.current) return addInFlightRef.current;
     // Client-side cap matching firestore.rules' trackerSnapshots bound (AUD-005)
     // so a 9th tracker is rejected up-front instead of failing a day write.
+    // It REJECTS (F-09): resolving here let the add form close as if the
+    // tracker had been saved.
     if (configs.length >= MAX_TRACKERS) {
       setRegistryError(`You can track up to ${MAX_TRACKERS} counters at once.`);
-      return undefined;
+      throw new Error('TRACKER_LIMIT');
     }
-    addInFlightRef.current = true;
-    try {
-      return await runMutation(
-        () => RegistryService.addProtocol(uid, { ...data, order: configs.length }),
-        'Could not add tracker.'
-      );
-    } finally {
-      addInFlightRef.current = false;
-    }
+    const pending = runMutation(
+      () => RegistryService.addProtocol(uid, { ...data, order: configs.length }),
+      'Could not add tracker.'
+    ).finally(() => { addInFlightRef.current = null; });
+    addInFlightRef.current = pending;
+    return pending;
   }, [uid, configs.length, runMutation]);
 
   const updateProtocol = useCallback(async (id, data) => {
@@ -808,10 +911,12 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
 
   return {
     configs, logs, dayDocs, metrics, loading, isEndingDay, isOnline, profileSettings, profileLoaded,
-    avatar: avatarValue, registryError, configsHasPendingWrites, pendingConfigIds,
+    // A mutation error wins (it is the freshest, user-caused event); otherwise
+    // the first failing listener. `syncError` alone tells the UI to offer Retry.
+    avatar: avatarValue, registryError: registryError ?? syncError, syncError, configsHasPendingWrites, pendingConfigIds,
     ledgers, ledgersLoaded, financialMode, canonical,
-    clearRegistryError: () => setRegistryError(null),
-    increment, decrement, endDay, updateHistoricalLog, updateHistoricalDay, deleteLog, restoreLog,
+    clearRegistryError: () => { setRegistryError(null); setListenerErrors({}); },
+    increment, decrement, undoIncrement, endDay, updateHistoricalLog, updateHistoricalDay, deleteLog, restoreLog,
     createManualEntry, reorder, addProtocol, updateProtocol, deleteProtocol, updateAvatar
   };
 };
