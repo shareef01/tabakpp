@@ -25,10 +25,10 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
-    "firebase": "^13.0.0",
-    "framer-motion": "^14.3.0",
+    "firebase": "^13.1.0",
+    "framer-motion": "^14.9.0",
     "heic2any": "^0.0.4",
-    "lucide-react": "^1.59.0",
+    "lucide-react": "^1.66.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "recharts": "^3.10.1",
