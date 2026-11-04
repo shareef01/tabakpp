@@ -1175,7 +1175,46 @@ const main = async () => {
   assert.equal((await readDoc(`users/${hoUid}/days/${TODAY}`)).counts.cig, 1, 'the open day must be left untouched');
   assert.equal(await readDoc(`users/${hoUid}/trustedOperations/ho2`), null, 'a refused edit must not write a receipt');
 
-  console.log('✅ integration: ALL 28 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
+  // 29) W2-2: for every operation that moves lifetime (a fold, or any write to
+  //     a folded date), a replay returns the stored result and a conflicting
+  //     reuse is refused — and neither touches lifetime, the ledger or the
+  //     receipt.
+  const dcUser = await signIn();
+  const dcUid = dcUser.localId;
+  await seedOptionB(dcUid);
+  const dcState = async (opId) => ({
+    lifetime: (await readDoc(`users/${dcUid}`)).lifetimeAggregates,
+    ledger: await readDoc(`users/${dcUid}/dailyFinancials/${TODAY}`),
+    receipt: await readDoc(`users/${dcUid}/trustedOperations/${opId}`),
+  });
+  const applyThenRetry = async (op, conflicting, label) => {
+    let res = await call(dcUser.idToken, op);
+    assert.ok(res.ok && res.body.result.applied === true, `${label} failed: ${JSON.stringify(res.body)}`);
+    const after = await dcState(op.operationId);
+    assert.ok(after.receipt, `${label} wrote no receipt`);
+    res = await call(dcUser.idToken, op);
+    assert.ok(res.ok && res.body.result.applied === false, `${label} replay must not apply: ${JSON.stringify(res.body)}`);
+    assert.deepEqual(res.body.result.result, after.receipt.result, `${label} replay must return the stored result`);
+    assert.deepEqual(await dcState(op.operationId), after, `${label} replay changed lifetime/ledger/receipt`);
+    res = await call(dcUser.idToken, { ...op, ...conflicting });
+    assert.equal(res.body.error?.message, 'OPERATION_CONFLICT', `${label} conflicting reuse must be refused: ${JSON.stringify(res.body)}`);
+    assert.deepEqual(await dcState(op.operationId), after, `${label} conflict changed lifetime/ledger/receipt`);
+    return after;
+  };
+  for (const id of ['dc_t1', 'dc_t2']) {
+    r = await call(dcUser.idToken, { operationId: id, type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig' });
+    assert.ok(r.ok, `seed tap failed: ${JSON.stringify(r.body)}`);
+  }
+  let dc = await applyThenRetry({ operationId: 'dc_close', type: 'DAY_CLOSE', date: TODAY }, { counts: { cig: 1 } }, 'DAY_CLOSE');
+  assert.equal(dc.lifetime.wasted, 2, 'the fold must add the day once');
+  dc = await applyThenRetry({ operationId: 'dc_hist', type: 'HISTORICAL_DAY_UPDATE', date: TODAY, counts: { cig: 4 } }, { counts: { cig: 6 } }, 'HISTORICAL_DAY_UPDATE');
+  assert.equal(dc.lifetime.wasted, 4, 'a folded-day edit must net-adjust lifetime once');
+  dc = await applyThenRetry({ operationId: 'dc_mc', type: 'MANUAL_CREATE', date: TODAY, logId: 'DC_LOG', counts: { cig: 1 } }, { counts: { cig: 3 } }, 'MANUAL_CREATE');
+  assert.equal(dc.lifetime.wasted, 5, 'a late entry on a folded day must add once');
+  dc = await applyThenRetry({ operationId: 'dc_md', type: 'MANUAL_DELETE', date: TODAY, logId: 'DC_LOG' }, { logId: 'OTHER_LOG' }, 'MANUAL_DELETE');
+  assert.equal(dc.lifetime.wasted, 4, 'deleting the late entry must subtract once');
+
+  console.log('✅ integration: ALL 29 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });
