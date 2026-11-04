@@ -622,6 +622,43 @@ describe('H-01 Concurrency & Day Rollover Invariants', () => {
     expect(result.current.metrics.activeCounts.cig || 0).toBe(0);
   });
 
+  // A-2: when `today` advances by the 30-second tick (a prop change, not a
+  // tap), the previous date's settled-but-unconfirmed ops must be dropped.
+  // Left behind, the date-blind purge paired them with today's ops, so a
+  // stale yesterday increment "cancelled" a fresh today decrement and the
+  // count jumped back up until the next snapshot.
+  it('Scenario I: a tick-driven rollover drops the previous date\'s ops', async () => {
+    const TOMORROW = '2026-07-21';
+    let pinned = new Date('2026-07-20T23:59:00');
+    const { result, rerender } = renderHook(
+      (props) => useRegistry(props.user, props.today, 0.5, null, () => pinned),
+      { initialProps: { user: USER, today: TODAY } }
+    );
+    act(() => cap.profileCb.current(profileSnap(defaultProfile({ dayStartHour: 0 }))));
+    act(() => cap.configsCb.current([CIG]));
+    act(() => cap.logsCb.current([]));
+    act(() => cap.daysCb.current([]));
+    act(() => cap.dayCb.current(dayData({ cig: 5 })));
+    act(() => cap.avatarCb.current({ avatar: null }));
+
+    // Yesterday's tap settles, but its snapshot never confirms it.
+    await act(async () => { await result.current.increment('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(6);
+
+    // The 30-second tick moves `today` on — no tap involved.
+    act(() => {
+      pinned = new Date('2026-07-21T00:00:30');
+      rerender({ user: USER, today: TOMORROW });
+    });
+    act(() => cap.dayCb.current({ date: TOMORROW, counts: { cig: 2 }, trackerSnapshots: {}, status: 'open' }));
+    expect(result.current.metrics.activeCounts.cig).toBe(2);
+
+    // Today's decrement settles before its snapshot arrives: the overlay
+    // must keep showing it, not cancel it against yesterday's increment.
+    await act(async () => { await result.current.decrement('cig'); });
+    expect(result.current.metrics.activeCounts.cig).toBe(1);
+  });
+
   it('Scenario H: mutation failure cleanly rolls back display', async () => {
     RegistryService.adjustCounter.mockRejectedValueOnce(new Error('Network error'));
     const { result } = mountHydrated({ day: dayData({ cig: 5 }) });
