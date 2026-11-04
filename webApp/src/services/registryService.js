@@ -1300,9 +1300,37 @@ export const RegistryService = {
    * Uses full-paginated reads, NOT the bounded live-query collections
    * (limit(1200) for logs, limit(400) for days). Strictly read-only.
    */
-  readCompleteExportSnapshot: async (uid) => {
+  /**
+   * Consistency (F-06): the web SDK has no multi-query snapshot read, so the
+   * collections below are read one after another. Every mutation that moves
+   * money between "folded" and "open" (closing a day, editing a closed day,
+   * manual-log create/edit/delete) also rewrites `profile.lifetimeAggregates`,
+   * so the profile is re-read afterwards: if those totals (or the financial
+   * mode) moved, another device changed the account mid-export and the read
+   * is retried, up to `maxAttempts`. Open-day counter taps don't move the
+   * profile and aren't detected; they never touch lifetime totals, so
+   * they can't make the export internally inconsistent. `consistency` reports
+   * whether a stable read was achieved.
+   */
+  readCompleteExportSnapshot: async (uid, { maxAttempts = 3 } = {}) => {
     if (!uid) throw new Error('INVALID_REF');
+    const fingerprint = (p) => JSON.stringify([p?.lifetimeAggregates ?? null, p?.financialMode ?? null, p?.deleting ?? null]);
+    let snapshot = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      snapshot = await readExportSnapshotOnce(uid);
+      const after = await getDoc(doc(db, 'users', uid));
+      const profileAfter = after.exists() ? after.data() : null;
+      if (fingerprint(profileAfter) === fingerprint(snapshot.profile)) {
+        return { ...snapshot, consistency: { stable: true, attempts: attempt } };
+      }
+    }
+    return { ...snapshot, consistency: { stable: false, attempts: maxAttempts } };
+  },
+};
 
+/** One sequential, unbounded, read-only pass over every exported collection. */
+async function readExportSnapshotOnce(uid) {
+  {
     // Profile (single doc)
     const profileSnap = await getDoc(doc(db, 'users', uid));
     const profile = profileSnap.exists() ? profileSnap.data() : null;
@@ -1338,8 +1366,8 @@ export const RegistryService = {
       financialMode: profile?.financialMode || 'LEGACY',
       ledgers,
     };
-  },
-};
+  }
+}
 
 async function getConfigsOnce(uid) {
   const snap = await getDocs(query(collection(db, 'users', uid, 'configs'), orderBy('order', 'asc')));

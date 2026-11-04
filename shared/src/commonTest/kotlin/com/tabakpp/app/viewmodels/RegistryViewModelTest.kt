@@ -149,7 +149,12 @@ private class FakeRegistryRepository : RegistryRepository {
     override fun subscribeToFinancialMode(uid: String): Flow<String> = financialModeFlow
     val adjustCounterAtomicCalls = mutableListOf<LiveCounterCall>()
     var modeReads = 0
-    override suspend fun getFinancialMode(uid: String): String { modeReads++; return financialMode }
+    var modeReadFails = false
+    override suspend fun getFinancialMode(uid: String): String {
+        modeReads++
+        if (modeReadFails) throw IllegalStateException("permission-denied")
+        return financialMode
+    }
     override suspend fun adjustCounterAtomic(uid: String, date: String, trackerId: String, delta: Double, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) { maybeFail(); adjustCounterAtomicCalls.add(LiveCounterCall(uid, trackerId, delta, date, defaultUnitPrice)) }
     override suspend fun foldLedgerIntoLifetime(uid: String, date: String) { maybeFail() }
     override suspend fun addConfig(uid: String, config: TrackerConfig) { maybeFail(); addConfigCalls.add(uid to config) }
@@ -1152,6 +1157,48 @@ class RegistryViewModelTest {
         j.cancel()
     }
 
+    // A-1: a failed mode read must not silently become LEGACY money.
+    @Test
+    fun unreadableFinancialMode_marksTodayUnavailable_notLegacy() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(unitPrice = 1.0, lifetimeAggregates = LifetimeAggregates(saved = 3.0, wasted = 0.0, smokingUnits = 0.0, baselineSaved = 5.0))
+        reg.modeReadFails = true
+        reg.logsFlow.value = listOf(LogEntry(id = "A", logDate = vm.trackingDay.value, counts = mapOf("cig" to 1.0), origin = "MANUAL_ENTRY"))
+        val metrics = mutableListOf<SmokingCalculator.GlobalMetrics?>()
+        val canon = mutableListOf<RegistryViewModel.CanonicalFinancials?>()
+        val j1 = bg.launch { vm.metrics.collect { metrics.add(it) } }
+        val j2 = bg.launch { vm.canonical.collect { canon.add(it) } }
+        val j3 = bg.launch { vm.financialMode.collect {} }
+        scheduler.runCurrent()
+        assertEquals(UNKNOWN_FINANCIAL_MODE, vm.financialMode.value)
+        assertEquals(FinancialSource.MISSING_CANONICAL_LEDGER, canon.last()!!.today.source)
+        kotlin.test.assertFalse(canon.last()!!.totals.complete)
+        val m = metrics.last()!!
+        kotlin.test.assertFalse(m.todayAvailable)
+        assertEquals(3.0, m.savedLifetime, 0.001) // closed days only, no legacy open-day credit
+        assertEquals(5.0, m.baselineSavedLifetime, 0.001)
+        kotlin.test.assertNotNull(vm.error.value)
+        j1.cancel(); j2.cancel(); j3.cancel()
+    }
+
+    @Test
+    fun financialMode_isReRead_whenTheScreenSubscribesAgain() {
+        val (vm, reg, _) = build()
+        reg.modeReadFails = true
+        val j = bg.launch { vm.financialMode.collect {} }
+        scheduler.runCurrent()
+        assertEquals(UNKNOWN_FINANCIAL_MODE, vm.financialMode.value)
+        j.cancel()
+        reg.modeReadFails = false
+        reg.financialMode = "OPTION_B"
+        scheduler.advanceTimeBy(6000) // WhileSubscribed(5000) drops the stale value
+        scheduler.runCurrent()
+        val j2 = bg.launch { vm.financialMode.collect {} }
+        scheduler.runCurrent()
+        assertEquals("OPTION_B", vm.financialMode.value)
+        j2.cancel()
+    }
+
     @Test
     fun metrics_doNotDoubleCountAFoldedLedger() {
         val (vm, reg, _) = build()
@@ -1457,5 +1504,71 @@ class RegistryViewModelTest {
         assertEquals(FinancialSource.MISSING_CANONICAL_LEDGER, vm.canonical.value?.today?.source)
         val metrics = vm.metrics.value!!
         assertFalse(metrics.todayAvailable, "todayAvailable must be false when canonical ledger is missing")
+    }
+
+    // --- 2026-11-04 audit regressions (web parity) ----------------------------
+
+    @Test
+    fun undoIncrement_acrossDayStartBoundary_reversesTheOriginalDate() {
+        // F-01: increment at 05:59:58 with a 06:00 day start (tracking day
+        // 2026-03-07), Undo at 06:00:02 (tracking day 2026-03-08). The undo must
+        // hit 2026-03-07; it used to re-derive the date and hit 2026-03-08.
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-03-08T05:59:58Z"))
+        val (vm, reg, _) = build(clock = clock)
+        reg.profileFlow.value = UserProfile(dayStartHour = 6)
+        reg.dayFlow.value = DayDocument(date = "2026-03-07", counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+
+        var landedOn: String? = null
+        vm.increment("cig") { landedOn = it }
+        scheduler.runCurrent()
+        assertEquals("2026-03-07", landedOn)
+
+        clock.now = kotlinx.datetime.Instant.parse("2026-03-08T06:00:02Z")
+        vm.undoIncrement("cig", landedOn)
+        scheduler.runCurrent()
+
+        assertEquals(2, reg.liveCounterCalls.size)
+        val undo = reg.liveCounterCalls.last()
+        assertEquals(-1.0, undo.delta)
+        assertEquals("2026-03-07", undo.trackingDate)
+        assertNull(vm.error.value)
+    }
+
+    @Test
+    fun undoIncrement_sameDay_usesOrdinaryDecrement() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+        var landedOn: String? = null
+        vm.increment("cig") { landedOn = it }
+        scheduler.runCurrent()
+        vm.undoIncrement("cig", landedOn)
+        scheduler.runCurrent()
+        assertEquals(2, reg.liveCounterCalls.size)
+        assertEquals(-1.0, reg.liveCounterCalls.last().delta)
+        assertEquals(landedOn, reg.liveCounterCalls.last().trackingDate)
+        assertEquals(0.0, vm.activeCounts.value["cig"] ?: 0.0)
+    }
+
+    @Test
+    fun addTracker_atCap_returnsFalseSoTheSheetStaysOpen() {
+        // F-09: the add sheet closed as if saved although the cap rejected it.
+        val (vm, reg, _) = build()
+        bg.launch { vm.configs.collect {} }
+        reg.configsFlow.value = (0 until 8).map { TrackerConfig(id = "t$it", name = "T$it", limit = 10, order = it) }
+        scheduler.runCurrent()
+        assertFalse(vm.addTracker(TrackerConfig(id = "", name = "Ninth", limit = 5, order = 0)))
+        scheduler.runCurrent()
+        assertTrue(reg.addConfigCalls.isEmpty())
+        assertNotNull(vm.error.value)
+    }
+
+    @Test
+    fun addTracker_belowCap_returnsTrue() {
+        val (vm, reg, _) = build()
+        assertTrue(vm.addTracker(TrackerConfig(id = "", name = "First", limit = 5, order = 0)))
+        scheduler.runCurrent()
+        assertEquals(1, reg.addConfigCalls.size)
     }
 }

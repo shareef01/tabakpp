@@ -761,3 +761,58 @@ The October 2026 repository remediation addresses all confirmed financial accoun
 ### 8. Explicit Zero Handling & Monetary Precision (FIX 14 & FIX 15)
 - All price and count resolution paths treat `0` as an explicit valid value rather than falling back to default prices via truthiness operators.
 - `roundMoney` ensures half-cent upward rounding and 2-decimal monetary precision across Cloud Functions, web client, and shared contracts.
+
+## 27. Closed-day behaviour by architecture, and other read/write guarantees (audit 2026-11-04)
+
+These differences are **existing, intentional product behaviour**, recorded here
+so they are not mistaken for parity bugs. Nothing in this audit changed them.
+
+| Operation on a date | LEGACY (deployed) | OPTION_B (not deployed) |
+|---|---|---|
+| Counter +/− on a **closed** day | Allowed as a *late write* for trackers stamped that day (`applyLateCounterWrite`); credit recomputed from the frozen snapshot; a folded day moves `lifetimeAggregates` by the exact delta. A tracker with no snapshot that day fails `DAY_CLOSED_NO_SNAPSHOT`. | Rejected: `failed-precondition: DAY_CLOSED`. |
+| Counter +/− on the **previous** (still open) day | Allowed for any past date. | Allowed only for the date `COUNTER_GRACE_MS` (5 min) ago; otherwise rejected. |
+| History edit (`updateHistoricalDay`) of an **open** day | Allowed. | Rejected — `HISTORICAL_DAY_UPDATE` only edits closed days. |
+| History edit of a **closed** day | Allowed, lifetime reconciled by delta. | Allowed, ledger + lifetime reconciled server-side. |
+
+Consequence for an eventual LEGACY → OPTION_B migration: users lose late taps
+on closed days and open-day history edits. That is a product decision, not a
+side effect, and needs approval before activation.
+
+**Undo** (web `undoIncrement`, Android `undoIncrement`) reverses the increment
+on the tracking date the increment was **written to**, not the date at the time
+Undo is clicked. Across a day boundary this is a write to the previous date —
+an open past day in LEGACY, or a late write if `reconcileStaleDays` closed it
+meanwhile. In OPTION_B it succeeds within the grace window while the previous
+day is still open; otherwise the server's rejection is shown and the user is
+pointed to History.
+
+**Ledger unavailable.** For a MIGRATING/OPTION_B account, while the canonical
+ledger has not loaded or its listener failed, the web client renders money as
+unavailable (`todayAvailable: false`, money fields `null`) and surfaces a sync
+error with Retry. It never substitutes the legacy derivation.
+
+**Mode unreadable (Android).** If `users/{uid}.financialMode` cannot be read,
+`RegistryViewModel.financialMode` is `UNKNOWN` (not `LEGACY`) and an error is
+shown. Today's money is unavailable (`todayAvailable = false`) and lifetime
+shows closed-day `lifetimeAggregates` only, so an OPTION_B account never
+displays legacy-derived money. Write routing already re-read the mode and is
+unchanged. The mode is read again when the screen resubscribes.
+
+**Export consistency.** `readCompleteExportSnapshot` reads collections
+sequentially (the web SDK has no multi-query snapshot). It re-reads the profile
+afterwards and retries (up to 3 passes) when `lifetimeAggregates`,
+`financialMode` or `deleting` changed mid-export; the result carries
+`consistency: { stable, attempts }` and the UI warns when `stable` is false.
+Open-day counter taps are not detected, but they never touch lifetime totals.
+`financialOperations` receipts are not exported: no deployed code path writes
+them (the trusted backend's receipts live in the client-unreadable
+`trustedOperations`). Android's export does not include `dailyFinancials`;
+that matters only once OPTION_B is deployed.
+
+**Tracker cap across devices.** Rules cannot count documents, so the 8-tracker
+cap is enforced client-side only (pre-check + single-flight). Two devices adding
+a tracker at the same moment can still produce a 9th config. The failure is
+bounded and visible: no day can stamp a 9th tracker (`trackerSnapshots` ≤ 8 in
+rules, `TRACKER_LIMIT` in the client), and the user is told to remove one.
+Enforcing it in storage needs either a server or slot-keyed config IDs (a data
+migration), and neither is approved.

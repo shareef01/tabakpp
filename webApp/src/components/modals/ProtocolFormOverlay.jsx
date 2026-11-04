@@ -6,6 +6,7 @@ import { cn } from '../../utils/utils';
 import { sanitizeTrackerName, MAX_TRACKER_NAME } from '../../utils/security';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
+import { mapFirestoreError } from '../../utils/errorHandlers';
 
 const SELECTABLE_TYPES = [
   { id: 'CIGARETTE', label: 'Cigarette', icon: Cigarette },
@@ -75,8 +76,10 @@ export const ProtocolFormOverlay = ({ isOpen, onClose, onApply, title, initialDa
         pricePerUnit: Number.isFinite(parsedPrice) ? parsedPrice : 0.5,
         baseline: hasBaseline && Number.isFinite(parsedBaseline) ? parsedBaseline : null
       });
-    } catch {
-      setError('Could not save counter. Check your connection and try again.');
+    } catch (e) {
+      // Keep the form open with the real reason (e.g. the 8-tracker cap),
+      // not a generic connectivity message (F-09).
+      setError(mapFirestoreError(e, 'Could not save counter. Check your connection and try again.'));
     } finally {
       setSaving(false);
     }

@@ -63,6 +63,8 @@ fun TrackScreen(
     var showEndDayConfirm by rememberSaveable { mutableStateOf(false) }
 
     var lastLoggedTrackerId by remember { mutableStateOf<String?>(null) }
+    // The date the last increment landed on - Undo reverses THAT date (F-01).
+    var lastLoggedTrackingDate by remember { mutableStateOf<String?>(null) }
     var undoPillVisible by remember { mutableStateOf(false) }
 
     // Derive onboarding state from real product state.
@@ -99,8 +101,9 @@ fun TrackScreen(
                 accentColor = accentColor,
                 widgetSize = profile?.widgetSize ?: com.tabakpp.app.data.WidgetSize.MEDIUM,
                 onIncrement = { config ->
-                    viewModel.increment(config.id) {
+                    viewModel.increment(config.id) { trackingDate ->
                         lastLoggedTrackerId = config.id
+                        lastLoggedTrackingDate = trackingDate
                         undoPillVisible = true
                     }
                 },
@@ -140,7 +143,7 @@ fun TrackScreen(
             ) {
                 Surface(
                     onClick = {
-                        lastLoggedTrackerId?.let { viewModel.undoIncrement(it) }
+                        lastLoggedTrackerId?.let { viewModel.undoIncrement(it, lastLoggedTrackingDate) }
                         undoPillVisible = false
                     },
                     modifier = Modifier
@@ -180,12 +183,13 @@ fun TrackScreen(
                 accentColor = accentColor,
                 onSave = { config ->
                     saving = true
-                    viewModel.addTracker(config)
-                    // Close the sheet immediately — the local listener will pick up
-                    // the new config (plain write, visible at LOCAL_PENDING).
+                    // Close the sheet once the write has started — the local listener
+                    // will pick up the new config (plain write, visible at LOCAL_PENDING).
                     // If the write is rejected, the listener removes it and the error
                     // surfaces via Snackbar. This avoids hanging while offline (item 35).
-                    showAddTrackerSheet = false
+                    // An up-front rejection (8-tracker cap) keeps the sheet open (F-09).
+                    if (viewModel.addTracker(config)) showAddTrackerSheet = false
+                    else saving = false
                 },
                 onDismiss = { showAddTrackerSheet = false },
                 saving = saving
