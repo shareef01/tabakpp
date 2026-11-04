@@ -1266,10 +1266,12 @@ class RegistryViewModel(
                 val result = when (format) {
                     ExportFormat.JSON -> ExportBuilder.buildJson(
                         snapshot.profile, snapshot.profileMeta, snapshot.configs,
-                        snapshot.days, snapshot.logs
+                        snapshot.days, snapshot.logs,
+                        financialMode = snapshot.sourceFinancialMode, ledgers = snapshot.ledgers,
                     )
                     ExportFormat.CSV -> ExportBuilder.buildCsv(
-                        snapshot.profile, snapshot.configs, snapshot.days, snapshot.logs, unitPrice
+                        snapshot.profile, snapshot.configs, snapshot.days, snapshot.logs, unitPrice,
+                        financialMode = snapshot.sourceFinancialMode, ledgers = snapshot.ledgers,
                     )
                 }
                 _exportState.value = ExportState.Ready(result, format)
