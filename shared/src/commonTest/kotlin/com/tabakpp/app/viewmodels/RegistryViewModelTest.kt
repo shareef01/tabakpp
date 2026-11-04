@@ -1458,4 +1458,70 @@ class RegistryViewModelTest {
         val metrics = vm.metrics.value!!
         assertFalse(metrics.todayAvailable, "todayAvailable must be false when canonical ledger is missing")
     }
+
+    // --- 2026-11-04 audit regressions (web parity) ----------------------------
+
+    @Test
+    fun undoIncrement_acrossDayStartBoundary_reversesTheOriginalDate() {
+        // F-01: increment at 05:59:58 with a 06:00 day start (tracking day
+        // 2026-03-07), Undo at 06:00:02 (tracking day 2026-03-08). The undo must
+        // hit 2026-03-07; it used to re-derive the date and hit 2026-03-08.
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-03-08T05:59:58Z"))
+        val (vm, reg, _) = build(clock = clock)
+        reg.profileFlow.value = UserProfile(dayStartHour = 6)
+        reg.dayFlow.value = DayDocument(date = "2026-03-07", counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+
+        var landedOn: String? = null
+        vm.increment("cig") { landedOn = it }
+        scheduler.runCurrent()
+        assertEquals("2026-03-07", landedOn)
+
+        clock.now = kotlinx.datetime.Instant.parse("2026-03-08T06:00:02Z")
+        vm.undoIncrement("cig", landedOn)
+        scheduler.runCurrent()
+
+        assertEquals(2, reg.liveCounterCalls.size)
+        val undo = reg.liveCounterCalls.last()
+        assertEquals(-1.0, undo.delta)
+        assertEquals("2026-03-07", undo.trackingDate)
+        assertNull(vm.error.value)
+    }
+
+    @Test
+    fun undoIncrement_sameDay_usesOrdinaryDecrement() {
+        val (vm, reg, _) = build()
+        reg.dayFlow.value = DayDocument(counts = mapOf("cig" to 0.0))
+        scheduler.runCurrent()
+        var landedOn: String? = null
+        vm.increment("cig") { landedOn = it }
+        scheduler.runCurrent()
+        vm.undoIncrement("cig", landedOn)
+        scheduler.runCurrent()
+        assertEquals(2, reg.liveCounterCalls.size)
+        assertEquals(-1.0, reg.liveCounterCalls.last().delta)
+        assertEquals(landedOn, reg.liveCounterCalls.last().trackingDate)
+        assertEquals(0.0, vm.activeCounts.value["cig"] ?: 0.0)
+    }
+
+    @Test
+    fun addTracker_atCap_returnsFalseSoTheSheetStaysOpen() {
+        // F-09: the add sheet closed as if saved although the cap rejected it.
+        val (vm, reg, _) = build()
+        bg.launch { vm.configs.collect {} }
+        reg.configsFlow.value = (0 until 8).map { TrackerConfig(id = "t$it", name = "T$it", limit = 10, order = it) }
+        scheduler.runCurrent()
+        assertFalse(vm.addTracker(TrackerConfig(id = "", name = "Ninth", limit = 5, order = 0)))
+        scheduler.runCurrent()
+        assertTrue(reg.addConfigCalls.isEmpty())
+        assertNotNull(vm.error.value)
+    }
+
+    @Test
+    fun addTracker_belowCap_returnsTrue() {
+        val (vm, reg, _) = build()
+        assertTrue(vm.addTracker(TrackerConfig(id = "", name = "First", limit = 5, order = 0)))
+        scheduler.runCurrent()
+        assertEquals(1, reg.addConfigCalls.size)
+    }
 }

@@ -29,6 +29,16 @@ const DENSITY_OPTIONS = [
   { id: 'LARGE', label: 'Spacious', icon: Square },
 ];
 
+/**
+ * Pouch price shown in the editor. A POUCH account's saved price — including
+ * a deliberate 0 — is authoritative; 6.50 is only a starting suggestion for an
+ * account that has never saved POUCH economics (a PACK save writes pouchPrice 0).
+ * Exported for tests.
+ */
+export const defaultPouchPrice = (settings) => (
+  settings?.purchaseType === 'POUCH' && Number.isFinite(settings?.pouchPrice) ? settings.pouchPrice : 6.50
+);
+
 const formatDayStart = (hour) => {
   if (hour === 0) return '12:00 AM';
   if (hour < 12) return `${hour}:00 AM`;
@@ -136,7 +146,10 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
   );
   const packQtyRef = useRef(packQty);
   packQtyRef.current = packQty;
-  const [pouchPrice, setPouchPrice] = useState(settings.pouchPrice || 6.50);
+  // `||` turned a deliberately saved pouch price of 0 back into 6.50 on every
+  // load, and the next save persisted 6.50 (F-10). The 6.50 default is only a
+  // suggestion for accounts that have not configured POUCH economics yet.
+  const [pouchPrice, setPouchPrice] = useState(defaultPouchPrice(settings));
   const [estimatedYield, setEstimatedYield] = useState(settings.estimatedYield || 60);
   const [pendingDayStart, setPendingDayStart] = useState(settings.dayStartHour ?? 6);
 
@@ -156,7 +169,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
     const mode = settings.purchaseType === 'POUCH' ? 'POUCH' : 'PACK';
     setEcoMode(mode);
     if (mode === 'POUCH') {
-      setPouchPrice(settings.pouchPrice || 6.50);
+      setPouchPrice(defaultPouchPrice({ purchaseType: settings.purchaseType, pouchPrice: settings.pouchPrice }));
       setEstimatedYield(settings.estimatedYield || 60);
     } else if (settings.unitPrice != null) {
       // Derive from the persisted quantity, not a hardcoded 20 — otherwise a
@@ -368,7 +381,7 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
         filename = `tabakpp-data-${new Date().toISOString().slice(0, 10)}.json`;
         mimeType = 'application/json';
       } else {
-        content = buildCsv(snapshot, settings.unitPrice || 0.5);
+        content = buildCsv(snapshot, settings.unitPrice ?? 0.5);
         filename = `tabakpp-history-${new Date().toISOString().slice(0, 10)}.csv`;
         mimeType = 'text/csv';
       }
@@ -382,7 +395,12 @@ export const SettingsScreen = ({ configs, user, settings, onAdd, onReo, onEditP,
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      setNotification({ title: 'Export', message: `${filename} downloaded.`, type: 'success' });
+      // F-06: never claim a clean export when the account kept changing mid-read.
+      if (snapshot.consistency && snapshot.consistency.stable === false) {
+        setNotification({ title: 'Export', message: `${filename} downloaded, but your data changed while exporting (another device?). Export again for a consistent copy.`, type: 'error' });
+      } else {
+        setNotification({ title: 'Export', message: `${filename} downloaded.`, type: 'success' });
+      }
     } catch (err) {
       console.error(err);
       setExportError(err?.message || 'Could not export your data. Try again.');

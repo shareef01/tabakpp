@@ -137,3 +137,16 @@ describe('ProtocolFormOverlay', () => {
     });
   });
 });
+
+describe('ProtocolFormOverlay — F-09 rejected save', () => {
+  it('stays open and shows the tracker-cap reason when onApply rejects with TRACKER_LIMIT', async () => {
+    const onClose = vi.fn();
+    const onApply = vi.fn().mockRejectedValue(new Error('TRACKER_LIMIT'));
+    render(<ProtocolFormOverlay isOpen onClose={onClose} onApply={onApply} title="Create Counter" />);
+    fireEvent.change(screen.getByLabelText(/counter name/i), { target: { value: 'Ninth' } });
+    fireEvent.click(screen.getByRole('button', { name: /save|create|deploy|apply/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/up to 8 trackers/i);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+});

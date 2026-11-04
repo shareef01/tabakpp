@@ -1,6 +1,6 @@
 # tabak++ Privacy Notice
 
-Last updated: 19 October 2026
+Last updated: 4 November 2026
 
 tabak++ stores account identifiers, profile settings, smoking-tracker counts,
 history entries, financial estimates, and an optional avatar in Firebase
@@ -13,6 +13,11 @@ devices.
 - Firebase processes and stores cloud data on behalf of the app.
 - Avatars are stored as compressed image data in the user's profile metadata (`meta/profile`).
 - The app does not intentionally sell personal data or use tracker data for ads.
+- **Web app only:** the Inter font is loaded from Google Fonts
+  (`fonts.googleapis.com` / `fonts.gstatic.com`), so your browser sends its IP
+  address and user agent to Google when the page loads. For Google sign-in
+  accounts without a custom avatar, the profile photo is loaded from
+  `*.googleusercontent.com`. The Android app makes neither request.
 - Local diagnostic logs must not be committed or shared because third-party SDKs
   may include account identifiers in development output.
 

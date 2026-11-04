@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { RegistryService, USER_SUBCOLLECTIONS } from './registryService';
 import { SmokingCalculator } from '../utils/smokingCalculator';
@@ -914,6 +914,48 @@ describe('RegistryService.readCompleteExportSnapshot (AUD-002 — export must in
     expect(fake.orderByCalls.some(([field]) => field === 'dayDate')).toBe(false);
     expect(snapshot.days.map((d) => d.date)).toEqual(['2026-07-20']);
     expect(snapshot.logs.map((l) => l.id)).toEqual(['L1']);
+  });
+});
+
+// F-06: the export reads collections one after another. A day closed on another
+// device between the profile read and the days read used to ship an export whose
+// days say "folded" while lifetimeAggregates still lacked that day's credit.
+describe('RegistryService.readCompleteExportSnapshot — concurrent modification (F-06)', () => {
+  const realKeys = fake.store.keys.bind(fake.store);
+  const closeDayElsewhere = () => {
+    const u = userDoc();
+    fake.store.set(USER_PATH, { ...u, lifetimeAggregates: { ...u.lifetimeAggregates, saved: u.lifetimeAggregates.saved + 7 } });
+    fake.store.set(`${USER_PATH}/days/2026-07-20`, { ...dayDoc('2026-07-20'), status: 'closed', foldedIntoLifetime: true });
+  };
+  const interceptCollectionReads = (onCall) => {
+    let n = 0;
+    fake.store.keys = () => { n += 1; onCall(n); return realKeys(); };
+  };
+  beforeEach(() => {
+    seedUser({ name: 'A', lifetimeAggregates: { saved: 10, wasted: 0, smokingUnits: 0, baselineSaved: 0 } });
+    seedDay('2026-07-20', { counts: { cig: 3 }, status: 'open', aggregateCredit: { saved: 7, wasted: 0, smokingUnits: 3, baselineSaved: 0 } });
+  });
+  afterEach(() => { fake.store.keys = realKeys; });
+
+  it('a fold that lands mid-export is detected and the read retried until consistent', async () => {
+    // Collection read #2 is `days` (after configs): the other device closes the
+    // day right then, after this export already read the profile.
+    interceptCollectionReads((n) => { if (n === 2) closeDayElsewhere(); });
+    const snap = await RegistryService.readCompleteExportSnapshot(UID);
+    expect(snap.consistency).toEqual({ stable: true, attempts: 2 });
+    expect(snap.days[0].foldedIntoLifetime).toBe(true);
+    expect(snap.profile.lifetimeAggregates.saved).toBe(17); // matches the folded day
+  });
+
+  it('an account that keeps changing reports stable: false instead of claiming consistency', async () => {
+    interceptCollectionReads((n) => { if (n % 2 === 0) { const u = userDoc(); fake.store.set(USER_PATH, { ...u, lifetimeAggregates: { ...u.lifetimeAggregates, saved: u.lifetimeAggregates.saved + 1 } }); } });
+    const snap = await RegistryService.readCompleteExportSnapshot(UID, { maxAttempts: 2 });
+    expect(snap.consistency).toEqual({ stable: false, attempts: 2 });
+  });
+
+  it('a quiet account exports in one pass', async () => {
+    const snap = await RegistryService.readCompleteExportSnapshot(UID);
+    expect(snap.consistency).toEqual({ stable: true, attempts: 1 });
   });
 });
 

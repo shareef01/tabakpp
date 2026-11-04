@@ -40,7 +40,9 @@ jobs:
       contents: read
       actions: read
     outputs:
-      release_sha: ${{ steps.record.outputs.sha }}
+      # The commit to publish: main HEAD for a new version, or the commit an
+      # existing tag already points at when resuming a partial release.
+      release_sha: ${{ steps.tag.outputs.sha }}
       release_version: ${{ steps.validate-version.outputs.version }}
 
     steps:
@@ -56,7 +58,7 @@ jobs:
           ref: main
           fetch-depth: 0  # full history for provenance operations
 
-      # Record the exact commit that will be validated and released.
+      # Record main HEAD; resolve-release-tag decides the commit to release.
       - name: Record release SHA
         id: record
         run: |
@@ -79,15 +81,19 @@ jobs:
           echo "Validated version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      # Reject if the tag already exists remotely.
-      - name: Check tag does not already exist
+      # Reject a version that is already fully published. A tag WITHOUT a
+      # complete release is a partially failed earlier run: resume it at the
+      # commit the tag already points at (the tag is never moved or deleted),
+      # and validate THAT commit below. See .github/scripts/resolve-release-tag.py.
+      - name: Resolve release tag (new or resume)
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="$RELEASE_VERSION"
-          if git ls-remote --tags origin "v${VERSION}" | grep -q "v${VERSION}"; then
-            echo "Error: Tag 'v${VERSION}' already exists remotely. Aborting release."
-            exit 1
-          fi
-          echo "Tag v${VERSION} does not exist remotely — OK to proceed."
+          python3 .github/scripts/resolve-release-tag.py "$RELEASE_VERSION" "${{ steps.record.outputs.sha }}"
+
+      - name: Check out the commit to release
+        run: git checkout --detach "${{ steps.tag.outputs.sha }}"
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
@@ -139,7 +145,7 @@ jobs:
       - name: Require exact-SHA main CI and Android instrumentation acceptance
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/check-release-ci.py "${{ steps.record.outputs.sha }}"
+        run: python3 .github/scripts/check-release-ci.py "${{ steps.tag.outputs.sha }}"
 
       - name: Record validated SHA for release job
         run: |
@@ -265,10 +271,22 @@ jobs:
       # Create the version tag ONLY after the APK builds and passes signature
       # verification AND the release notes file exists. If signing or build or
       # notes validation fails, no tag is created.
+      # Idempotent: a retry of a partially failed run finds the tag already at
+      # this exact SHA and reuses it. A tag at any other commit is never moved.
       - name: Create annotated version tag
         run: |
           VERSION="$RELEASE_VERSION"
           RELEASE_SHA=$(git rev-parse HEAD)
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null; then
+            git fetch --force origin "refs/tags/v${VERSION}:refs/tags/v${VERSION}"
+            EXISTING=$(git rev-parse "v${VERSION}^{commit}")
+            if [ "$EXISTING" != "$RELEASE_SHA" ]; then
+              echo "Error: v${VERSION} already points at ${EXISTING}, not ${RELEASE_SHA}. Refusing to move a release tag."
+              exit 1
+            fi
+            echo "v${VERSION} already tags ${RELEASE_SHA} — resuming the partial release."
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "v${VERSION}" "${RELEASE_SHA}" -m "Release v${VERSION}"
@@ -286,6 +304,8 @@ jobs:
             dist/tabakpp-${{ needs.require-ci.outputs.release_version }}.apk
             dist/tabakpp-${{ needs.require-ci.outputs.release_version }}.apk.sha256
           fail_on_unmatched_files: true
+          # A resumed run updates the existing (partial) release in place.
+          overwrite_files: true
 
       - name: Cleanup decoded credentials
         if: always()

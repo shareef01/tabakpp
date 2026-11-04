@@ -258,8 +258,8 @@ const AppContent = () => {
 
   const {
     configs, logs, dayDocs, metrics, loading: isRegistryLoading, isEndingDay, isOnline, profileSettings, profileLoaded,
-    avatar, registryError, clearRegistryError, pendingConfigIds,
-    increment, decrement, endDay, reorder, addProtocol, updateProtocol, deleteProtocol,
+    avatar, registryError, syncError, clearRegistryError, pendingConfigIds,
+    increment, decrement, undoIncrement, endDay, reorder, addProtocol, updateProtocol, deleteProtocol,
     createManualEntry, deleteLog, restoreLog, updateHistoricalLog, updateHistoricalDay, updateAvatar,
     canonical, ledgers
   } = registry || { configs: [], logs: [], dayDocs: [], metrics: {}, loading: true, isOnline: true, profileSettings: null, profileLoaded: false, avatar: null, configsHasPendingWrites: false, pendingConfigIds: [], canonical: null, ledgers: [] };
@@ -360,9 +360,10 @@ const AppContent = () => {
   configsRef.current = configs;
 
   const handleIncrement = useCallback((id) => {
-    increment(id).then(() => {
+    increment(id).then((result) => {
       const config = configsRef.current.find((item) => item.id === id);
-      setIncrementUndo({ id, name: config?.name || 'Counter', key: `${id}-${Date.now()}` });
+      // Keep the date the increment landed on: Undo reverses THAT date (F-01).
+      setIncrementUndo({ id, trackingDate: result?.trackingDate ?? null, name: config?.name || 'Counter', key: `${id}-${Date.now()}` });
     }).catch((e) => console.error('[SYS] Increment failed', e));
   }, [increment]);
 
@@ -434,6 +435,11 @@ const AppContent = () => {
                 <div className="flex items-center justify-center gap-3 py-2 px-4 text-red-400">
                   <AlertCircle size={14} strokeWidth={3} />
                   <span role="alert" className="text-xs font-black uppercase tracking-[0.14em]">{bootstrapError || registryError || settingsError || deleteError?.message || deleteError?.title || deleteError}</span>
+                  {syncError && registryError === syncError && (
+                    <button type="button" onClick={retrySync} className="min-h-11 px-2 text-xs font-black uppercase tracking-widest underline">
+                      Retry
+                    </button>
+                  )}
                   <button type="button" aria-label="Dismiss error" onClick={() => { setBootstrapError(null); clearRegistryError(); setSettingsError(null); clearDeleteError(); }} className="min-h-11 px-2 text-xs font-black uppercase tracking-widest underline">
                     Dismiss
                   </button>
@@ -636,7 +642,9 @@ const AppContent = () => {
             onUndo={async () => {
               const item = incrementUndo;
               setIncrementUndo(null);
-              if (item) await decrement(item.id);
+              if (!item) return;
+              // The hook surfaces the failure in the error banner.
+              try { await undoIncrement(item.id, item.trackingDate); } catch { /* shown via registryError */ }
             }}
             onDismiss={() => setIncrementUndo(null)}
           />
