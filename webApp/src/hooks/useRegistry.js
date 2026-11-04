@@ -398,12 +398,16 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
 
   const purgeAcknowledgedOrCanceledOps = useCallback(() => {
     const byTracker = {};
+    // Server counts are today's only, so only today's ops can be reconciled or
+    // cancelled against each other; any other date's op is left as it is.
+    const currentToday = todayRef.current;
+    const remaining = pendingOpsRef.current.filter((o) => o.trackingDate !== currentToday);
     for (const op of pendingOpsRef.current) {
+      if (op.trackingDate !== currentToday) continue;
       if (!byTracker[op.trackerId]) byTracker[op.trackerId] = [];
       byTracker[op.trackerId].push(op);
     }
 
-    const remaining = [];
     for (const trackerId of Object.keys(byTracker)) {
       const list = byTracker[trackerId];
       const server = latestServerCountsRef.current[trackerId] || 0;
@@ -452,6 +456,10 @@ export const useRegistry = (user, today, unitPrice = 0.5, onTrackingDayChange = 
   useEffect(() => {
     if (!uid || !today) return undefined;
     latestServerCountsRef.current = {};
+    // A tick-driven rollover (A-2) lands here without passing through
+    // resolveTrackingDateForMutation: drop the previous date's ops so they
+    // can never pair with today's in purgeAcknowledgedOrCanceledOps.
+    pendingOpsRef.current = pendingOpsRef.current.filter((o) => o.trackingDate === today);
     publishCounterOverlay();
 
     const unsub = RegistryService.subscribeToDay(uid, today, (dayData) => {

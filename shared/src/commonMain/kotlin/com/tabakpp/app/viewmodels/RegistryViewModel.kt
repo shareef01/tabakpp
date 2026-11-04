@@ -22,6 +22,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlinx.datetime.TimeZone
 
+/** [RegistryViewModel.financialMode] when the server mode could not be read. */
+const val UNKNOWN_FINANCIAL_MODE = "UNKNOWN"
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class RegistryViewModel(
     private val authRepository: AuthRepository,
@@ -535,12 +538,17 @@ class RegistryViewModel(
         val trackingDay: String
     )
 
-    /** Server-side financial mode ('LEGACY' default) — drives the read projection. */
+    /**
+     * Server-side financial mode — drives the read projection. A failed read is
+     * [UNKNOWN_FINANCIAL_MODE], never a silent "LEGACY": an OPTION_B account must
+     * not display legacy-derived money (A-1). The catch sits inside
+     * flatMapLatest so signing in again re-reads the mode.
+     */
     val financialMode: StateFlow<String> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf("LEGACY")
         else flow { emit(registryRepository.getFinancialMode(uid)) }
-    }.catch { e -> setError(e, "Could not read the account financial mode."); emit("LEGACY") }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "LEGACY")
+            .catch { e -> setError(e, "Could not read the account financial mode."); emit(UNKNOWN_FINANCIAL_MODE) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "LEGACY")
 
     /** Canonical OPTION B daily ledgers (bounded recent window; the trusted callable writes them). */
     val ledgers: StateFlow<List<DailyFinancialRecord>> = userUid.flatMapLatest { uid ->
@@ -569,7 +577,19 @@ class RegistryViewModel(
         combine(trackingDay, dayDocs, logs, ::ActivityInputs),
     ) { fin, act ->
         if (fin.mode == "LEGACY") null
-        else {
+        else if (fin.mode == UNKNOWN_FINANCIAL_MODE) {
+            // Unknown owner: today's money is UNAVAILABLE, never legacy-derived.
+            val unavailable = DateFinancial(
+                FinancialSource.MISSING_CANONICAL_LEDGER, available = false, canonical = null,
+                unresolved = null, ambiguous = true, eligible = true
+            )
+            CanonicalFinancials(
+                mode = fin.mode,
+                today = unavailable,
+                totals = FinancialReadModel.aggregateFinancials(listOf(unavailable)),
+                windowTruncated = false,
+            )
+        } else {
             val byDate = fin.ledgers.associateBy { it.date }
             val dayDates = act.days.map { it.date }.toSet()
             val logDates = act.logs.map { it.logDate }.toSet()
@@ -627,6 +647,10 @@ class RegistryViewModel(
                     saved = 0.0,
                     budgetLeftToday = 0.0,
                     baselineSavedToday = 0.0,
+                    // Closed-day totals only: legacy-derived open-day credit must
+                    // not leak into lifetime while today's owner is unknown.
+                    savedLifetime = p.lifetimeAggregates.saved,
+                    baselineSavedLifetime = p.lifetimeAggregates.baselineSaved,
                     todayAvailable = false,
                     todayUnresolved = null,
                 )
