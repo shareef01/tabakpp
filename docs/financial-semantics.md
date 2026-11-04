@@ -806,8 +806,10 @@ afterwards and retries (up to 3 passes) when `lifetimeAggregates`,
 Open-day counter taps are not detected, but they never touch lifetime totals.
 `financialOperations` receipts are not exported: no deployed code path writes
 them (the trusted backend's receipts live in the client-unreadable
-`trustedOperations`). Android's export does not include `dailyFinancials`;
-that matters only once OPTION_B is deployed.
+`trustedOperations`). Android's export includes `dailyFinancials`,
+`financialMode` and `financialSummary` (plus the CSV `# daily_financial_summary`
+section) for MIGRATING/OPTION_B accounts, built the same way as the web
+export; a LEGACY export is unchanged.
 
 **Tracker cap across devices.** Rules cannot count documents, so the 8-tracker
 cap is enforced client-side only (pre-check + single-flight). Two devices adding
