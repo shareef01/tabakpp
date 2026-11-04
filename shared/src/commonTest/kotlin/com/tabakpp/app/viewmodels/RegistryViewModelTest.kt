@@ -149,7 +149,12 @@ private class FakeRegistryRepository : RegistryRepository {
     override fun subscribeToFinancialMode(uid: String): Flow<String> = financialModeFlow
     val adjustCounterAtomicCalls = mutableListOf<LiveCounterCall>()
     var modeReads = 0
-    override suspend fun getFinancialMode(uid: String): String { modeReads++; return financialMode }
+    var modeReadFails = false
+    override suspend fun getFinancialMode(uid: String): String {
+        modeReads++
+        if (modeReadFails) throw IllegalStateException("permission-denied")
+        return financialMode
+    }
     override suspend fun adjustCounterAtomic(uid: String, date: String, trackerId: String, delta: Double, snapshots: Map<String, com.tabakpp.app.data.TrackerSnapshot>, defaultUnitPrice: Double, operationId: String) { maybeFail(); adjustCounterAtomicCalls.add(LiveCounterCall(uid, trackerId, delta, date, defaultUnitPrice)) }
     override suspend fun foldLedgerIntoLifetime(uid: String, date: String) { maybeFail() }
     override suspend fun addConfig(uid: String, config: TrackerConfig) { maybeFail(); addConfigCalls.add(uid to config) }
@@ -1150,6 +1155,48 @@ class RegistryViewModelTest {
         kotlin.test.assertFalse(canon.last()!!.today.available)
         kotlin.test.assertFalse(canon.last()!!.totals.complete)
         j.cancel()
+    }
+
+    // A-1: a failed mode read must not silently become LEGACY money.
+    @Test
+    fun unreadableFinancialMode_marksTodayUnavailable_notLegacy() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(unitPrice = 1.0, lifetimeAggregates = LifetimeAggregates(saved = 3.0, wasted = 0.0, smokingUnits = 0.0, baselineSaved = 5.0))
+        reg.modeReadFails = true
+        reg.logsFlow.value = listOf(LogEntry(id = "A", logDate = vm.trackingDay.value, counts = mapOf("cig" to 1.0), origin = "MANUAL_ENTRY"))
+        val metrics = mutableListOf<SmokingCalculator.GlobalMetrics?>()
+        val canon = mutableListOf<RegistryViewModel.CanonicalFinancials?>()
+        val j1 = bg.launch { vm.metrics.collect { metrics.add(it) } }
+        val j2 = bg.launch { vm.canonical.collect { canon.add(it) } }
+        val j3 = bg.launch { vm.financialMode.collect {} }
+        scheduler.runCurrent()
+        assertEquals(UNKNOWN_FINANCIAL_MODE, vm.financialMode.value)
+        assertEquals(FinancialSource.MISSING_CANONICAL_LEDGER, canon.last()!!.today.source)
+        kotlin.test.assertFalse(canon.last()!!.totals.complete)
+        val m = metrics.last()!!
+        kotlin.test.assertFalse(m.todayAvailable)
+        assertEquals(3.0, m.savedLifetime, 0.001) // closed days only, no legacy open-day credit
+        assertEquals(5.0, m.baselineSavedLifetime, 0.001)
+        kotlin.test.assertNotNull(vm.error.value)
+        j1.cancel(); j2.cancel(); j3.cancel()
+    }
+
+    @Test
+    fun financialMode_isReRead_whenTheScreenSubscribesAgain() {
+        val (vm, reg, _) = build()
+        reg.modeReadFails = true
+        val j = bg.launch { vm.financialMode.collect {} }
+        scheduler.runCurrent()
+        assertEquals(UNKNOWN_FINANCIAL_MODE, vm.financialMode.value)
+        j.cancel()
+        reg.modeReadFails = false
+        reg.financialMode = "OPTION_B"
+        scheduler.advanceTimeBy(6000) // WhileSubscribed(5000) drops the stale value
+        scheduler.runCurrent()
+        val j2 = bg.launch { vm.financialMode.collect {} }
+        scheduler.runCurrent()
+        assertEquals("OPTION_B", vm.financialMode.value)
+        j2.cancel()
     }
 
     @Test

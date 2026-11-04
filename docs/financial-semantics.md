@@ -791,6 +791,13 @@ ledger has not loaded or its listener failed, the web client renders money as
 unavailable (`todayAvailable: false`, money fields `null`) and surfaces a sync
 error with Retry. It never substitutes the legacy derivation.
 
+**Mode unreadable (Android).** If `users/{uid}.financialMode` cannot be read,
+`RegistryViewModel.financialMode` is `UNKNOWN` (not `LEGACY`) and an error is
+shown. Today's money is unavailable (`todayAvailable = false`) and lifetime
+shows closed-day `lifetimeAggregates` only, so an OPTION_B account never
+displays legacy-derived money. Write routing already re-read the mode and is
+unchanged. The mode is read again when the screen resubscribes.
+
 **Export consistency.** `readCompleteExportSnapshot` reads collections
 sequentially (the web SDK has no multi-query snapshot). It re-reads the profile
 afterwards and retries (up to 3 passes) when `lifetimeAggregates`,
