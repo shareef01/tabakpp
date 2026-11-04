@@ -1,10 +1,13 @@
 package com.tabakpp.app.domain
 
+import com.tabakpp.app.data.DailyFinancialRecord
 import com.tabakpp.app.data.DayDocument
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.TrackerConfig
+import com.tabakpp.app.data.UnresolvedComponents
 import com.tabakpp.app.data.UserProfile
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * Version-tagged export schema.
@@ -23,7 +26,11 @@ import kotlinx.serialization.Serializable
  *   "profileMeta": { "avatar": null | "..." },
  *   "configs": [ ... TrackerConfig ... ],
  *   "days": [ ... DayDocument ... ],
- *   "logs": [ ... LogEntry ... ]
+ *   "logs": [ ... LogEntry ... ],
+ *   // MIGRATING / OPTION_B only (absent for LEGACY), parity with the web export:
+ *   "financialMode": "OPTION_B",
+ *   "dailyFinancials": [ ... DailyFinancialExportRow ... ],
+ *   "financialSummary": { ... FinancialSummaryExport ... }
  * }
  * ```
  */
@@ -50,7 +57,56 @@ data class CompleteExportSnapshot(
     val profileMeta: ProfileMetaExport? = null,
     val configs: List<TrackerConfig> = emptyList(),
     val days: List<DayDocument> = emptyList(),
-    val logs: List<LogEntry> = emptyList()
+    val logs: List<LogEntry> = emptyList(),
+    /** Null for LEGACY, so a LEGACY export is unchanged. */
+    val financialMode: String? = null,
+    val dailyFinancials: List<DailyFinancialExportRow>? = null,
+    val financialSummary: FinancialSummaryExport? = null,
+    /** Raw canonical ledgers read for the export; projected into [dailyFinancials], never serialized. */
+    @Transient val ledgers: List<DailyFinancialRecord> = emptyList(),
+    /** Server mode as read for the export; input to the projection, never serialized. */
+    @Transient val sourceFinancialMode: String = "LEGACY",
+)
+
+/**
+ * One date's authoritative money in a MIGRATING/OPTION_B export (web
+ * `buildDailyFinancials` parity). Money fields are null when unavailable,
+ * never a fabricated 0.
+ */
+@Serializable
+data class DailyFinancialExportRow(
+    val date: String,
+    val source: String,
+    val spent: Double?,
+    val saved: Double?,
+    val baselineSaved: Double?,
+    val smokingUnits: Double?,
+    val unresolvedComponents: UnresolvedComponents?,
+    val ambiguous: Boolean,
+    val conflicting: List<String>,
+    val eligible: Boolean,
+    val available: Boolean,
+)
+
+@Serializable
+data class KnownComponents(
+    val spent: Boolean = true,
+    val saved: Boolean = true,
+    val baselineSaved: Boolean = true,
+    val smokingUnits: Boolean = true,
+)
+
+@Serializable
+data class FinancialSummaryExport(
+    val spent: Double,
+    val saved: Double,
+    val baselineSaved: Double,
+    val smokingUnits: Double,
+    val complete: Boolean,
+    val unavailableDates: Int,
+    val unresolvedDates: Int,
+    val known: KnownComponents,
+    val mode: String,
 )
 
 @Serializable

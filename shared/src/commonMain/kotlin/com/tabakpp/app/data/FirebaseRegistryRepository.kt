@@ -322,14 +322,37 @@ class FirebaseRegistryRepository(
         val configs = getConfigsOnce(uid)
         val days = getAllDaysOnce(uid)
         val logs = getAllLogsOnce(uid)
+        // Canonical ledgers: full paginated history (the live listener is
+        // bounded), read only for accounts that have them (web parity).
+        val mode = getFinancialMode(uid)
+        val ledgers = if (mode == "LEGACY") emptyList() else getAllLedgersOnce(uid)
         return CompleteExportSnapshot(
             generatedAt = kotlin.time.Clock.System.now().toString(),
             profile = profile,
             profileMeta = profileExtra?.let { ProfileMetaExport(it.avatar) },
             configs = configs,
             days = days,
-            logs = logs
+            logs = logs,
+            ledgers = ledgers,
+            sourceFinancialMode = mode,
         )
+    }
+
+    private suspend fun getAllLedgersOnce(uid: String): List<DailyFinancialRecord> {
+        val out = mutableListOf<DailyFinancialRecord>()
+        var lastDoc: DocumentSnapshot? = null
+        while (true) {
+            val query = firestore.collection("users").document(uid).collection("dailyFinancials")
+                .orderBy("date", Direction.DESCENDING)
+                .limit(BATCH_LIMIT.toLong())
+            val snap = if (lastDoc != null) query.startAfter(lastDoc).get() else query.get()
+            val docs = snap.documents
+            if (docs.isEmpty()) break
+            docs.mapNotNull { doc -> decodeLedger(doc) }.let { out.addAll(it) }
+            if (docs.size < BATCH_LIMIT) break
+            lastDoc = docs.last()
+        }
+        return out
     }
 
     override suspend fun updateLiveCounter(
