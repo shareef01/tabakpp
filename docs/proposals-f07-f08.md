@@ -1,6 +1,8 @@
 # Proposals: F-07 tracker cap and F-08 closed-day writes
 
-Status: **for decision** (5 November 2026). Nothing here is implemented.
+Status: **decided 5 November 2026** — F-08 option 3, F-07 option 1 now and
+option 4 with Option B. Nothing here is implemented yet; both land with the
+Option B rollout.
 Both items come from [audit-2026-11-04.md](audit-2026-11-04.md); the current
 behaviour is recorded in [financial-semantics.md](financial-semantics.md) §27.
 
@@ -55,8 +57,9 @@ server write path, and keeps History as the single way to change a past day's
 money. It is a small client change, only active for OPTION_B accounts, and can
 ship with the Option B rollout rather than now.
 
-**Decision needed:** confirm option 3 (or pick 1 / 2) as the OPTION_B rule
-before Option B is deployed.
+**Decision (5 November 2026): option 3.** To ship with the Option B rollout:
+close a past-but-open day before History edits it, and add the Android
+`DAY_CLOSED` → "Edit it in History" message.
 
 ---
 
@@ -98,5 +101,6 @@ needs a staged, multi-release rollout with a backfill to close it — and still
 does not stop a determined owner. Moving tracker creation into the backend
 when Option B ships gives a real guarantee for little extra work.
 
-**Decision needed:** accept option 1 now (no change), or approve option 2 and
-its staged rollout.
+**Decision (5 November 2026): option 1 now, option 4 with Option B.** No
+change until then; when Option B is deployed, tracker creation moves into the
+backend, which enforces the cap.
