@@ -82,11 +82,12 @@ Most quit apps bury you in tips. **tabak++** stays on today's numbers.
   optional personal baseline, never against a goal, because those are different claims.
 - **Owner-only by construction.** Firestore Security Rules are the primary
   authorization boundary: default-deny, scoped to `users/{uid}`.
-- **Spark today, server-authoritative money parked (Option B).** Production runs
+- **Spark only; server-authoritative money not planned (Option B).** Production runs
   on the Firebase Spark plan with direct client writes (`LEGACY` accounts). A
   trusted Cloud Functions boundary (`executeFinancialOperation`, `migrateAccount`,
   `deleteAccountData`) lives in [`functions/`](functions/) but is **not deployed**:
-  it needs Blaze. When enabled, it reconciles financial state atomically on the
+  it needs Blaze, and as a personal-use app Tabakpp stays on Spark, so there
+  are no plans to deploy it. It would reconcile financial state atomically on the
   server across the four canonical ledger metrics (`saved`, `wasted`,
   `baselineSaved`, `smokingUnits`), with strict count ownership to prevent double
   counting. The code is kept and tested in CI against the emulators.
@@ -102,7 +103,7 @@ Why the stack and the boundaries look the way they do — the short version for 
 - **Firebase Spark was chosen, not inherited.** Auth + Firestore + Hosting cover the whole product on the free tier — no server to run, nothing to bill, no operational surface to maintain.
 - **App Check is intentionally absent.** Both clients talk to Firebase directly and Firestore Rules are the authorization boundary, so the app ships without attestation. That is a scope decision with a real cost, stated plainly: **API-key restrictions (HTTP referrer on web, package + signing certificate on Android) make casual reuse of the public key harder, but they are not App Check and they are not a substitute for authorization.** See [SECURITY.md](SECURITY.md).
 - **CI verifies all three surfaces, not just the web.** `web-and-rules` (lint, unit, contract, rules against the emulator, build, PWA, accessibility, production dependency audit), `mobile` (Kotlin unit, Compose UI, Android lint, four build variants), `functions` (callable unit and emulator integration), `test` (an Android emulator running the instrumentation suite behind a fail-closed JUnit-XML gate), and `validate-action-pins`. **Required on `main`: `mobile` and `web-and-rules`. `functions`, `test` and `validate-action-pins` run on every pull request but are advisory.**
-- **Cloud Functions are kept as a reference, not deployed.** The trusted-totals design needs Blaze, so production stays client-computed; the code path is implemented and exercised in CI so the upgrade stays a deployment decision rather than a rewrite. See [Known limitations](#known-limitations).
+- **Cloud Functions are kept as a reference, not deployed.** The trusted-totals design needs Blaze, and a personal-use app has no other users to protect totals from, so production stays client-computed on Spark with no plan to change. The code path stays implemented and exercised in CI as a reference. See [Known limitations](#known-limitations).
 
 ## Stack
 
