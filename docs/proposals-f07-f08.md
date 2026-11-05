@@ -1,8 +1,11 @@
-# Proposals: F-07 tracker cap and F-08 closed-day writes
+# Decisions: F-07 tracker cap and F-08 closed-day writes
 
-Status: **decided 5 November 2026** — F-08 option 3, F-07 option 1 now and
-option 4 with Option B. Nothing here is implemented yet; both land with the
-Option B rollout.
+Status: **closed, won't do (5 November 2026).** Tabakpp is a personal-use app
+and stays on the free Spark plan, so **Option B will not be deployed**: there
+are no other users whose totals it would need to protect, and it would require
+the paid Blaze plan. With that settled, F-07 stays as it is (option 1, for
+good) and F-08 no longer applies. The analysis below is kept for the record.
+
 Both items come from [audit-2026-11-04.md](audit-2026-11-04.md); the current
 behaviour is recorded in [financial-semantics.md](financial-semantics.md) §27.
 
@@ -57,9 +60,10 @@ server write path, and keeps History as the single way to change a past day's
 money. It is a small client change, only active for OPTION_B accounts, and can
 ship with the Option B rollout rather than now.
 
-**Decision (5 November 2026): option 3.** To ship with the Option B rollout:
-close a past-but-open day before History edits it, and add the Android
-`DAY_CLOSED` → "Edit it in History" message.
+**Decision (5 November 2026): not applicable.** Option 3 was accepted, then
+made moot the same day by the decision not to deploy Option B. LEGACY's
+behaviour (late taps on closed days and History edits of open days both
+allowed) stays as it is.
 
 ---
 
@@ -101,6 +105,8 @@ needs a staged, multi-release rollout with a backfill to close it — and still
 does not stop a determined owner. Moving tracker creation into the backend
 when Option B ships gives a real guarantee for little extra work.
 
-**Decision (5 November 2026): option 1 now, option 4 with Option B.** No
-change until then; when Option B is deployed, tracker creation moves into the
-backend, which enforces the cap.
+**Decision (5 November 2026): option 1, permanently.** Option 4 depended on
+Option B, which will not be deployed, and option 2 is not worth a multi-release
+rollout for a single-user app. The apps keep enforcing the cap; a 9th tracker
+needs two devices adding at the same instant, and the app then asks you to
+remove one.
