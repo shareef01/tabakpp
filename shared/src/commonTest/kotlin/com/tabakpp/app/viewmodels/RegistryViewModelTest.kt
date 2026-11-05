@@ -177,7 +177,9 @@ private class FakeRegistryRepository : RegistryRepository {
             profile = profileFlow.value,
             configs = configsFlow.value,
             days = daysFlow.value,
-            logs = logsFlow.value
+            logs = logsFlow.value,
+            ledgers = ledgersFlow.value,
+            sourceFinancialMode = financialMode,
         )
 }
 
@@ -1155,6 +1157,23 @@ class RegistryViewModelTest {
         kotlin.test.assertFalse(canon.last()!!.today.available)
         kotlin.test.assertFalse(canon.last()!!.totals.complete)
         j.cancel()
+    }
+
+    // F-06: the export threads the account's mode and ledgers into the JSON.
+    @Test
+    fun exportJson_includesDailyFinancials_forOptionB() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(0.0, 0.0, 0.0, 0.0))
+        reg.financialMode = "OPTION_B"
+        reg.ledgersFlow.value = listOf(DailyFinancialRecord(
+            date = "2026-10-01",
+            canonicalCredit = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0),
+        ))
+        vm.exportData(com.tabakpp.app.domain.ExportFormat.JSON)
+        scheduler.runCurrent()
+        val ready = vm.exportState.value as com.tabakpp.app.domain.ExportState.Ready
+        assertTrue(ready.content.contains("\"dailyFinancials\""), ready.content)
+        assertTrue(ready.content.contains("\"OPTION_B_CANONICAL_SOURCE\""))
     }
 
     // A-1: a failed mode read must not silently become LEGACY money.

@@ -1,6 +1,7 @@
 package com.tabakpp.app.composeapp.ui.screens
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -85,11 +86,21 @@ fun TrackScreen(
 
 
 
-    Box(
+    val navBottom = innerPadding.calculateBottomPadding()
+    // While the Undo pill is shown it sits BELOW the list, above the nav bar,
+    // so the list ends at the pill instead of scrolling under it. Animated so
+    // the list does not jump when the pill appears or leaves.
+    val gridBottomPadding by animateDpAsState(
+        targetValue = if (undoPillVisible) 12.dp else navBottom,
+        label = "gridBottomPadding",
+    )
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(top = innerPadding.calculateTopPadding())
     ) {
+      Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
         if (loading) {
             Box(modifier = Modifier.fillMaxSize().semantics { stateDescription = "Loading trackers" }) {
                 TrackSkeleton()
@@ -118,7 +129,7 @@ fun TrackScreen(
                 onboarding = onboardingState,
                 endingDay = endingDay,
                 onEndDayClick = { showEndDayConfirm = true },
-                bottomPadding = innerPadding.calculateBottomPadding(),
+                bottomPadding = if (reducedMotion) (if (undoPillVisible) 12.dp else navBottom) else gridBottomPadding,
                 onAddClick = {
                     // Reset the save latch: onSave closes the sheet immediately
                     // (fire-and-forget write), so a leftover `saving = true`
@@ -130,16 +141,19 @@ fun TrackScreen(
             )
         }
 
-        // Silent Floating Undo Pill (Premium Polish)
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = innerPadding.calculateBottomPadding() + 12.dp)
+      }
+
+        // Undo pill: its own row under the list (never on top of it), above the nav bar.
+        AnimatedVisibility(
+            visible = undoPillVisible,
+            enter = if (reducedMotion) EnterTransition.None else expandVertically(expandFrom = Alignment.Top) + fadeIn(),
+            exit = if (reducedMotion) ExitTransition.None else shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut()
         ) {
-            AnimatedVisibility(
-                visible = undoPillVisible,
-                enter = if (reducedMotion) EnterTransition.None else slideInVertically { it } + fadeIn(),
-                exit = if (reducedMotion) ExitTransition.None else slideOutVertically { it } + fadeOut()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, bottom = navBottom + 12.dp),
+                contentAlignment = Alignment.Center
             ) {
                 Surface(
                     onClick = {
