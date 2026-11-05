@@ -1,8 +1,10 @@
 package com.tabakpp.app.domain
 
+import com.tabakpp.app.data.DailyFinancialRecord
 import com.tabakpp.app.data.DayDocument
 import com.tabakpp.app.data.LogEntry
 import com.tabakpp.app.data.TrackerConfig
+import com.tabakpp.app.data.UnresolvedComponents
 import com.tabakpp.app.data.UserProfile
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -37,8 +39,11 @@ object ExportBuilder {
         configs: List<TrackerConfig>,
         days: List<DayDocument>,
         logs: List<LogEntry>,
-        generatedAt: Instant = Clock.System.now()
+        generatedAt: Instant = Clock.System.now(),
+        financialMode: String = "LEGACY",
+        ledgers: List<DailyFinancialRecord> = emptyList(),
     ): String {
+        val fin = buildDailyFinancials(financialMode, ledgers, days, logs)
         val snapshot = CompleteExportSnapshot(
             exportVersion = EXPORT_VERSION,
             generatedAt = toIso8601(generatedAt),
@@ -46,7 +51,10 @@ object ExportBuilder {
             profileMeta = profileMeta,
             configs = sortConfigsForExport(configs),
             days = sortDaysForExport(days),
-            logs = sortLogsForExport(logs)
+            logs = sortLogsForExport(logs),
+            financialMode = fin?.mode,
+            dailyFinancials = fin?.rows,
+            financialSummary = fin?.summary,
         )
         val json = Json {
             prettyPrint = true
@@ -69,7 +77,9 @@ object ExportBuilder {
         configs: List<TrackerConfig>,
         days: List<DayDocument>,
         logs: List<LogEntry>,
-        defaultUnitPrice: Double = 0.5
+        defaultUnitPrice: Double = 0.5,
+        financialMode: String = "LEGACY",
+        ledgers: List<DailyFinancialRecord> = emptyList(),
     ): String {
         val rows = buildCsvRows(profile, configs, days, logs, defaultUnitPrice)
         val sb = StringBuilder()
@@ -77,8 +87,85 @@ object ExportBuilder {
         for (row in rows) {
             sb.append(csvLine(row))
         }
+        // Backward-compatible companion section (web parity): the DATE-LEVEL
+        // canonical money, once per date, never repeated per manual log.
+        val fin = buildDailyFinancials(financialMode, ledgers, days, logs)
+        if (fin != null) {
+            sb.append("\n# daily_financial_summary\n")
+            sb.append("date,source,spent,saved,baseline_saved,smoking_units,ambiguous,unresolved_components,conflicting,eligible\n")
+            for (d in fin.rows) {
+                sb.append(
+                    listOf(
+                        csvField(d.date), csvField(d.source), csvField(d.spent), csvField(d.saved),
+                        csvField(d.baselineSaved), csvField(d.smokingUnits), csvField(d.ambiguous),
+                        csvField(d.unresolvedComponents?.let { compactJson.encodeToString(UnresolvedComponents.serializer(), it) }),
+                        csvField(d.conflicting.joinToString("|")), csvField(d.eligible),
+                    ).joinToString(",") + "\n"
+                )
+            }
+        }
         return sb.toString()
     }
+
+    class DailyFinancials(val mode: String, val rows: List<DailyFinancialExportRow>, val summary: FinancialSummaryExport)
+
+    /**
+     * Date-level canonical projection for MIGRATING/OPTION_B (web
+     * `buildDailyFinancials` parity); null for LEGACY. Each date's money comes
+     * from its ledger via [FinancialReadModel], never recomputed per log.
+     */
+    fun buildDailyFinancials(
+        financialMode: String,
+        ledgers: List<DailyFinancialRecord>,
+        days: List<DayDocument>,
+        logs: List<LogEntry>,
+    ): DailyFinancials? {
+        val mode = financialMode.ifBlank { "LEGACY" }
+        if (mode == "LEGACY") return null
+        val byDate = ledgers.associateBy { it.date }
+        val dayDates = days.map { it.date }.toSet()
+        val logDates = logs.map { it.logDate }.toSet()
+        val dates = (byDate.keys + dayDates + logDates).toSortedSet()
+        val resolved = dates.map { date ->
+            date to FinancialReadModel.resolveDateFinancial(mode, byDate[date], date in dayDates || date in logDates)
+        }
+        val rows = resolved.map { (date, r) ->
+            val c = if (r.available) r.canonical else null
+            DailyFinancialExportRow(
+                date = date,
+                source = webSourceName(r.source),
+                spent = c?.spent, saved = c?.saved, baselineSaved = c?.baselineSaved, smokingUnits = c?.smokingUnits,
+                unresolvedComponents = r.unresolved,
+                ambiguous = r.ambiguous,
+                conflicting = byDate[date]?.conflicting ?: emptyList(),
+                eligible = r.eligible,
+                available = r.available,
+            )
+        }
+        val totals = FinancialReadModel.aggregateFinancials(resolved.map { it.second })
+        val available = resolved.map { it.second }.filter { it.available && it.canonical != null }
+        val known = KnownComponents(
+            spent = available.none { it.unresolved?.spent == true },
+            saved = available.none { it.unresolved?.saved == true },
+            baselineSaved = available.none { it.unresolved?.baselineSaved == true },
+            smokingUnits = available.none { it.unresolved?.smokingUnits == true },
+        )
+        val summary = FinancialSummaryExport(
+            totals.spent, totals.saved, totals.baselineSaved, totals.smokingUnits,
+            totals.complete, totals.unavailableDates, totals.unresolvedDates, known, mode,
+        )
+        return DailyFinancials(mode, rows, summary)
+    }
+
+    /** The web export's `FinancialSource` strings, so both platforms' exports read alike. */
+    private fun webSourceName(source: FinancialSource): String = when (source) {
+        FinancialSource.LEGACY -> "LEGACY_FINANCIAL_SOURCE"
+        FinancialSource.OPTION_B_CANONICAL -> "OPTION_B_CANONICAL_SOURCE"
+        FinancialSource.MISSING_CANONICAL_LEDGER -> "MISSING_CANONICAL_LEDGER"
+        FinancialSource.NO_ACTIVITY -> "NO_FINANCIAL_ACTIVITY"
+    }
+
+    private val compactJson = Json { encodeDefaults = true }
 
     private fun buildCsvRows(
         profile: UserProfile?,
