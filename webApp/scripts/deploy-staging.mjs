@@ -303,6 +303,7 @@ export function deployStaging(operation, options = {}) {
   const spawnOpts = {
     cwd: REPO_ROOT,
     stdio: 'inherit',
+    shell: process.platform === 'win32',
     env: {
       ...process.env,
       GCLOUD_PROJECT: STAGING_PROJECT_ID,
@@ -310,6 +311,14 @@ export function deployStaging(operation, options = {}) {
   };
 
   const result = executor(validation.command, spawnOpts);
+  if (result.error) {
+    return {
+      ok: false,
+      reason: result.error.message,
+      executed: false,
+      command: validation.command,
+    };
+  }
   const exitCode = result.status ?? 0;
   return {
     ok: exitCode === 0,
