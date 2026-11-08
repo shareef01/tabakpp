@@ -93,8 +93,8 @@ jobs:
           {
             "project_info": {
               "project_number": "123456789012",
-              "project_id": "tabakpp-staging",
-              "storage_bucket": "tabakpp-staging.appspot.com"
+              "project_id": "tabakpwa",
+              "storage_bucket": "tabakpwa.firebasestorage.app"
             },
             "client": [{
               "client_info": {
