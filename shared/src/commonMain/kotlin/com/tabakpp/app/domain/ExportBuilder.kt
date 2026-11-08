@@ -246,8 +246,8 @@ object ExportBuilder {
         val price = snap.unitPrice ?: return Pair(null, null)
         val target = snap.target
         val actual = maxOf(0.0, count)
-        val spent = if (snap.isFinanciallyTracked) actual * price else null
-        val saved = if (snap.isFinanciallyTracked) maxOf(0.0, target.toDouble() - actual) * price else null
+        val spent = if (snap.isFinanciallyTracked) SmokingCalculator.roundMoney(actual * price) else null
+        val saved = if (snap.isFinanciallyTracked) SmokingCalculator.roundMoney(maxOf(0.0, target.toDouble() - actual) * price) else null
         return Pair(spent, saved)
     }
 
@@ -307,7 +307,7 @@ object ExportBuilder {
      * Does NOT modify the stored value — only the CSV representation.
      */
     private fun neutralizeFormula(s: String): String {
-        if (s.isNotEmpty() && (s[0] in "= +@-" || s.startsWith("\t") || s.startsWith("\r") || s.startsWith("\""))) {
+        if (s.isNotEmpty() && (s[0] in "= +@-\t\r\n\"")) {
             return "'" + s
         }
         return s

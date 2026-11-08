@@ -57,7 +57,7 @@ const trustedExecute = (profile, type, payload) => {
  */
 const financialWritesLocked = async (uid) => {
   const snap = await getDoc(doc(db, 'users', uid));
-  const mode = snap.exists() ? snap.data()?.financialMode : null;
+  const mode = snap?.exists?.() ? snap.data()?.financialMode : null;
   return mode === 'MIGRATING' || mode === 'OPTION_B';
 };
 
@@ -213,12 +213,12 @@ const contributionFrom = (counts, configs, price) => {
   const fin = SmokingCalculator.calculateDayFinancials(counts || {}, configs, price);
   const baseline = SmokingCalculator.calculateBaselineSavings(counts || {}, configs, price);
   return {
-    saved: fin.saved,
-    wasted: fin.wasted,
+    saved: SmokingCalculator.roundMoney(fin.saved),
+    wasted: SmokingCalculator.roundMoney(fin.wasted),
     // Baseline savings (item 3 / AUD-007): must move together with `saved`,
     // which is derived from `target`. Omitting it made the two money metrics
     // drift apart for every manual-entry / legacy-log write.
-    baselineSaved: baseline.moneySaved,
+    baselineSaved: SmokingCalculator.roundMoney(baseline.moneySaved),
     smokingUnits: SmokingCalculator.sumSmokingUnits(counts || {}, configs),
   };
 };
@@ -235,11 +235,13 @@ const resolveContribution = (storedCredit, counts, configs, price) => {
     && Number.isFinite(storedCredit.smokingUnits)
   ) {
     return {
-      saved: storedCredit.saved,
-      wasted: storedCredit.wasted,
+      saved: SmokingCalculator.roundMoney(storedCredit.saved),
+      wasted: SmokingCalculator.roundMoney(storedCredit.wasted),
       smokingUnits: storedCredit.smokingUnits,
       // Legacy stamps predate baselineSaved — absent means 0, never a guess.
-      baselineSaved: Number.isFinite(storedCredit.baselineSaved) ? storedCredit.baselineSaved : 0,
+      baselineSaved: Number.isFinite(storedCredit.baselineSaved)
+        ? SmokingCalculator.roundMoney(storedCredit.baselineSaved)
+        : 0,
     };
   }
   return contributionFrom(counts, configs, price);
@@ -249,8 +251,14 @@ const resolveContribution = (storedCredit, counts, configs, price) => {
 const mergeHistoricalEditCounts = (incoming, previous, liveConfigIds, historicalIds = []) => {
   const live = new Set(liveConfigIds);
   const editable = new Set(historicalIds);
-  const merged = { ...incoming };
-  Object.entries(previous || {}).forEach(([id, value]) => {
+  const prev = previous || {};
+  const merged = {};
+  Object.entries(incoming || {}).forEach(([id, value]) => {
+    if (value > 0 || Object.hasOwn(prev, id) || editable.has(id)) {
+      merged[id] = value;
+    }
+  });
+  Object.entries(prev).forEach(([id, value]) => {
     if (!live.has(id) && (!editable.has(id) || !Object.hasOwn(incoming, id))) merged[id] = value;
   });
   return merged;
@@ -277,10 +285,10 @@ const applyLateCounterWrite = async (transaction, uid, dayRef, day, counterId, d
       const current = userSnap.data().lifetimeAggregates || emptyAggregates();
       const oldCredit = day.aggregateCredit || emptyAggregates();
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (current.saved || 0) - (oldCredit.saved || 0) + newCredit.saved,
-        'lifetimeAggregates.wasted': (current.wasted || 0) - (oldCredit.wasted || 0) + newCredit.wasted,
+        'lifetimeAggregates.saved': SmokingCalculator.roundMoney((current.saved || 0) - (oldCredit.saved || 0) + newCredit.saved),
+        'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((current.wasted || 0) - (oldCredit.wasted || 0) + newCredit.wasted),
         'lifetimeAggregates.smokingUnits': (current.smokingUnits || 0) - (oldCredit.smokingUnits || 0) + newCredit.smokingUnits,
-        'lifetimeAggregates.baselineSaved': (current.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0),
+        'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((current.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0)),
       });
     }
   }
@@ -299,8 +307,15 @@ const countsEqual = (a, b) => [...new Set([...Object.keys(a), ...Object.keys(b)]
 // Old null-price snapshots cannot safely be reconstructed from today's price.
 // No-op edits preserve their credit; changed edits must explicitly fail.
 const requireHistoricalPrices = (counts, snapshots) => {
-  if (Object.keys(snapshots).length === 0 || Object.keys(counts).some((id) => !snapshots[id])
-    || Object.values(snapshots).some((s) => s.isFinanciallyTracked !== false && s.unitPrice == null)) {
+  if (
+    Object.keys(snapshots).length === 0
+    || Object.keys(counts).some((id) => !snapshots[id])
+    || Object.entries(snapshots).some(([id, s]) => (
+      s?.isFinanciallyTracked !== false
+      && (Object.hasOwn(counts, id) || (s?.target || 0) > 0 || (s?.baseline || 0) > 0)
+      && s?.unitPrice == null
+    ))
+  ) {
     throw new Error('HISTORICAL_PRICE_UNAVAILABLE');
   }
 };
@@ -823,6 +838,7 @@ export const RegistryService = {
         date,
       });
     }
+    if (await financialWritesLocked(uid)) throw new Error('DAY_CLOSE_UNSUPPORTED');
     const userRef = doc(db, 'users', uid);
     const dayRef = doc(db, 'users', uid, 'days', date);
 
@@ -850,10 +866,10 @@ export const RegistryService = {
 
       transaction.update(dayRef, { status: 'closed', foldedIntoLifetime: true, closedAt: serverTimestamp() });
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (current.saved || 0) + (credit.saved || 0),
-        'lifetimeAggregates.wasted': (current.wasted || 0) + (credit.wasted || 0),
+        'lifetimeAggregates.saved': SmokingCalculator.roundMoney((current.saved || 0) + (credit.saved || 0)),
+        'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((current.wasted || 0) + (credit.wasted || 0)),
         'lifetimeAggregates.smokingUnits': (current.smokingUnits || 0) + (credit.smokingUnits || 0),
-        'lifetimeAggregates.baselineSaved': (current.baselineSaved || 0) + (credit.baselineSaved || 0),
+        'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((current.baselineSaved || 0) + (credit.baselineSaved || 0)),
       });
     });
   },
@@ -938,10 +954,17 @@ export const RegistryService = {
       const daySnap = await transaction.get(dayRef);
       if (!daySnap.exists()) throw new Error('DAY_NOT_FOUND');
       const day = daySnap.data();
-      const mergedCounts = { ...(day.counts || {}), ...normalized };
-      if (countsEqual(mergedCounts, day.counts || {})) return;
-      requireHistoricalPrices(mergedCounts, day.trackerSnapshots || {});
-      const newCredit = SmokingCalculator.computeDayCredit(mergedCounts, day.trackerSnapshots || {});
+      const existingCounts = day.counts || {};
+      const snapshots = day.trackerSnapshots || {};
+      const filteredNormalized = Object.fromEntries(
+        Object.entries(normalized).filter(
+          ([id, val]) => val > 0 || Object.hasOwn(existingCounts, id) || Object.hasOwn(snapshots, id)
+        )
+      );
+      const mergedCounts = { ...existingCounts, ...filteredNormalized };
+      if (countsEqual(mergedCounts, existingCounts)) return;
+      requireHistoricalPrices(mergedCounts, snapshots);
+      const newCredit = SmokingCalculator.computeDayCredit(mergedCounts, snapshots);
 
       if (day.foldedIntoLifetime) {
         const oldCredit = day.aggregateCredit || emptyAggregates();
@@ -949,10 +972,10 @@ export const RegistryService = {
         if (userSnap.exists()) {
           const current = userSnap.data().lifetimeAggregates || emptyAggregates();
           transaction.update(userRef, {
-            'lifetimeAggregates.saved': (current.saved || 0) - (oldCredit.saved || 0) + newCredit.saved,
-            'lifetimeAggregates.wasted': (current.wasted || 0) - (oldCredit.wasted || 0) + newCredit.wasted,
+            'lifetimeAggregates.saved': SmokingCalculator.roundMoney((current.saved || 0) - (oldCredit.saved || 0) + newCredit.saved),
+            'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((current.wasted || 0) - (oldCredit.wasted || 0) + newCredit.wasted),
             'lifetimeAggregates.smokingUnits': (current.smokingUnits || 0) - (oldCredit.smokingUnits || 0) + newCredit.smokingUnits,
-            'lifetimeAggregates.baselineSaved': (current.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0),
+            'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((current.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0)),
           });
         }
       }
@@ -1087,10 +1110,10 @@ export const RegistryService = {
 
       transaction.update(logRef, { counts: mergedCounts, aggregateCredit: newCredit });
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - oldCredit.saved + newCredit.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - oldCredit.wasted + newCredit.wasted,
+        'lifetimeAggregates.saved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.saved || 0) - oldCredit.saved + newCredit.saved),
+        'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.wasted || 0) - oldCredit.wasted + newCredit.wasted),
         'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldCredit.smokingUnits + newCredit.smokingUnits,
-        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0)
+        'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0))
       });
     });
   },
@@ -1131,10 +1154,10 @@ export const RegistryService = {
 
       transaction.delete(logRef);
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) - credit.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) - credit.wasted,
+        'lifetimeAggregates.saved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.saved || 0) - credit.saved),
+        'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.wasted || 0) - credit.wasted),
         'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - credit.smokingUnits,
-        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) - (credit.baselineSaved || 0)
+        'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.baselineSaved || 0) - (credit.baselineSaved || 0))
       });
     });
   },
@@ -1181,10 +1204,10 @@ export const RegistryService = {
       const { id, ...rest } = log;
       transaction.set(logRef, { ...rest, id, counts: normalizedCounts, aggregateCredit: credit });
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + credit.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + credit.wasted,
+        'lifetimeAggregates.saved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.saved || 0) + credit.saved),
+        'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.wasted || 0) + credit.wasted),
         'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits,
-        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) + (credit.baselineSaved || 0)
+        'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.baselineSaved || 0) + (credit.baselineSaved || 0))
       });
     });
   },
@@ -1254,10 +1277,10 @@ export const RegistryService = {
         clientTimestamp: serverTimestamp()
       });
       transaction.update(userRef, {
-        'lifetimeAggregates.saved': (profile.lifetimeAggregates?.saved || 0) + credit.saved,
-        'lifetimeAggregates.wasted': (profile.lifetimeAggregates?.wasted || 0) + credit.wasted,
+        'lifetimeAggregates.saved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.saved || 0) + credit.saved),
+        'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.wasted || 0) + credit.wasted),
         'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) + credit.smokingUnits,
-        'lifetimeAggregates.baselineSaved': (profile.lifetimeAggregates?.baselineSaved || 0) + (credit.baselineSaved || 0)
+        'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.baselineSaved || 0) + (credit.baselineSaved || 0))
       });
     });
   },

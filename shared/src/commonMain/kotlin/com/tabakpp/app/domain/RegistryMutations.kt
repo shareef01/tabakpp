@@ -32,10 +32,10 @@ object RegistryMutations {
         // manual-entry / legacy-log write paths even though `saved` did.
         val baselineSaved = SmokingCalculator.calculateBaselineSavings(counts, configs, unitPrice).moneySaved
         return LifetimeAggregates(
-            saved = fin.saved,
-            wasted = fin.wasted,
+            saved = SmokingCalculator.roundMoney(fin.saved),
+            wasted = SmokingCalculator.roundMoney(fin.wasted),
             smokingUnits = units,
-            baselineSaved = baselineSaved
+            baselineSaved = SmokingCalculator.roundMoney(baselineSaved)
         )
     }
 
@@ -48,22 +48,29 @@ object RegistryMutations {
         counts: Map<String, Double>,
         configs: List<TrackerConfig>,
         unitPrice: Double
-    ): LifetimeAggregates = stored ?: contribution(counts, configs, unitPrice)
+    ): LifetimeAggregates = stored?.let {
+        LifetimeAggregates(
+            saved = SmokingCalculator.roundMoney(it.saved),
+            wasted = SmokingCalculator.roundMoney(it.wasted),
+            smokingUnits = it.smokingUnits,
+            baselineSaved = SmokingCalculator.roundMoney(it.baselineSaved)
+        )
+    } ?: contribution(counts, configs, unitPrice)
 
     fun applyCredit(current: LifetimeAggregates, credit: LifetimeAggregates): LifetimeAggregates =
         LifetimeAggregates(
-            saved = current.saved + credit.saved,
-            wasted = current.wasted + credit.wasted,
+            saved = SmokingCalculator.roundMoney(current.saved + credit.saved),
+            wasted = SmokingCalculator.roundMoney(current.wasted + credit.wasted),
             smokingUnits = current.smokingUnits + credit.smokingUnits,
-            baselineSaved = current.baselineSaved + credit.baselineSaved
+            baselineSaved = SmokingCalculator.roundMoney(current.baselineSaved + credit.baselineSaved)
         )
 
     fun applyDebit(current: LifetimeAggregates, credit: LifetimeAggregates): LifetimeAggregates =
         LifetimeAggregates(
-            saved = current.saved - credit.saved,
-            wasted = current.wasted - credit.wasted,
+            saved = SmokingCalculator.roundMoney(current.saved - credit.saved),
+            wasted = SmokingCalculator.roundMoney(current.wasted - credit.wasted),
             smokingUnits = current.smokingUnits - credit.smokingUnits,
-            baselineSaved = current.baselineSaved - credit.baselineSaved
+            baselineSaved = SmokingCalculator.roundMoney(current.baselineSaved - credit.baselineSaved)
         )
 
     fun applyReplace(
@@ -72,10 +79,10 @@ object RegistryMutations {
         newCredit: LifetimeAggregates
     ): LifetimeAggregates =
         LifetimeAggregates(
-            saved = current.saved - oldCredit.saved + newCredit.saved,
-            wasted = current.wasted - oldCredit.wasted + newCredit.wasted,
+            saved = SmokingCalculator.roundMoney(current.saved - oldCredit.saved + newCredit.saved),
+            wasted = SmokingCalculator.roundMoney(current.wasted - oldCredit.wasted + newCredit.wasted),
             smokingUnits = current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits,
-            baselineSaved = current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved
+            baselineSaved = SmokingCalculator.roundMoney(current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
         )
 
     /** Credit a single log's financials and smoking units (manual entry, restore). */
@@ -119,7 +126,12 @@ object RegistryMutations {
     ): Map<String, Double> {
         val live = liveConfigIds.toSet()
         val editable = historicalIds.toSet()
-        val merged = incoming.toMutableMap()
+        val merged = mutableMapOf<String, Double>()
+        incoming.forEach { (id, value) ->
+            if (value > 0.0 || id in previous || id in editable) {
+                merged[id] = value
+            }
+        }
         previous.forEach { (id, value) ->
             if (id !in live && (id !in editable || id !in incoming)) merged[id] = value
         }

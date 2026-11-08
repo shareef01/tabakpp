@@ -1219,6 +1219,72 @@ class RegistryViewModelTest {
     }
 
     @Test
+    fun financialMode_streamsLiveTransitions_withoutScreenResubscription_F02() {
+        val (vm, reg, _) = build()
+        reg.profileFlow.value = UserProfile(
+            unitPrice = 1.0,
+            lifetimeAggregates = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0)
+        )
+        reg.ledgersFlow.value = listOf(
+            DailyFinancialRecord(
+                date = vm.trackingDay.value,
+                canonicalCredit = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0),
+                eligible = true,
+                foldedIntoLifetime = false,
+            )
+        )
+        val jMode = bg.launch { vm.financialMode.collect {} }
+        val jCanon = bg.launch { vm.canonical.collect {} }
+        val jMetrics = bg.launch { vm.metrics.collect {} }
+        scheduler.runCurrent()
+
+        assertEquals("LEGACY", vm.financialMode.value)
+        assertNull(vm.canonical.value)
+
+        // Transition LEGACY -> MIGRATING -> OPTION_B while collectors stay active
+        reg.financialMode = "MIGRATING"
+        scheduler.runCurrent()
+        assertEquals("MIGRATING", vm.financialMode.value)
+        assertEquals("MIGRATING", vm.canonical.value?.mode)
+
+        reg.financialMode = "OPTION_B"
+        scheduler.runCurrent()
+        assertEquals("OPTION_B", vm.financialMode.value)
+        assertEquals("OPTION_B", vm.canonical.value?.mode)
+        assertEquals(8.0, vm.metrics.value!!.savedLifetime, 0.001) // 4.0 lifetime + 4.0 open canonical
+
+        jMode.cancel(); jCanon.cancel(); jMetrics.cancel()
+    }
+
+    @Test
+    fun mutationBlocked_usesInjectedClock_forSmokingMigrationLease_F08() {
+        // Clock is set to 2026-06-01T12:00:00Z, and lease expires 5 minutes later
+        // (2026-06-01T12:05:00Z), which is in the past relative to wall-clock Clock.System.now()
+        // but in the future relative to the injected clock.
+        val clock = FakeClock(kotlinx.datetime.Instant.parse("2026-06-01T12:00:00Z"))
+        val leaseUntil = dev.gitlive.firebase.firestore.Timestamp(
+            kotlinx.datetime.Instant.parse("2026-06-01T12:05:00Z").epochSeconds,
+            0
+        )
+        val (vm, reg, _) = build(clock = clock)
+        reg.profileFlow.value = UserProfile(smokingMigrationLeaseUntil = leaseUntil)
+        scheduler.runCurrent()
+
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertTrue(reg.liveCounterCalls.isEmpty(), "active lease relative to injected clock must block mutations")
+        assertNotNull(vm.error.value)
+
+        // Advance injected clock past lease expiry -> mutation is allowed
+        vm.clearError()
+        clock.now = kotlinx.datetime.Instant.parse("2026-06-01T12:06:00Z")
+        vm.increment("cig")
+        scheduler.runCurrent()
+        assertEquals(1, reg.liveCounterCalls.size)
+        assertNull(vm.error.value)
+    }
+
+    @Test
     fun metrics_doNotDoubleCountAFoldedLedger() {
         val (vm, reg, _) = build()
         reg.profileFlow.value = UserProfile(lifetimeAggregates = LifetimeAggregates(saved = 4.0, wasted = 6.0, smokingUnits = 6.0, baselineSaved = 9.0))

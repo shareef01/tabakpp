@@ -216,6 +216,38 @@ describe('ExportBuilder.buildCsv', () => {
     const lines = csv.split('\n');
     expect(lines[1]).toContain("'@SUM(1,2)");
   });
+
+  it('neutralizes tab, carriage-return, newline, quote, and leading-space formula injection vectors (F-07)', () => {
+    const vectors = ['\t=CMD()', '\r=CMD()', '\n=CMD()', ' =CMD()', '"=CMD()'];
+    for (const name of vectors) {
+      const snapshot = {
+        configs: [{ id: 'cfg1', name, type: 'smoking', pricePerUnit: 0.5, limit: 20, order: 0, isFinanciallyTracked: true, baseline: 15 }],
+        days: [{ date: '2026-09-14', status: 'closed', counts: { cfg1: 1 } }],
+        logs: [],
+      };
+      const csv = buildCsv(snapshot, 0.5);
+      expect(csv).toContain("'");
+    }
+  });
+
+  it('rounds CSV spent and saved columns to 2 decimal places without floating-point drift (F-07)', () => {
+    const snapshot = {
+      configs: [{ id: 'cfg1', name: 'Cigarettes', type: 'smoking', pricePerUnit: 0.33, limit: 10, order: 0, isFinanciallyTracked: true, baseline: 15 }],
+      days: [{
+        date: '2026-09-14',
+        status: 'closed',
+        counts: { cfg1: 3 },
+        trackerSnapshots: {
+          cfg1: { name: 'Cigarettes', target: 10, baseline: 15, unitPrice: 0.33, isFinanciallyTracked: true },
+        },
+      }],
+      logs: [],
+    };
+    const csv = buildCsv(snapshot, 0.33);
+    const dayRow = csv.split('\n')[1].split(',');
+    expect(dayRow[8]).toBe('0.99'); // 3 * 0.33
+    expect(dayRow[9]).toBe('2.31'); // 7 * 0.33 (not 2.3100000000000005)
+  });
 });
 
 describe('ExportBuilder — canonical OPTION_B financials (Task A)', () => {

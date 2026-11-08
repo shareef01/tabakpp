@@ -1023,4 +1023,45 @@ describe('SmokingCalculator Platinum Logic Verification', () => {
       expect(cReport[0].missingConfig).toContain('cig');
     });
   });
+
+  describe('Cross-platform symmetric half-away-from-zero rounding policy', () => {
+    it('rounds positive and negative half-cent values symmetrically including IEEE-754 computed half-cents', () => {
+      expect(SmokingCalculator.roundMoney(0)).toBe(0);
+      expect(SmokingCalculator.roundMoney(-0)).toBe(0);
+      expect(SmokingCalculator.roundMoney(0.125)).toBe(0.13);
+      expect(SmokingCalculator.roundMoney(-0.125)).toBe(-0.13);
+      expect(SmokingCalculator.roundMoney(1.005)).toBe(1.01);
+      expect(SmokingCalculator.roundMoney(-1.005)).toBe(-1.01);
+      expect(SmokingCalculator.roundMoney(10.075)).toBe(10.08);
+      expect(SmokingCalculator.roundMoney(-10.075)).toBe(-10.08);
+      expect(SmokingCalculator.roundMoney(3 * 0.075)).toBe(0.23);
+      expect(SmokingCalculator.roundMoney(-3 * 0.075)).toBe(-0.23);
+      expect(SmokingCalculator.roundMoney(1.4 + 0.005)).toBe(1.41);
+      expect(SmokingCalculator.roundMoney(-1.4 - 0.005)).toBe(-1.41);
+      expect(SmokingCalculator.formatCurrency(3 * 0.075)).toBe('0,23 €');
+      expect(SmokingCalculator.formatCurrency(-3 * 0.075)).toBe('-0,23 €');
+    });
+
+    it('preserves exact zero drift across repeated credits, debits, and full reversals while keeping smokingUnits unrounded', () => {
+      let running = 0;
+      const steps = [1.005, 10.075, 3 * 0.075, 0.125, 0.1, 0.2];
+      for (let i = 0; i < 200; i++) {
+        for (const s of steps) {
+          running = SmokingCalculator.roundMoney(running + SmokingCalculator.roundMoney(s));
+        }
+        for (const s of [...steps].reverse()) {
+          running = SmokingCalculator.roundMoney(running + SmokingCalculator.roundMoney(-s));
+        }
+      }
+      expect(running).toBe(0);
+
+      const cfg = [{ id: 'cig', type: 'CIGARETTE', limit: 10, baseline: 13, pricePerUnit: 0.075, isFinanciallyTracked: true, isPrimaryTracked: true }];
+      const dayFin = SmokingCalculator.calculateDayFinancials({ cig: 3 }, cfg, 0.075);
+      expect(dayFin.wasted).toBe(0.23); // 3 * 0.075 = 0.225 -> 0.23
+      expect(dayFin.saved).toBe(0.53);  // 7 * 0.075 = 0.525 -> 0.53
+      const baseFin = SmokingCalculator.calculateBaselineSavings({ cig: 10 }, cfg, 0.075);
+      expect(baseFin.moneySaved).toBe(0.23); // 3 * 0.075 = 0.225 -> 0.23
+      expect(baseFin.unitsAvoided).toBe(3);
+    });
+  });
 });

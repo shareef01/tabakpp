@@ -145,7 +145,7 @@ object SmokingCalculator {
             saved += max(0.0, limit.toDouble() - count) * price
         }
 
-        return FinancialResult(wasted, saved)
+        return FinancialResult(roundMoney(wasted), roundMoney(saved))
     }
 
     data class FinancialResult(val wasted: Double, val saved: Double)
@@ -456,7 +456,7 @@ object SmokingCalculator {
             val price = c.pricePerUnit ?: defaultPrice
             moneySaved += avoided * price
         }
-        return BaselineSavings(moneySaved, unitsAvoided, hasBaseline)
+        return BaselineSavings(roundMoney(moneySaved), unitsAvoided, hasBaseline)
     }
 
     /**
@@ -480,7 +480,12 @@ object SmokingCalculator {
 
     fun requireHistoricalPrices(counts: Map<String, Double>, snapshots: Map<String, TrackerSnapshot>) {
         if (snapshots.isEmpty() || counts.keys.any { it !in snapshots } ||
-            snapshots.values.any { it.isFinanciallyTracked && it.unitPrice == null }) {
+            snapshots.entries.any { (id, s) ->
+                s.isFinanciallyTracked &&
+                    (id in counts || s.target > 0 || (s.baseline ?: 0) > 0) &&
+                    s.unitPrice == null
+            }
+        ) {
             throw IllegalStateException("HISTORICAL_PRICE_UNAVAILABLE")
         }
     }
@@ -574,10 +579,10 @@ object SmokingCalculator {
         var baseline = 0.0
         fun add(c: LifetimeAggregates?) {
             if (c == null) return
-            saved += c.saved
-            wasted += c.wasted
+            saved = roundMoney(saved + c.saved)
+            wasted = roundMoney(wasted + c.wasted)
             units += c.smokingUnits
-            baseline += c.baselineSaved
+            baseline = roundMoney(baseline + c.baselineSaved)
         }
         dayDocs.forEach { if (it.foldedIntoLifetime) add(it.aggregateCredit) }
         logs.forEach { add(it.aggregateCredit) }
@@ -706,15 +711,15 @@ object SmokingCalculator {
             } else {
                 LifetimeAggregates()
             }
-            var legacySaved = dayCredit.saved
-            var legacyBaseline = dayCredit.baselineSaved
+            var legacySaved = roundMoney(dayCredit.saved)
+            var legacyBaseline = roundMoney(dayCredit.baselineSaved)
             dayLogs.forEach { l ->
                 val c = l.aggregateCredit ?: LifetimeAggregates()
-                legacySaved += c.saved
-                legacyBaseline += c.baselineSaved
+                legacySaved = roundMoney(legacySaved + c.saved)
+                legacyBaseline = roundMoney(legacyBaseline + c.baselineSaved)
             }
-            val deltaSaved = optionB.saved - legacySaved
-            val deltaBaseline = optionB.baselineSaved - legacyBaseline
+            val deltaSaved = roundMoney(optionB.saved - legacySaved)
+            val deltaBaseline = roundMoney(optionB.baselineSaved - legacyBaseline)
             val category = when {
                 optionB.missingConfig.isNotEmpty() -> "C"
                 kotlin.math.abs(deltaSaved) > 1e-9 || kotlin.math.abs(deltaBaseline) > 1e-9 ->
@@ -850,11 +855,11 @@ object SmokingCalculator {
 
         var savedLifetime = 0.0
         logged.values.forEach { dayCounts ->
-            savedLifetime += calculateFinancials(dayCounts, configs, userPrice).saved
+            savedLifetime = roundMoney(savedLifetime + calculateFinancials(dayCounts, configs, userPrice).saved)
         }
 
         if (lifetimeAggregates != null) {
-            savedLifetime = lifetimeAggregates.saved
+            savedLifetime = roundMoney(lifetimeAggregates.saved)
         }
 
         // Baseline-derived savings/reduction (item 3) — always from baseline
@@ -865,7 +870,7 @@ object SmokingCalculator {
         // top of lifetime.
         val sessionBaseline = calculateBaselineSavings(sessionCounts, configs, userPrice)
         val folded = dayDocs.any { it.date == trackingDay && it.foldedIntoLifetime }
-        val baselineSavedLifetime = (lifetimeAggregates?.baselineSaved ?: 0.0) + if (folded) 0.0 else sessionBaseline.moneySaved
+        val baselineSavedLifetime = roundMoney((lifetimeAggregates?.baselineSaved ?: 0.0) + if (folded) 0.0 else sessionBaseline.moneySaved)
         val hasAnyBaseline = sessionBaseline.hasBaseline || configs.any { it.baseline != null }
 
         val sessionFin = calculateFinancials(sessionCounts, configs, userPrice)
@@ -970,7 +975,7 @@ object SmokingCalculator {
         val parts = s.split('e', 'E')
         val exp = if (parts.size > 1) (parts[1].toIntOrNull() ?: 0) + 2 else 2
         val shifted = (parts[0] + "e" + exp).toDoubleOrNull() ?: (absVal * 100.0)
-        val rounded = floor(shifted + 0.5)
+        val rounded = floor(shifted + 0.5 + 1e-12)
         if (rounded == 0.0) return 0.0
         val rParts = rounded.toLong().toString().split('e', 'E')
         val rExp = if (rParts.size > 1) (rParts[1].toIntOrNull() ?: 0) - 2 else -2
@@ -987,7 +992,7 @@ object SmokingCalculator {
         val parts = s.split('e', 'E')
         val exp = if (parts.size > 1) (parts[1].toIntOrNull() ?: 0) + 2 else 2
         val shifted = (parts[0] + "e" + exp).toDoubleOrNull() ?: (absVal * 100.0)
-        val cents = floor(shifted + 0.5).toLong()
+        val cents = floor(shifted + 0.5 + 1e-12).toLong()
         return "$sign${cents / 100},${(cents % 100).toString().padStart(2, '0')} €"
     }
 
@@ -1322,9 +1327,9 @@ object SmokingCalculator {
     ): MonthSummary {
         val trackedDays = days.size
         val totalUnits = days.sumOf { it.second.units }
-        val totalSpent = days.sumOf { it.second.spent }
-        val totalSaved = days.sumOf { it.second.saved }
-        val totalBaselineSaved = days.sumOf { it.second.baselineSaved }
+        val totalSpent = days.fold(0.0) { acc, d -> roundMoney(acc + d.second.spent) }
+        val totalSaved = days.fold(0.0) { acc, d -> roundMoney(acc + d.second.saved) }
+        val totalBaselineSaved = days.fold(0.0) { acc, d -> roundMoney(acc + d.second.baselineSaved) }
         val hasBaseline = days.any { it.second.hasBaseline }
 
         return MonthSummary(

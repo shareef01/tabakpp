@@ -133,13 +133,15 @@ jobs:
           }
           JSON
 
-      - name: Install web deps
-        working-directory: webApp
-        run: npm ci
+      - name: Install web and function deps
+        run: |
+          npm --prefix webApp ci
+          npm --prefix functions ci
 
       - name: Run full validation suite (mirrors ci.yml)
         run: |
-          ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+          ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+          npm --prefix functions audit --omit=dev --audit-level=high && npm --prefix functions test
           cd webApp && npm run lint && npm run audit:prod && npm run test:run && npm run test:contract && npm run test:rules && npm run build && npm run test:pwa
 
       - name: Require exact-SHA main CI and Android instrumentation acceptance

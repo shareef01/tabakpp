@@ -9,6 +9,7 @@
  */
 
 import { resolveDateFinancial, aggregateFinancials } from '../services/financialReadModel';
+import { SmokingCalculator } from './smokingCalculator';
 
 /**
  * Date-level canonical financial projection for an export (Task A).
@@ -340,9 +341,9 @@ function computeDayEconomics(count, snap) {
   const target = snap.target;
   const actual = Math.max(0, count || 0);
   const isFinanciallyTracked = snap.isFinanciallyTracked !== undefined ? snap.isFinanciallyTracked : true;
-  const spent = isFinanciallyTracked ? actual * price : null;
+  const spent = isFinanciallyTracked ? SmokingCalculator.roundMoney(actual * price) : null;
   const saved = isFinanciallyTracked
-    ? Math.max(0, (target || 0) - actual) * price
+    ? SmokingCalculator.roundMoney(Math.max(0, (target || 0) - actual) * price)
     : null;
   return { spent, saved };
 }
@@ -424,7 +425,17 @@ function csvIntField(value) {
 function neutralizeFormula(value) {
   if (
     value.length > 0 &&
-    (value[0] === '=' || value[0] === '+' || value[0] === '-' || value[0] === '@')
+    (
+      value[0] === '=' ||
+      value[0] === '+' ||
+      value[0] === '-' ||
+      value[0] === '@' ||
+      value[0] === ' ' ||
+      value[0] === '\t' ||
+      value[0] === '\r' ||
+      value[0] === '\n' ||
+      value[0] === '"'
+    )
   ) {
     return "'" + value;
   }

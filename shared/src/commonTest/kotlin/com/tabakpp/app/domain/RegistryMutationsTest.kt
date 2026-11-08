@@ -193,4 +193,85 @@ class RegistryMutationsTest {
         )
         assertAgg(Triple(expectedNew.saved, expectedNew.wasted, expectedNew.smokingUnits), result.logCredit)
     }
+
+    @Test
+    fun mergeHistoricalEditCounts_ignoresZeroCountForUninvolvedTrackers_preservesExistingZero() {
+        val merged = RegistryMutations.mergeHistoricalEditCounts(
+            incoming = mapOf("cig" to 0.0, "newVape" to 0.0),
+            previous = mapOf("cig" to 4.0, "retired" to 7.0),
+            liveConfigIds = listOf("cig", "newVape"),
+            historicalIds = listOf("cig", "retired")
+        )
+        // `cig` is an existing historical tracker so `cig: 0.0` is preserved;
+        // `newVape` is absent from both previous counts and historical snapshots so `newVape: 0.0` is ignored.
+        assertEquals(mapOf("cig" to 0.0, "retired" to 7.0), merged)
+    }
+
+    @Test
+    fun financialRounding_roundsSavedWastedAndBaselineSaved_withoutRoundingSmokingUnits() {
+        val decCig = TrackerConfig(
+            "cig", "Cigarette", 10, 1, TrackerType.CIGARETTE,
+            pricePerUnit = 0.125, baseline = 11
+        )
+        // count = 9 -> wasted = 9 * 0.125 = 1.125 -> 1.13; saved = 1 * 0.125 = 0.125 -> 0.13; baselineSaved = 2 * 0.125 = 0.25
+        val contrib = RegistryMutations.contribution(mapOf("cig" to 9.0), listOf(decCig), 0.125)
+        assertEquals(0.13, contrib.saved)
+        assertEquals(1.13, contrib.wasted)
+        assertEquals(0.25, contrib.baselineSaved)
+        assertEquals(9.0, contrib.smokingUnits)
+
+        // 0.1 + 0.2 in IEEE-754 is 0.30000000000000004 without roundMoney
+        val start = LifetimeAggregates(saved = 0.1, wasted = 0.1, smokingUnits = 1.5, baselineSaved = 0.1)
+        val delta = LifetimeAggregates(saved = 0.2, wasted = 0.2, smokingUnits = 2.0, baselineSaved = 0.2)
+        val credited = RegistryMutations.applyCredit(start, delta)
+        assertEquals(0.3, credited.saved)
+        assertEquals(0.3, credited.wasted)
+        assertEquals(0.3, credited.baselineSaved)
+        assertEquals(3.5, credited.smokingUnits)
+
+        val debited = RegistryMutations.applyDebit(credited, delta)
+        assertEquals(0.1, debited.saved)
+        assertEquals(0.1, debited.wasted)
+        assertEquals(0.1, debited.baselineSaved)
+        assertEquals(1.5, debited.smokingUnits)
+
+        val replaced = RegistryMutations.applyReplace(
+            LifetimeAggregates(saved = 0.3, wasted = 0.3, smokingUnits = 3.0, baselineSaved = 0.3),
+            LifetimeAggregates(saved = 0.2, wasted = 0.2, smokingUnits = 2.0, baselineSaved = 0.2),
+            LifetimeAggregates(saved = 0.2, wasted = 0.2, smokingUnits = 4.0, baselineSaved = 0.2)
+        )
+        assertEquals(0.3, replaced.saved)
+        assertEquals(0.3, replaced.wasted)
+        assertEquals(0.3, replaced.baselineSaved)
+        assertEquals(5.0, replaced.smokingUnits)
+
+        // Symmetric half-away-from-zero across positive/negative half-cents and IEEE-754 computed half-cents
+        assertEquals(0.13, SmokingCalculator.roundMoney(0.125))
+        assertEquals(-0.13, SmokingCalculator.roundMoney(-0.125))
+        assertEquals(1.01, SmokingCalculator.roundMoney(1.005))
+        assertEquals(-1.01, SmokingCalculator.roundMoney(-1.005))
+        assertEquals(10.08, SmokingCalculator.roundMoney(10.075))
+        assertEquals(-10.08, SmokingCalculator.roundMoney(-10.075))
+        assertEquals(0.23, SmokingCalculator.roundMoney(3.0 * 0.075))
+        assertEquals(-0.23, SmokingCalculator.roundMoney(-3.0 * 0.075))
+        assertEquals(1.41, SmokingCalculator.roundMoney(1.4 + 0.005))
+        assertEquals(-1.41, SmokingCalculator.roundMoney(-1.4 - 0.005))
+        assertEquals("0,23 €", SmokingCalculator.formatCurrency(3.0 * 0.075))
+        assertEquals("-0,23 €", SmokingCalculator.formatCurrency(-3.0 * 0.075))
+
+        // Repeated credits, debits, and full reversal produce zero net drift
+        var agg = LifetimeAggregates()
+        val steps = listOf(
+            LifetimeAggregates(saved = SmokingCalculator.roundMoney(1.005), wasted = SmokingCalculator.roundMoney(3.0 * 0.075), smokingUnits = 1.5, baselineSaved = SmokingCalculator.roundMoney(10.075)),
+            LifetimeAggregates(saved = 0.1, wasted = 0.2, smokingUnits = 2.25, baselineSaved = SmokingCalculator.roundMoney(0.125))
+        )
+        repeat(200) {
+            steps.forEach { s -> agg = RegistryMutations.applyCredit(agg, s) }
+            steps.reversed().forEach { s -> agg = RegistryMutations.applyDebit(agg, s) }
+        }
+        assertEquals(0.0, agg.saved)
+        assertEquals(0.0, agg.wasted)
+        assertEquals(0.0, agg.baselineSaved)
+        assertEquals(0.0, agg.smokingUnits)
+    }
 }
