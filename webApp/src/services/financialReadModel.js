@@ -15,6 +15,8 @@
  * The Kotlin side mirrors this contract (`resolveDateFinancial`); the trusted
  * backend stays authoritative for persisted Option-B values.
  */
+import { roundMoney } from '../utils/smokingCalculator.js';
+
 export const FinancialSource = {
   LEGACY: 'LEGACY_FINANCIAL_SOURCE',
   CANONICAL: 'OPTION_B_CANONICAL_SOURCE',
@@ -49,9 +51,9 @@ export function resolveDateFinancial({ financialMode = 'LEGACY', ledger = null, 
       source: FinancialSource.CANONICAL,
       available: true,
       canonical: {
-        spent: num(ledger.canonicalCredit.wasted),
-        saved: num(ledger.canonicalCredit.saved),
-        baselineSaved: num(ledger.canonicalCredit.baselineSaved),
+        spent: roundMoney(num(ledger.canonicalCredit.wasted)),
+        saved: roundMoney(num(ledger.canonicalCredit.saved)),
+        baselineSaved: roundMoney(num(ledger.canonicalCredit.baselineSaved)),
         smokingUnits: num(ledger.canonicalCredit.smokingUnits),
       },
       unresolved,
@@ -86,9 +88,9 @@ export function aggregateFinancials(resolutions = []) {
   for (const r of resolutions) {
     if (!r.available) { complete = false; unavailableDates += 1; continue; }
     const u = r.unresolved || {};
-    if (u.spent) { known.spent = false; complete = false; } else spent += r.canonical.spent;
-    if (u.saved) { known.saved = false; complete = false; } else saved += r.canonical.saved;
-    if (u.baselineSaved) { known.baselineSaved = false; complete = false; } else baselineSaved += r.canonical.baselineSaved;
+    if (u.spent) { known.spent = false; complete = false; } else spent = roundMoney(spent + r.canonical.spent);
+    if (u.saved) { known.saved = false; complete = false; } else saved = roundMoney(saved + r.canonical.saved);
+    if (u.baselineSaved) { known.baselineSaved = false; complete = false; } else baselineSaved = roundMoney(baselineSaved + r.canonical.baselineSaved);
     if (u.smokingUnits) { known.smokingUnits = false; complete = false; } else smokingUnits += r.canonical.smokingUnits;
     if (Object.values(u).some(Boolean)) unresolvedDates += 1;
   }

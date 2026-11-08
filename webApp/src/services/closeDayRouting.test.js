@@ -205,6 +205,17 @@ describe('financialWritesLocked guard on ungated protected paths (W1B-4)', () =>
       expect(TrustedFinancial.execute).not.toHaveBeenCalled();
     });
 
+    it(`${mode}: closeDay fails closed before any write when callable route is inactive (F-04)`, async () => {
+      TrustedFinancial.isEnabled.mockReturnValue(false);
+      h.getDoc.mockResolvedValue(snapOf({ financialMode: mode }));
+
+      await expect(RegistryService.closeDay('u1', '2026-10-01'))
+        .rejects.toThrow('DAY_CLOSE_UNSUPPORTED');
+
+      expect(h.runTransaction).not.toHaveBeenCalled();
+      expect(TrustedFinancial.execute).not.toHaveBeenCalled();
+    });
+
     it(`${mode}: migrateSmokingUnitsIfNeeded is skipped (server-owned aggregates)`, async () => {
       h.getDoc.mockResolvedValue(snapOf({ financialMode: mode }));
 
@@ -325,6 +336,16 @@ describe('historical-update + tracker-delete trusted routing (W1B-2 / W1B-4a)', 
 
     await expect(RegistryService.deleteProtocol('u1', 'cig0', '2026-10-01'))
       .rejects.toThrow('TRACKER_DELETE_UNSUPPORTED');
+    expect(TrustedFinancial.execute).not.toHaveBeenCalled();
+    expect(h.runTransaction).not.toHaveBeenCalled();
+  });
+
+  it('MIGRATING: closeDay fails closed even when build flag is enabled (F-04)', async () => {
+    TrustedFinancial.isEnabled.mockReturnValue(true);
+    h.getDoc.mockResolvedValue(snapOf({ financialMode: 'MIGRATING' }));
+
+    await expect(RegistryService.closeDay('u1', '2026-10-01'))
+      .rejects.toThrow('DAY_CLOSE_UNSUPPORTED');
     expect(TrustedFinancial.execute).not.toHaveBeenCalled();
     expect(h.runTransaction).not.toHaveBeenCalled();
   });

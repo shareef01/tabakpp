@@ -239,10 +239,10 @@ class FirebaseRegistryRepository(
                 val current = userSnap.data<UserProfile>().lifetimeAggregates
                 val oldCredit = day.aggregateCredit ?: LifetimeAggregates()
                 updateFields(userRef) {
-                    "lifetimeAggregates.saved" to (current.saved - oldCredit.saved + newCredit.saved)
-                    "lifetimeAggregates.wasted" to (current.wasted - oldCredit.wasted + newCredit.wasted)
+                    "lifetimeAggregates.saved" to SmokingCalculator.roundMoney(current.saved - oldCredit.saved + newCredit.saved)
+                    "lifetimeAggregates.wasted" to SmokingCalculator.roundMoney(current.wasted - oldCredit.wasted + newCredit.wasted)
                     "lifetimeAggregates.smokingUnits" to (current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits)
-                    "lifetimeAggregates.baselineSaved" to (current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
+                    "lifetimeAggregates.baselineSaved" to SmokingCalculator.roundMoney(current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
                 }
             }
         }
@@ -488,10 +488,10 @@ class FirebaseRegistryRepository(
                 "closedAt" to (Timestamp.ServerTimestamp as BaseTimestamp)
             }
             updateFields(userRef) {
-                "lifetimeAggregates.saved" to (profile.lifetimeAggregates.saved + credit.saved)
-                "lifetimeAggregates.wasted" to (profile.lifetimeAggregates.wasted + credit.wasted)
+                "lifetimeAggregates.saved" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.saved + credit.saved)
+                "lifetimeAggregates.wasted" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.wasted + credit.wasted)
                 "lifetimeAggregates.smokingUnits" to (profile.lifetimeAggregates.smokingUnits + credit.smokingUnits)
-                "lifetimeAggregates.baselineSaved" to (profile.lifetimeAggregates.baselineSaved + credit.baselineSaved)
+                "lifetimeAggregates.baselineSaved" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.baselineSaved + credit.baselineSaved)
             }
         }
     }
@@ -557,7 +557,10 @@ class FirebaseRegistryRepository(
             if (!daySnap.exists) throw Exception("DAY_NOT_FOUND")
             val day = decodeDayDocument(daySnap) ?: throw Exception("DAY_NOT_FOUND")
 
-            val mergedCounts = day.counts + normalized
+            val filteredNormalized = normalized.filter { (id, v) ->
+                v > 0.0 || id in day.counts || id in day.trackerSnapshots
+            }
+            val mergedCounts = day.counts + filteredNormalized
             if (SmokingCalculator.countsEqual(mergedCounts, day.counts)) return@runTransaction
             SmokingCalculator.requireHistoricalPrices(mergedCounts, day.trackerSnapshots)
             val newCredit = SmokingCalculator.computeDayCredit(mergedCounts, day.trackerSnapshots)
@@ -568,10 +571,10 @@ class FirebaseRegistryRepository(
                 if (userSnap.exists) {
                     val profile = userSnap.data<UserProfile>()
                     updateFields(userRef) {
-                        "lifetimeAggregates.saved" to (profile.lifetimeAggregates.saved - oldCredit.saved + newCredit.saved)
-                        "lifetimeAggregates.wasted" to (profile.lifetimeAggregates.wasted - oldCredit.wasted + newCredit.wasted)
+                        "lifetimeAggregates.saved" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.saved - oldCredit.saved + newCredit.saved)
+                        "lifetimeAggregates.wasted" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.wasted - oldCredit.wasted + newCredit.wasted)
                         "lifetimeAggregates.smokingUnits" to (profile.lifetimeAggregates.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits)
-                        "lifetimeAggregates.baselineSaved" to (profile.lifetimeAggregates.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
+                        "lifetimeAggregates.baselineSaved" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
                     }
                 }
             }
@@ -1395,9 +1398,7 @@ class FirebaseRegistryRepository(
             "pouchPrice" to profile.pouchPrice
             "estimatedYield" to profile.estimatedYield
             "dayStartHour" to profile.dayStartHour
-            if (profile.timeZone != null) {
-                "timeZone" to profile.timeZone
-            }
+            "timeZone" to profile.timeZone
             "ecoMode" to FieldValue.delete
             "retailPrice" to FieldValue.delete
             "retailQty" to FieldValue.delete

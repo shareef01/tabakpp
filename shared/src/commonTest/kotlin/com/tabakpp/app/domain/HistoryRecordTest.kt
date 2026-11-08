@@ -35,5 +35,13 @@ class HistoryRecordTest {
         assertFailsWith<IllegalStateException> {
             SmokingCalculator.requireHistoricalPrices(mapOf("cig" to 3.0), mapOf("cig" to snapshot.copy(unitPrice = null)))
         }
+        // Unrelated incomplete snapshot (zero target, no baseline, not in counts) does not reject valid edit
+        SmokingCalculator.requireHistoricalPrices(
+            mapOf("cig" to 3.0),
+            mapOf(
+                "cig" to snapshot,
+                "unrelated" to TrackerSnapshot(name = "Unrelated", target = 0, baseline = null, unitPrice = null, isFinanciallyTracked = true)
+            )
+        )
     }
 }

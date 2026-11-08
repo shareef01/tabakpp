@@ -119,4 +119,30 @@ class ExportDailyFinancialsTest {
         val rows = json("MIGRATING", emptyList())["dailyFinancials"] as JsonArray
         assertEquals("LEGACY_FINANCIAL_SOURCE", rows[0].jsonObject["source"]!!.jsonPrimitive.content)
     }
+
+    @Test
+    fun csv_neutralizesNewlineAndWhitespaceFormulaVectors_andRoundsEconomics_F07() {
+        val trickyConfigs = listOf(
+            TrackerConfig(id = "cig", name = "\n=CMD()", limit = 10, order = 0, pricePerUnit = 0.33)
+        )
+        val trickyDays = listOf(
+            DayDocument(
+                date = date,
+                counts = mapOf("cig" to 3.0),
+                trackerSnapshots = mapOf(
+                    "cig" to com.tabakpp.app.data.TrackerSnapshot(
+                        name = "\n=CMD()",
+                        target = 10,
+                        baseline = 15,
+                        unitPrice = 0.33,
+                        isFinanciallyTracked = true
+                    )
+                ),
+                status = "closed"
+            )
+        )
+        val csv = ExportBuilder.buildCsv(null, trickyConfigs, trickyDays, emptyList(), 0.33, financialMode = "LEGACY")
+        assertTrue(csv.contains("\n'\n=CMD()") || csv.contains("\"'\n=CMD()\""), "newline formula vector must be neutralized with single quote")
+        assertTrue(csv.contains(",0.33,0.99,2.31,closed"), "spent and saved must be rounded to 2 decimal places: $csv")
+    }
 }

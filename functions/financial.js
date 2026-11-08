@@ -28,7 +28,7 @@ export const roundMoney = (v) => {
   const abs = Math.abs(n);
   const parts = String(abs).split('e');
   const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
-  const rounded = Math.round(shifted);
+  const rounded = Math.round(shifted + 1e-12);
   if (rounded === 0) return 0;
   const roundedParts = String(rounded).split('e');
   const result = Number(roundedParts[0] + 'e' + (roundedParts[1] ? Number(roundedParts[1]) - 2 : '-2'));
@@ -210,14 +210,27 @@ const ZERO_CREDIT = { wasted: 0, saved: 0, smokingUnits: 0, baselineSaved: 0 };
 export const calculateDailyFinancials = (dayDoc, logsForDate = [], configs = [], defaultUnitPrice = 0.5, opts = {}) => {
   const typeById = Object.fromEntries((configs || []).map((c) => [c.id, c.type]));
   const counts = { ...(dayDoc?.counts || {}) };
-  const ledgerSnaps = opts.ledgerSnapshots || {};
+  const date = dayDoc?.date || logsForDate?.[0]?.logDate || null;
+  const isCurrent = !!(opts.currentTrackingDate && date === opts.currentTrackingDate);
+  const effectiveLogs = (logsForDate || []).filter((l) => !(dayDoc && isArchiveLog(l)));
+
+  const rawLedgerSnaps = opts.ledgerSnapshots || {};
   const daySnaps = dayDoc?.trackerSnapshots || {};
+  const isOpenDay = !dayDoc || dayDoc.status === 'open' || (isCurrent && dayDoc.status !== 'closed');
+  const ledgerSnaps = isOpenDay
+    ? Object.fromEntries(
+        Object.entries(rawLedgerSnaps).filter(([id]) =>
+          Boolean(daySnaps[id])
+          || Number(dayDoc?.counts?.[id] || 0) > 0
+          || effectiveLogs.some((l) => Number(l.counts?.[id] || 0) > 0)
+        )
+      )
+    : rawLedgerSnaps;
   const snapshots = { ...ledgerSnaps, ...daySnaps };
   let ambiguous = false;
   const conflicting = [];
   const missingConfig = new Set();
 
-  const effectiveLogs = (logsForDate || []).filter((l) => !(dayDoc && isArchiveLog(l)));
   effectiveLogs.forEach((log) => {
     Object.entries(log.counts || {}).forEach(([id, v]) => {
       counts[id] = Math.max(0, (counts[id] || 0) + Math.max(0, v || 0));
@@ -225,10 +238,14 @@ export const calculateDailyFinancials = (dayDoc, logsForDate = [], configs = [],
   });
 
   const hasLogConsumption = effectiveLogs.some((l) => Object.values(l.counts || {}).some((v) => Number(v) > 0));
-  const eligible = !!dayDoc || hasLogConsumption;
+  const hasDayEvidence = !!dayDoc && (
+    dayDoc.status === 'closed'
+    || dayDoc.foldedIntoLifetime === true
+    || Object.keys(dayDoc.counts || {}).length > 0
+    || Object.keys(dayDoc.trackerSnapshots || {}).length > 0
+  );
+  const eligible = hasDayEvidence || hasLogConsumption;
 
-  const date = dayDoc?.date || logsForDate?.[0]?.logDate || null;
-  const isCurrent = !!(opts.currentTrackingDate && date === opts.currentTrackingDate);
   const stored = (id) => !!(ledgerSnaps[id] || daySnaps[id]);
 
   // Historical log stamps — skipped for the current day (its live config rules).
@@ -307,12 +324,13 @@ export const calculateDailyFinancials = (dayDoc, logsForDate = [], configs = [],
     }
     Object.entries(snapshots).forEach(([id, snap]) => {
       const count = Math.max(0, counts[id] || 0);
+      const isRelevantFinancialSnapshot = count > 0 || Number(snap?.target || 0) > 0 || Number(snap?.baseline || 0) > 0;
       const pOk = priceKnown(snap);
       const tOk = targetKnown(snap);
       const bOk = baselineKnown(snap);
       const price = Number(snap?.unitPrice);
-      if (snap?.isFinanciallyTracked !== false) {
-        if (pOk) wasted += count * price; else unresolved.spent = true;
+      if (snap?.isFinanciallyTracked !== false && isRelevantFinancialSnapshot) {
+        if (pOk) wasted += count * price; else if (count > 0) unresolved.spent = true;
         if (pOk && tOk) saved += Math.max(0, Number(snap.target) - count) * price; else unresolved.saved = true;
         if (snap?.baseline != null && pOk) baselineSaved += Math.max(0, Number(snap.baseline) - count) * price;
         else if (!bOk) unresolved.baselineSaved = true;
@@ -377,6 +395,57 @@ export const applyDelta = (base, delta) => {
     if (next > 0) out[id] = next; else delete out[id];
   });
   return out;
+};
+
+/**
+ * Validate and merge a HISTORICAL_DAY_UPDATE payload against the closed day's
+ * known historical snapshots.
+ *
+ * - Ignores zero-count entries for trackers absent from both existing day counts
+ *   and known historical snapshots.
+ * - Drops zero-count entries from the persisted day counts map (so Firestore
+ *   map replacement removes zeroed keys cleanly while frozen snapshots retain
+ *   the tracker's daily target allowance).
+ * - Validates relevant financial snapshots (trackers present in before/after
+ *   counts or snapshots with positive target/baseline), rejecting edits that
+ *   require unavailable historical pricing with `HISTORICAL_PRICE_UNAVAILABLE`
+ *   instead of silently resetting historical savings to zero.
+ */
+export const resolveHistoricalDayEdit = (day, incomingCounts, ledgerSnapshots = {}, maxCount = 10_000, maxDayTrackers = 50) => {
+  const prevCounts = day?.counts || {};
+  const knownSnapshots = { ...(ledgerSnapshots || {}), ...(day?.trackerSnapshots || {}) };
+  const merged = { ...prevCounts };
+  for (const [k, v] of Object.entries(incomingCounts || {})) {
+    if (v > 0 || Object.hasOwn(prevCounts, k) || Object.hasOwn(knownSnapshots, k)) {
+      merged[k] = v;
+    }
+  }
+  for (const [k, v] of Object.entries(merged)) {
+    if (v === 0) delete merged[k];
+    else if (!Number.isInteger(v) || v < 0 || v > maxCount) {
+      throw new Error('INVALID_COUNT');
+    }
+  }
+  if (Object.keys(merged).length > maxDayTrackers) {
+    throw new Error('TOO_MANY_TRACKERS');
+  }
+  const hasValidPrice = (s) => s?.unitPrice != null && Number.isFinite(Number(s.unitPrice));
+  const touchedOrActiveIds = new Set([
+    ...Object.keys(merged),
+    ...Object.keys(prevCounts),
+  ]);
+  if (
+    Object.keys(knownSnapshots).length === 0
+    || [...touchedOrActiveIds].some((id) => !knownSnapshots[id])
+    || Object.entries(knownSnapshots).some(([id, s]) => (
+      s?.isFinanciallyTracked !== false
+      && (touchedOrActiveIds.has(id) || Number(s?.target || 0) > 0 || Number(s?.baseline || 0) > 0)
+      && !hasValidPrice(s)
+    ))
+  ) {
+    throw new Error('HISTORICAL_PRICE_UNAVAILABLE');
+  }
+  return merged;
 };
 
 /**

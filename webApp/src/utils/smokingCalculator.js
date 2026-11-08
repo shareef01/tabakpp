@@ -20,7 +20,7 @@ export const roundMoney = (v) => {
   const abs = Math.abs(n);
   const parts = String(abs).split('e');
   const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
-  const rounded = Math.round(shifted);
+  const rounded = Math.round(shifted + 1e-12);
   if (rounded === 0) return 0;
   const roundedParts = String(rounded).split('e');
   const result = Number(roundedParts[0] + 'e' + (roundedParts[1] ? Number(roundedParts[1]) - 2 : '-2'));
@@ -184,15 +184,15 @@ const optionBDailyDryRun = (dayDocs = [], logs = [], defaultUnitPrice = 0.5) => 
     const legacy = dayLogs.reduce((acc, l) => {
       const c = l.aggregateCredit || zero;
       return {
-        saved: acc.saved + (c.saved || 0),
-        wasted: acc.wasted + (c.wasted || 0),
+        saved: roundMoney(acc.saved + (c.saved || 0)),
+        wasted: roundMoney(acc.wasted + (c.wasted || 0)),
         smokingUnits: acc.smokingUnits + (c.smokingUnits || 0),
-        baselineSaved: acc.baselineSaved + (c.baselineSaved || 0),
+        baselineSaved: roundMoney(acc.baselineSaved + (c.baselineSaved || 0)),
       };
-    }, { ...zero, saved: dayCredit.saved, wasted: dayCredit.wasted, smokingUnits: dayCredit.smokingUnits, baselineSaved: dayCredit.baselineSaved });
+    }, { ...zero, saved: roundMoney(dayCredit.saved || 0), wasted: roundMoney(dayCredit.wasted || 0), smokingUnits: dayCredit.smokingUnits || 0, baselineSaved: roundMoney(dayCredit.baselineSaved || 0) });
 
-    const deltaSaved = optionB.saved - legacy.saved;
-    const deltaBaseline = optionB.baselineSaved - legacy.baselineSaved;
+    const deltaSaved = roundMoney(optionB.saved - legacy.saved);
+    const deltaBaseline = roundMoney(optionB.baselineSaved - legacy.baselineSaved);
     let category = 'D';
     if (optionB.missingConfig.length > 0) category = 'C';
     else if (Math.abs(deltaSaved) > 1e-9 || Math.abs(deltaBaseline) > 1e-9) category = optionB.ambiguous ? 'B' : 'A';
@@ -223,10 +223,10 @@ const expectedLifetimeAggregates = (dayDocs = [], logs = []) => {
   const out = { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 };
   const add = (c) => {
     if (!c) return;
-    out.saved += Number.isFinite(c.saved) ? c.saved : 0;
-    out.wasted += Number.isFinite(c.wasted) ? c.wasted : 0;
+    out.saved = roundMoney(out.saved + (Number.isFinite(c.saved) ? c.saved : 0));
+    out.wasted = roundMoney(out.wasted + (Number.isFinite(c.wasted) ? c.wasted : 0));
     out.smokingUnits += Number.isFinite(c.smokingUnits) ? c.smokingUnits : 0;
-    out.baselineSaved += Number.isFinite(c.baselineSaved) ? c.baselineSaved : 0;
+    out.baselineSaved = roundMoney(out.baselineSaved + (Number.isFinite(c.baselineSaved) ? c.baselineSaved : 0));
   };
   (dayDocs || []).forEach((d) => { if (d?.foldedIntoLifetime) add(d.aggregateCredit); });
   (logs || []).forEach((l) => add(l?.aggregateCredit));
@@ -465,7 +465,7 @@ export const SmokingCalculator = {
       wasted += count * price;
       saved += Math.max(0, limit - count) * price;
     });
-    return { wasted, saved };
+    return { wasted: roundMoney(wasted), saved: roundMoney(saved) };
   },
 
   /**
@@ -587,7 +587,7 @@ export const SmokingCalculator = {
       const price = c.pricePerUnit == null ? defaultPrice : c.pricePerUnit;
       moneySaved += avoided * price;
     });
-    return { moneySaved, unitsAvoided, hasBaseline };
+    return { moneySaved: roundMoney(moneySaved), unitsAvoided, hasBaseline };
   },
 
   /**
@@ -725,7 +725,7 @@ export const SmokingCalculator = {
     const abs = Math.abs(n);
     const parts = String(abs).split('e');
     const shifted = Number(parts[0] + 'e' + (parts[1] ? Number(parts[1]) + 2 : '2'));
-    const cents = Math.round(shifted);
+    const cents = Math.round(shifted + 1e-12);
     return `${sign}${Math.floor(cents / 100)},${String(cents % 100).padStart(2, '0')} €`;
   },
 
@@ -871,10 +871,10 @@ export const SmokingCalculator = {
 
     let savedLifetime = 0;
     Object.values(logged).forEach((dayCounts) => {
-      savedLifetime += SmokingCalculator.calculateDayFinancials(dayCounts, configs, userPrice).saved;
+      savedLifetime = roundMoney(savedLifetime + SmokingCalculator.calculateDayFinancials(dayCounts, configs, userPrice).saved);
     });
     if (lifetimeAggregates != null && lifetimeAggregates.saved != null) {
-      savedLifetime = lifetimeAggregates.saved;
+      savedLifetime = roundMoney(lifetimeAggregates.saved);
     }
 
     // Baseline-derived savings/reduction (item 3) — always computed from
@@ -885,7 +885,7 @@ export const SmokingCalculator = {
     // -of-lifetime.
     const sessionBaseline = SmokingCalculator.calculateBaselineSavings(sessionCounts, configs, userPrice);
     const folded = (dayDocs || []).some((day) => day.date === trackingDay && day.foldedIntoLifetime);
-    const baselineSavedLifetime = (lifetimeAggregates?.baselineSaved || 0) + (folded ? 0 : sessionBaseline.moneySaved);
+    const baselineSavedLifetime = roundMoney((lifetimeAggregates?.baselineSaved || 0) + (folded ? 0 : sessionBaseline.moneySaved));
     const hasAnyBaseline = sessionBaseline.hasBaseline || (configs || []).some((c) => c.baseline != null);
 
     const sessionFin = SmokingCalculator.calculateDayFinancials(sessionCounts, configs, userPrice);
@@ -955,9 +955,9 @@ export const SmokingCalculator = {
     const hasAnyLedgers = (ledgers || []).length > 0;
     const add = (date, credit, unknown = false, baseline = false) => {
       const item = economics[date] ||= { spent: 0, saved: 0, baselineSaved: 0, hasBaseline: false, unknownEconomics: false };
-      item.spent += credit?.wasted ?? 0;
-      item.saved += credit?.saved ?? 0;
-      item.baselineSaved += credit?.baselineSaved ?? 0;
+      item.spent = roundMoney(item.spent + (credit?.wasted ?? 0));
+      item.saved = roundMoney(item.saved + (credit?.saved ?? 0));
+      item.baselineSaved = roundMoney(item.baselineSaved + (credit?.baselineSaved ?? 0));
       item.hasBaseline ||= baseline || (credit?.baselineSaved ?? 0) !== 0;
       item.unknownEconomics ||= unknown;
     };
@@ -1022,9 +1022,9 @@ export const SmokingCalculator = {
       const isCurrentMonth = monthKey === todayMonthKey;
       const trackedDays = monthData.days.length;
       const totalUnits = monthData.days.reduce((sum, d) => sum + d.units, 0);
-      const totalSpent = monthData.days.reduce((sum, d) => sum + d.spent, 0);
-      const totalSaved = monthData.days.reduce((sum, d) => sum + d.saved, 0);
-      const totalBaselineSaved = monthData.days.reduce((sum, d) => sum + d.baselineSaved, 0);
+      const totalSpent = monthData.days.reduce((sum, d) => roundMoney(sum + d.spent), 0);
+      const totalSaved = monthData.days.reduce((sum, d) => roundMoney(sum + d.saved), 0);
+      const totalBaselineSaved = monthData.days.reduce((sum, d) => roundMoney(sum + d.baselineSaved), 0);
       const hasBaseline = monthData.days.some((d) => d.hasBaseline);
 
       return {

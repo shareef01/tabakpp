@@ -60,9 +60,9 @@ object FinancialReadModel {
                 source = FinancialSource.OPTION_B_CANONICAL,
                 available = true,
                 canonical = CanonicalCredit(
-                    spent = ledger.canonicalCredit.wasted,
-                    saved = ledger.canonicalCredit.saved,
-                    baselineSaved = ledger.canonicalCredit.baselineSaved,
+                    spent = SmokingCalculator.roundMoney(ledger.canonicalCredit.wasted),
+                    saved = SmokingCalculator.roundMoney(ledger.canonicalCredit.saved),
+                    baselineSaved = SmokingCalculator.roundMoney(ledger.canonicalCredit.baselineSaved),
                     smokingUnits = ledger.canonicalCredit.smokingUnits
                 ),
                 unresolved = u,
@@ -88,9 +88,9 @@ object FinancialReadModel {
         for (r in resolutions) {
             if (!r.available || r.canonical == null) { complete = false; unavailable += 1; continue }
             val u = r.unresolved ?: UnresolvedComponents()
-            if (u.spent) { complete = false } else spent += r.canonical.spent
-            if (u.saved) { complete = false } else saved += r.canonical.saved
-            if (u.baselineSaved) { complete = false } else baselineSaved += r.canonical.baselineSaved
+            if (u.spent) { complete = false } else spent = SmokingCalculator.roundMoney(spent + r.canonical.spent)
+            if (u.saved) { complete = false } else saved = SmokingCalculator.roundMoney(saved + r.canonical.saved)
+            if (u.baselineSaved) { complete = false } else baselineSaved = SmokingCalculator.roundMoney(baselineSaved + r.canonical.baselineSaved)
             if (u.smokingUnits) { complete = false } else smokingUnits += r.canonical.smokingUnits
             if (u.anyUnresolved) unresolvedDates += 1
         }

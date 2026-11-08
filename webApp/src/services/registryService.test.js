@@ -400,6 +400,63 @@ describe('RegistryService.updateHistoricalDay', () => {
     expect(d.trackerSnapshots).toEqual({}); // no snapshot -> $0 contribution, not fabricated
     expect(d.aggregateCredit).toEqual({ wasted: 0, saved: 0, smokingUnits: 0, baselineSaved: 0 });
   });
+
+  it('preserves explicit zero counts for existing historical trackers (F-03 LEGACY)', async () => {
+    seedUser({ lifetimeAggregates: baseAgg() });
+    seedDay('2026-07-10', {
+      counts: { cig: 4 },
+      trackerSnapshots: { cig: { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true, baseline: 15 } },
+      aggregateCredit: { saved: 6, wasted: 4, smokingUnits: 4, baselineSaved: 11 },
+      status: 'closed',
+      foldedIntoLifetime: true,
+    });
+
+    await RegistryService.updateHistoricalDay(UID, '2026-07-10', { cig: 0 });
+
+    const d = dayDoc('2026-07-10');
+    expect(d.counts).toEqual({ cig: 0 });
+    expect(d.aggregateCredit).toEqual({ saved: 10, wasted: 0, smokingUnits: 0, baselineSaved: 15 });
+    expect(userDoc().lifetimeAggregates.saved).toBe(54); // 50 - 6 + 10
+  });
+
+  it('ignores zero-count fields for trackers absent from both historical counts and historical snapshots, while rejecting positive counts (F-03 LEGACY)', async () => {
+    seedUser({ lifetimeAggregates: baseAgg() });
+    seedDay('2026-07-10', {
+      counts: { cig: 4 },
+      trackerSnapshots: { cig: { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true } },
+      aggregateCredit: { saved: 6, wasted: 4, smokingUnits: 4, baselineSaved: 0 },
+      status: 'closed',
+      foldedIntoLifetime: true,
+    });
+
+    // Zero count for a newly added tracker `newVape` (not on this historical day) is ignored.
+    await RegistryService.updateHistoricalDay(UID, '2026-07-10', { cig: 6, newVape: 0 });
+    expect(dayDoc('2026-07-10').counts).toEqual({ cig: 6 });
+    expect(dayDoc('2026-07-10').aggregateCredit.saved).toBe(4);
+
+    // Positive count for `newVape` without a historical snapshot is still rejected.
+    await expect(
+      RegistryService.updateHistoricalDay(UID, '2026-07-10', { cig: 6, newVape: 2 })
+    ).rejects.toThrow('HISTORICAL_PRICE_UNAVAILABLE');
+  });
+
+  it('does not reject a historical edit because an unrelated zero-target/unreferenced snapshot lacks unitPrice (F-03 LEGACY)', async () => {
+    seedUser({ lifetimeAggregates: baseAgg() });
+    seedDay('2026-07-10', {
+      counts: { cig: 4 },
+      trackerSnapshots: {
+        cig: { target: 10, unitPrice: 1, type: 'CIGARETTE', isFinanciallyTracked: true },
+        unrelated: { target: 0, baseline: null, unitPrice: null, type: 'SIMPLE', isFinanciallyTracked: true },
+      },
+      aggregateCredit: { saved: 6, wasted: 4, smokingUnits: 4, baselineSaved: 0 },
+      status: 'closed',
+      foldedIntoLifetime: true,
+    });
+
+    await RegistryService.updateHistoricalDay(UID, '2026-07-10', { cig: 3 });
+    expect(dayDoc('2026-07-10').counts).toEqual({ cig: 3 });
+    expect(dayDoc('2026-07-10').aggregateCredit.saved).toBe(7);
+  });
 });
 
 describe('RegistryService.migrateLegacyActiveCounts (item 1 — activeCounts migration)', () => {
@@ -1125,5 +1182,78 @@ describe('counts validation — invalid caller values are REJECTED, never forwar
   it('adjustCounter rejects a fractional delta (the tap path is integral by contract)', async () => {
     await expect(RegistryService.adjustCounter(UID, 'cig', 0.5, DATE, 0.5)).rejects.toThrow('INVALID_COUNT');
     expect(dayDoc(DATE)).toBeUndefined();
+  });
+});
+
+describe('F-05 — financial rounding consistency across all LEGACY write paths', () => {
+  const assertTwoDecimalMoney = (val) => {
+    expect(val).toBe(SmokingCalculator.roundMoney(val));
+    expect(Math.abs(Math.round(val * 100) - val * 100)).toBeLessThan(1e-9);
+  };
+
+  it('rounds saved, wasted, and baselineSaved across closeDay, updateHistoricalDay, createManualEntry, updateHistoricalLog, deleteLog, and restoreLog without rounding smokingUnits', async () => {
+    // 0.1 + 0.2 in IEEE-754 is 0.30000000000000004 unless rounded via roundMoney.
+    seedConfig({ id: 'cig', type: 'CIGARETTE', limit: 10, baseline: 12, pricePerUnit: 0.1, isFinanciallyTracked: true });
+    seedUser({
+      lifetimeAggregates: { saved: 0.1, wasted: 0.1, smokingUnits: 1, baselineSaved: 0.1 },
+      unitPrice: 0.1,
+    });
+
+    // 1. closeDay: adds credit.saved = 0.2, wasted = 0.2, baselineSaved = 0.2 -> 0.1 + 0.2 must be exact 0.3
+    seedDay('2026-07-10', {
+      counts: { cig: 2 },
+      trackerSnapshots: { cig: { target: 4, baseline: 4, unitPrice: 0.1, type: 'CIGARETTE', isFinanciallyTracked: true } },
+      aggregateCredit: { saved: 0.2, wasted: 0.2, smokingUnits: 2, baselineSaved: 0.2 },
+      status: 'open',
+    });
+    await RegistryService.closeDay(UID, '2026-07-10');
+    expect(userDoc().lifetimeAggregates.saved).toBe(0.3);
+    expect(userDoc().lifetimeAggregates.wasted).toBe(0.3);
+    expect(userDoc().lifetimeAggregates.baselineSaved).toBe(0.3);
+    assertTwoDecimalMoney(userDoc().lifetimeAggregates.saved);
+
+    // 2. updateHistoricalDay: replaces oldCredit (0.2) with newCredit (count 1 -> saved 0.3, wasted 0.1, baselineSaved 0.3)
+    // 0.3 - 0.2 + 0.3 -> 0.4, wasted: 0.3 - 0.2 + 0.1 -> 0.2
+    await RegistryService.updateHistoricalDay(UID, '2026-07-10', { cig: 1 });
+    expect(userDoc().lifetimeAggregates.saved).toBe(0.4);
+    expect(userDoc().lifetimeAggregates.wasted).toBe(0.2);
+    expect(userDoc().lifetimeAggregates.baselineSaved).toBe(0.4);
+    assertTwoDecimalMoney(userDoc().lifetimeAggregates.saved);
+    assertTwoDecimalMoney(userDoc().lifetimeAggregates.wasted);
+
+    // 3. createManualEntry with 0.33 price: 3 units, limit 10, baseline 12 -> wasted 0.99, saved 2.31, baselineSaved 2.97
+    seedConfig({ id: 'cig', type: 'CIGARETTE', limit: 10, baseline: 12, pricePerUnit: 0.1, isFinanciallyTracked: true });
+    fake.store.set(USER_PATH, {
+      lifetimeAggregates: { saved: 0.1, wasted: 0.1, smokingUnits: 1, baselineSaved: 0.1 },
+      unitPrice: 0.1,
+    });
+    await RegistryService.createManualEntry(UID, '2026-07-11', { cig: 8 }, 0.1, '2026-07-20');
+    // saved: 0.1 + (10 - 8)*0.1 = 0.1 + 0.2 = 0.3
+    expect(userDoc().lifetimeAggregates.saved).toBe(0.3);
+    // baselineSaved: 0.1 + (12 - 8)*0.1 = 0.1 + 0.4 = 0.5
+    expect(userDoc().lifetimeAggregates.baselineSaved).toBe(0.5);
+    // wasted: 0.1 + 8*0.1 = 0.9
+    expect(userDoc().lifetimeAggregates.wasted).toBe(0.9);
+    const createdLogId = logPaths()[0].split('/').pop();
+
+    // 4. updateHistoricalLog: change cig from 8 to 9 -> new saved 0.1, wasted 0.9, baselineSaved 0.3
+    // saved: 0.3 - 0.2 + 0.1 = 0.2; wasted: 0.9 - 0.8 + 0.9 = 1.0
+    await RegistryService.updateHistoricalLog(UID, createdLogId, { cig: 9 }, 0.1);
+    expect(userDoc().lifetimeAggregates.saved).toBe(0.2);
+    expect(userDoc().lifetimeAggregates.wasted).toBe(1.0);
+    expect(userDoc().lifetimeAggregates.baselineSaved).toBe(0.4);
+
+    // 5. deleteLog & restoreLog cycle with 0.3 - 0.1 / 0.1 + 0.2
+    const savedLog = structuredClone(logDoc(createdLogId));
+    await RegistryService.deleteLog(UID, createdLogId, 0.1);
+    expect(userDoc().lifetimeAggregates.saved).toBe(0.1);
+    expect(userDoc().lifetimeAggregates.wasted).toBe(0.1);
+    expect(userDoc().lifetimeAggregates.baselineSaved).toBe(0.1);
+
+    await RegistryService.restoreLog(UID, { ...savedLog, counts: { cig: 8 }, aggregateCredit: { saved: 0.2, wasted: 0.2, smokingUnits: 8, baselineSaved: 0.2 } }, 0.1);
+    expect(userDoc().lifetimeAggregates.saved).toBe(0.3);
+    expect(userDoc().lifetimeAggregates.wasted).toBe(0.3);
+    expect(userDoc().lifetimeAggregates.baselineSaved).toBe(0.3);
+    expect(userDoc().lifetimeAggregates.smokingUnits).toBe(9);
   });
 });

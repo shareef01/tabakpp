@@ -17,7 +17,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, manualUpdateCredit, migrationPlan,
-  roundMoney, stampFromConfig,
+  roundMoney, stampFromConfig, resolveHistoricalDayEdit,
 } from './financial.js';
 import {
   MAX_COUNT, MAX_DAY_TRACKERS, consumeRateLimit, counterGraceTrackingDate, requireCounterDate, requireId,
@@ -229,14 +229,28 @@ export const executeFinancialOperation = onCall(async (request) => {
         [trackerId]: stampFromConfig(cfg, defaultUnitPrice),
       };
       effectiveDay = { ...(day || {}), date, counts: newCounts, trackerSnapshots, status: 'open' };
-      t.set(userRef.collection('days').doc(date), {
-        date,
-        counts: newCounts,
-        trackerSnapshots,
-        status: 'open',
-        updatedAt: new Date(),
-        ...(daySnap.exists ? {} : { createdAt: new Date(), foldedIntoLifetime: false, legacyMigrationApplied: false, aggregateCredit: ZERO }),
-      }, { merge: true });
+      const dayRef = userRef.collection('days').doc(date);
+      if (daySnap.exists) {
+        t.update(dayRef, {
+          date,
+          counts: newCounts,
+          trackerSnapshots,
+          status: 'open',
+          updatedAt: new Date(),
+        });
+      } else {
+        t.set(dayRef, {
+          date,
+          counts: newCounts,
+          trackerSnapshots,
+          status: 'open',
+          updatedAt: new Date(),
+          createdAt: new Date(),
+          foldedIntoLifetime: false,
+          legacyMigrationApplied: false,
+          aggregateCredit: ZERO,
+        });
+      }
       // recompute the day source for the credit
     } else if (type === 'MANUAL_CREATE') {
       const logId = requireId(data.logId, 'logId required');
@@ -301,7 +315,7 @@ export const executeFinancialOperation = onCall(async (request) => {
         aggregateCredit: credit,
         updatedAt: new Date(),
       };
-      t.set(logRef, updatedLogData, { merge: true });
+      t.set(logRef, updatedLogData);
       effectiveLogs = logs.map((l) => (l.id === logId ? updatedLogData : l));
     } else if (type === 'MANUAL_DELETE') {
       const logId = requireId(data.logId, 'logId required');
@@ -391,18 +405,16 @@ export const executeFinancialOperation = onCall(async (request) => {
       // bypass both. Both clients only offer closed days for editing.
       if (day.status !== 'closed') throw new HttpsError('failed-precondition', 'DAY_NOT_CLOSED');
       const incoming = sanitizeHistoricalCounts(data.counts);
-      const merged = { ...(day.counts || {}), ...incoming };
-      // FIX 12: Harmonize with Firestore rules constraints (validDayCountMap / MAX_DAY_TRACKERS)
-      for (const [k, v] of Object.entries(merged)) {
-        if (v === 0) delete merged[k];
-        else if (!Number.isInteger(v) || v < 0 || v > MAX_COUNT) {
-          throw new HttpsError('invalid-argument', 'INVALID_COUNT');
+      let merged;
+      try {
+        merged = resolveHistoricalDayEdit(day, incoming, ledger?.snapshots || {}, MAX_COUNT, MAX_DAY_TRACKERS);
+      } catch (err) {
+        if (err?.message === 'HISTORICAL_PRICE_UNAVAILABLE') {
+          throw new HttpsError('failed-precondition', 'HISTORICAL_PRICE_UNAVAILABLE');
         }
+        throw new HttpsError('invalid-argument', err?.message || 'INVALID_COUNT');
       }
-      if (Object.keys(merged).length > MAX_DAY_TRACKERS) {
-        throw new HttpsError('invalid-argument', 'TOO_MANY_TRACKERS');
-      }
-      t.set(userRef.collection('days').doc(date), { counts: merged, updatedAt: new Date() }, { merge: true });
+      t.update(userRef.collection('days').doc(date), { counts: merged, updatedAt: new Date() });
       effectiveDay = { ...day, counts: merged };
     } else if (type === 'TRACKER_DELETE') {
       // Delete a tracker config; drop it from the CURRENT open day's counts +
@@ -415,7 +427,7 @@ export const executeFinancialOperation = onCall(async (request) => {
         delete counts[trackerId];
         const trackerSnapshots = { ...(day.trackerSnapshots || {}) };
         delete trackerSnapshots[trackerId];
-        t.set(userRef.collection('days').doc(date), { counts, trackerSnapshots, updatedAt: new Date() }, { merge: true });
+        t.update(userRef.collection('days').doc(date), { counts, trackerSnapshots, updatedAt: new Date() });
         effectiveDay = { ...day, counts, trackerSnapshots };
       }
     } else if (type === 'DAY_CLOSE' || type === 'ZERO_COUNT_DAY_CLOSE') {
@@ -428,30 +440,59 @@ export const executeFinancialOperation = onCall(async (request) => {
     const effectiveConfigs = (type === 'TRACKER_DELETE')
       ? configs.filter((c) => c.id !== data.trackerId)
       : configs;
+    const effectiveLedgerSnapshots = { ...(ledger?.snapshots || {}) };
+    if (type === 'TRACKER_DELETE' && (!day || day.status !== 'closed')) {
+      delete effectiveLedgerSnapshots[data.trackerId];
+    } else if (type === 'MANUAL_DELETE' || type === 'MANUAL_UPDATE') {
+      Object.keys(effectiveLedgerSnapshots).forEach((id) => {
+        const inDay = Boolean(effectiveDay?.trackerSnapshots?.[id]) || Number(effectiveDay?.counts?.[id] || 0) > 0;
+        const inLogs = effectiveLogs.some((l) => Number(l.counts?.[id] || 0) > 0);
+        if (!inDay && !inLogs) {
+          delete effectiveLedgerSnapshots[id];
+        }
+      });
+    }
     const fin = calculateDailyFinancials(
       effectiveDay,
       effectiveLogs.filter((l) => !(effectiveDay && isArchiveLog(l))),
       effectiveConfigs,
       defaultUnitPrice,
-      { currentTrackingDate, ledgerSnapshots: ledger?.snapshots || {} }
+      { currentTrackingDate, ledgerSnapshots: effectiveLedgerSnapshots }
     );
     const ledgerExistsAfter = ledgerSnap.exists;
 
     if (type === 'DAY_CLOSE' || type === 'ZERO_COUNT_DAY_CLOSE') {
+      if (!fin.eligible && day?.status !== 'closed') {
+        throw new HttpsError('failed-precondition', 'NOTHING_TO_ARCHIVE');
+      }
       // FIX 1: Strict Count Ownership Model.
       // `days/{date}.counts` represents ONLY consumption owned by the day document.
       // Manual log counts remain owned by their logs.
       // `dailyFinancials/{date}.countsByTracker` holds the canonical combined total.
       const dayCounts = effectiveDay?.counts || {};
-      t.set(userRef.collection('days').doc(date), {
-        date,
-        counts: dayCounts,
-        trackerSnapshots: effectiveDay?.trackerSnapshots || fin.snapshots,
-        status: 'closed',
-        foldedIntoLifetime: true,
-        closedAt: new Date(),
-        updatedAt: new Date(),
-      }, { merge: true });
+      const daySnapshots = effectiveDay?.trackerSnapshots || fin.snapshots;
+      const dayRef = userRef.collection('days').doc(date);
+      if (daySnap.exists) {
+        t.update(dayRef, {
+          date,
+          counts: dayCounts,
+          trackerSnapshots: daySnapshots,
+          status: 'closed',
+          foldedIntoLifetime: true,
+          closedAt: new Date(),
+          updatedAt: new Date(),
+        });
+      } else {
+        t.set(dayRef, {
+          date,
+          counts: dayCounts,
+          trackerSnapshots: daySnapshots,
+          status: 'closed',
+          foldedIntoLifetime: true,
+          closedAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
       // Fold once: lifetime must always equal the sum of the folded ledgers'
       // canonicalCredit. An unfolded date adds its whole credit; an already
       // folded one (a repeat close, or a date the migration folded while it

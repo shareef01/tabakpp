@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import * as financialModule from './financial.js';
 import {
   computeDayCredit, calculateDailyFinancials, applyDelta, fingerprintOf, migrationPlan,
   deriveSnapshotFromLog, manualUpdateCredit, roundMoney, stampFromConfig,
@@ -400,6 +401,13 @@ test('Financial rounding: symmetric commercial half-away-from-zero precision pol
   assert.equal(roundMoney(0), 0);
   assert.equal(roundMoney(1.004), 1.00);
   assert.equal(roundMoney(-1.004), -1.00);
+  assert.equal(roundMoney(0.125), 0.13);
+  assert.equal(roundMoney(-0.125), -0.13);
+  // Computed binary float half-cent values that land 1 ULP below .xx5 in IEEE-754
+  assert.equal(roundMoney(3 * 0.075), 0.23, '3 * 0.075 = 0.22499999999999998 rounds half-away-from-zero to 0.23');
+  assert.equal(roundMoney(-3 * 0.075), -0.23, '-3 * 0.075 rounds symmetrically to -0.23');
+  assert.equal(roundMoney(1.4 + 0.005), 1.41, '1.4 + 0.005 = 1.4049999999999998 rounds to 1.41');
+  assert.equal(roundMoney(-1.4 - 0.005), -1.41, '-1.4 - 0.005 rounds symmetrically to -1.41');
 
   // Repeated positive and negative lifetime corrections (no asymmetric drift)
   let lifetimeCorrection = 0;
@@ -484,4 +492,143 @@ test('manualUpdateCredit: the current tracking date prices from its (live) stamp
   assert.equal(unresolvedEconomics, false);
   assert.equal(credit.wasted, 3);
   assert.equal(credit.saved, 0, 'the allowance is day-level, never per log');
+});
+
+test('F-01: persistent empty-day policy across reload for zero-consumption, emptied open day, remaining manual logs, and closed historical day', () => {
+  // 1. Legitimate zero-consumption tracking day (incremented then decremented to 0)
+  const legitZeroDay = {
+    date: '2026-10-01',
+    status: 'open',
+    counts: {},
+    trackerSnapshots: { cig: snap(10, 15, 1) },
+  };
+  const finZero = calculateDailyFinancials(legitZeroDay, [], [{ id: 'cig', type: 'CIGARETTE', limit: 10, pricePerUnit: 1, baseline: 15 }], 1, {
+    currentTrackingDate: '2026-10-01',
+    ledgerSnapshots: { cig: snap(10, 15, 1) },
+  });
+  assert.equal(finZero.eligible, true, 'legitimate zero-consumption day must remain eligible');
+  assert.equal(finZero.saved, 10);
+  assert.equal(finZero.baselineSaved, 15);
+
+  // 2. Emptied open day caused by deleting its last tracker, reloaded from Firestore
+  const reloadedEmptiedDay = {
+    date: '2026-10-01',
+    status: 'open',
+    counts: {},
+    trackerSnapshots: {},
+  };
+  const finEmptied = calculateDailyFinancials(reloadedEmptiedDay, [], [], 1, {
+    currentTrackingDate: '2026-10-01',
+    ledgerSnapshots: { cig: snap(10, 15, 1) },
+  });
+  assert.equal(finEmptied.eligible, false, 'reloaded emptied open day must NOT be eligible');
+  assert.equal(finEmptied.saved, 0, 'deleted tracker snapshot must not produce phantom savings');
+  assert.equal(finEmptied.baselineSaved, 0);
+  assert.equal(finEmptied.snapshots.cig, undefined, 'deleted tracker snapshot must be pruned from dailyFinancials');
+
+  // 3. Emptied open day containing remaining manual logs
+  const remainingLogs = [{
+    id: 'm1',
+    logDate: '2026-10-01',
+    counts: { vape: 2 },
+    origin: 'MANUAL_ENTRY',
+    trackerSnapshots: { vape: snap(8, 10, 2) },
+    aggregateCredit: { wasted: 4, saved: 0, smokingUnits: 2, baselineSaved: 0 },
+  }];
+  const finWithLogs = calculateDailyFinancials(
+    reloadedEmptiedDay,
+    remainingLogs,
+    [{ id: 'vape', type: 'CIGARETTE', limit: 8, pricePerUnit: 2, baseline: 10, isFinanciallyTracked: true, isPrimaryTracked: true }],
+    1,
+    {
+      currentTrackingDate: '2026-10-01',
+      ledgerSnapshots: { cig: snap(10, 15, 1), vape: snap(8, 10, 2) },
+    }
+  );
+  assert.equal(finWithLogs.eligible, true, 'day with remaining manual logs must stay eligible');
+  assert.equal(finWithLogs.snapshots.cig, undefined, 'deleted tracker cig must not remain in ledger snapshots');
+  assert.equal(finWithLogs.counts.vape, 2);
+  assert.equal(finWithLogs.spent, 4);
+  assert.equal(finWithLogs.saved, 12, 'only remaining tracker vape contributes savings ((8-2)*2 = 12)');
+
+  // 4. Closed historical day whose snapshots must remain intact after tracker deletion
+  const closedHistoricalDay = {
+    date: '2026-09-15',
+    status: 'closed',
+    foldedIntoLifetime: true,
+    counts: { cig: 4 },
+    trackerSnapshots: { cig: snap(10, 15, 1) },
+  };
+  const finClosed = calculateDailyFinancials(closedHistoricalDay, [], [], 1, {
+    currentTrackingDate: '2026-10-01',
+    ledgerSnapshots: { cig: snap(10, 15, 1) },
+  });
+  assert.equal(finClosed.eligible, true);
+  assert.ok(finClosed.snapshots.cig, 'closed historical day must keep its frozen snapshot');
+  assert.equal(finClosed.spent, 4);
+  assert.equal(finClosed.saved, 6);
+  assert.equal(finClosed.baselineSaved, 11);
+});
+
+test('F-03 OPTION_B: historical edit validation and unrelated incomplete snapshot handling', () => {
+  const closedDay = {
+    date: '2026-09-15',
+    status: 'closed',
+    counts: { cig: 5 },
+    trackerSnapshots: {
+      cig: snap(10, 15, 1),
+      unrelated: { type: 'OTHER', target: 0, baseline: null, unitPrice: null, isFinanciallyTracked: true },
+    },
+  };
+
+  // Unrelated zero-count zero-target incomplete snapshot must not mark day unresolved or reject edit
+  const finBeforeResolve = calculateDailyFinancials(
+    { ...closedDay, counts: { cig: 3 } },
+    [],
+    [],
+    1,
+    { currentTrackingDate: '2026-10-01' }
+  );
+  assert.equal(finBeforeResolve.unresolved.spent, false);
+  assert.equal(finBeforeResolve.unresolved.saved, false);
+  assert.equal(finBeforeResolve.spent, 3);
+  assert.equal(finBeforeResolve.saved, 7);
+
+  const resolveHistoricalDayEdit = financialModule.resolveHistoricalDayEdit;
+  assert.equal(typeof resolveHistoricalDayEdit, 'function', 'resolveHistoricalDayEdit must be exported');
+  const merged = resolveHistoricalDayEdit(closedDay, { cig: 3, ghostZero: 0 }, {});
+  assert.deepEqual(merged, { cig: 3 }, 'explicit zero for unreferenced tracker is ignored and cig is updated');
+
+  // Setting existing tracker to 0 drops key for map replacement while preserving frozen snapshot allowance
+  const mergedZero = resolveHistoricalDayEdit(closedDay, { cig: 0 }, {});
+  assert.deepEqual(mergedZero, {}, 'setting existing tracker to 0 removes key from counts map');
+  const finZeroEdit = calculateDailyFinancials(
+    { ...closedDay, counts: mergedZero },
+    [],
+    [],
+    1,
+    { currentTrackingDate: '2026-10-01' }
+  );
+  assert.equal(finZeroEdit.spent, 0);
+  assert.equal(finZeroEdit.saved, 10, 'frozen snapshot still credits full target allowance when count is edited to 0');
+
+  // Editing a tracker with no historical snapshot must be rejected with HISTORICAL_PRICE_UNAVAILABLE
+  assert.throws(
+    () => resolveHistoricalDayEdit(closedDay, { cig: 3, unpricedNew: 2 }, {}),
+    /HISTORICAL_PRICE_UNAVAILABLE/
+  );
+
+  // Editing a closed day whose relevant snapshot lacks unitPrice must be rejected rather than zeroing savings
+  const unpricedClosedDay = {
+    date: '2026-09-15',
+    status: 'closed',
+    counts: { cig: 5 },
+    trackerSnapshots: {
+      cig: { type: 'CIGARETTE', target: 10, baseline: 15, unitPrice: null, isFinanciallyTracked: true },
+    },
+  };
+  assert.throws(
+    () => resolveHistoricalDayEdit(unpricedClosedDay, { cig: 2 }, {}),
+    /HISTORICAL_PRICE_UNAVAILABLE/
+  );
 });

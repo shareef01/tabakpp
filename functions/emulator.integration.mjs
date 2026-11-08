@@ -400,6 +400,18 @@ const main = async () => {
   assert.equal(histAgg.lifetimeAggregates.saved, 8, 'saved must net-adjust 5 + (8−5)');
   assert.equal(histAgg.lifetimeAggregates.wasted, 2, 'wasted must net-adjust 5 + (2−5)');
 
+  // 10b) F-03 OPTION_B: HISTORICAL_DAY_UPDATE rejects unpriced tracker and replaces map on zero count
+  r = await call(adminToken, { operationId: 'hist_unpriced', type: 'HISTORICAL_DAY_UPDATE', date: TODAY, counts: { cig: 2, unpricedNew: 1 } });
+  assert.ok(!r.ok, 'HISTORICAL_DAY_UPDATE with unpriced tracker must be rejected');
+  assert.equal(r.body.error?.message, 'HISTORICAL_PRICE_UNAVAILABLE');
+
+  r = await call(adminToken, { operationId: 'hist_zero', type: 'HISTORICAL_DAY_UPDATE', date: TODAY, counts: { cig: 0 } });
+  assert.ok(r.ok, `HISTORICAL_DAY_UPDATE to zero failed: ${JSON.stringify(r.body)}`);
+  const zeroEditedDay = await readDoc(`users/${muid}/days/${TODAY}`);
+  assert.equal(zeroEditedDay.counts?.cig, undefined, 'zeroed historical count key must be removed via map replacement');
+  histLed = await readDoc(`users/${muid}/dailyFinancials/${TODAY}`);
+  assert.equal(histLed.canonicalCredit.saved, 10, 'zeroed historical count keeps full target allowance from frozen snapshot');
+
   // 11) TRACKER_DELETE date integrity, historical immutability, and cleanup
   const delUser = await signIn();
   const duid = delUser.localId;
@@ -433,11 +445,10 @@ const main = async () => {
   assert.ok(r.ok, `TRACKER_DELETE failed: ${JSON.stringify(r.body)}`);
   assert.equal(await readDoc(`users/${duid}/configs/cig`), null, 'config must be deleted');
   const delDay = await readDoc(`users/${duid}/days/${TODAY}`);
-  assert.equal(delDay.counts.cig, undefined, 'tracker must be dropped from open day counts');
-  assert.equal(delDay.trackerSnapshots.cig, undefined, 'tracker must be dropped from open day snapshots');
+  assert.equal(delDay.counts?.cig, undefined, 'tracker must be dropped from open day counts');
+  assert.equal(delDay.trackerSnapshots?.cig, undefined, 'tracker must be dropped from open day snapshots');
   const delLed = await readDoc(`users/${duid}/dailyFinancials/${TODAY}`);
-  assert.equal(delLed.countsByTracker.cig, undefined, 'tracker must be dropped from the ledger counts');
-  assert.equal((delLed.missingConfigs || []).includes('cig'), false, 'financial state must not have missing config for deleted tracker');
+  assert.equal(delLed, null, 'emptied open day after deleting its last tracker must not retain an eligible ledger or phantom savings');
 
   // Historical closed day still retains its frozen counts and snapshots intact
   const verifiedHistDay = await readDoc(`users/${duid}/days/${YDAY}`);
@@ -1214,7 +1225,91 @@ const main = async () => {
   dc = await applyThenRetry({ operationId: 'dc_md', type: 'MANUAL_DELETE', date: TODAY, logId: 'DC_LOG' }, { logId: 'OTHER_LOG' }, 'MANUAL_DELETE');
   assert.equal(dc.lifetime.wasted, 4, 'deleting the late entry must subtract once');
 
-  console.log('✅ integration: ALL 29 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
+  // 30) Priority 1 Pre-Merge Verification:
+  //     (a) Multi-tracker deletion and Firestore map replacement on persisted docs
+  //     (b) Deleting the last tracker and reloading/closing the emptied day
+  //     (c) Manual log deletion and pruning of retained snapshots from dailyFinancials
+  const p1User = await signIn();
+  const p1Uid = p1User.localId;
+  await seedOptionB(p1Uid);
+  await writeDoc(`users/${p1Uid}/configs/vape`, {
+    name: 'Vape', limit: 20, order: 1, type: 'CIGARETTE', pricePerUnit: 2,
+    isFinanciallyTracked: true, isPrimaryTracked: true, baseline: 25,
+  }, true);
+
+  // Increment both trackers on TODAY: cig=3 (target 10, €1 -> saved 7, wasted 3), vape=5 (target 20, €2 -> saved 30, wasted 10)
+  for (let i = 1; i <= 3; i++) {
+    r = await call(p1User.idToken, { operationId: `p1_cig_${i}`, type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'cig' });
+    assert.ok(r.ok);
+  }
+  for (let i = 1; i <= 5; i++) {
+    r = await call(p1User.idToken, { operationId: `p1_vape_${i}`, type: 'COUNTER_INCREMENT', date: TODAY, trackerId: 'vape' });
+    assert.ok(r.ok);
+  }
+  let p1Day = await readDoc(`users/${p1Uid}/days/${TODAY}`);
+  let p1Led = await readDoc(`users/${p1Uid}/dailyFinancials/${TODAY}`);
+  assert.deepEqual(p1Day.counts, { cig: 3, vape: 5 });
+  assert.ok(p1Day.trackerSnapshots.cig && p1Day.trackerSnapshots.vape, 'both snapshots stamped on day');
+  assert.ok(p1Led.snapshots.cig && p1Led.snapshots.vape, 'both snapshots present on ledger');
+  assert.equal(p1Led.canonicalCredit.saved, 37, '7 + 30 = 37 saved');
+  assert.equal(p1Led.canonicalCredit.wasted, 13, '3 + 10 = 13 wasted');
+
+  // (a) Delete one of the two trackers ('vape') -> persisted maps must replace (drop 'vape') and keep 'cig'
+  r = await call(p1User.idToken, { operationId: 'p1_del_vape', type: 'TRACKER_DELETE', date: TODAY, trackerId: 'vape' });
+  assert.ok(r.ok, `multi-tracker delete failed: ${JSON.stringify(r.body)}`);
+  p1Day = await readDoc(`users/${p1Uid}/days/${TODAY}`);
+  p1Led = await readDoc(`users/${p1Uid}/dailyFinancials/${TODAY}`);
+  assert.deepEqual(p1Day.counts, { cig: 3 }, 'Firestore map replacement must remove vape from days/{date}.counts');
+  assert.equal(p1Day.trackerSnapshots.vape, undefined, 'Firestore map replacement must remove vape from days/{date}.trackerSnapshots');
+  assert.ok(p1Day.trackerSnapshots.cig, 'remaining tracker cig snapshot must stay intact');
+  assert.equal(p1Led.snapshots.vape, undefined, 'deleted tracker vape snapshot must be pruned from dailyFinancials/{date}.snapshots');
+  assert.equal(p1Led.canonicalCredit.saved, 7, 'deleted tracker must not generate phantom savings (saved must be 7, not 7 + 40 = 47)');
+  assert.equal(p1Led.canonicalCredit.wasted, 3);
+
+  // (c) Manual log creation for a second tracker ('cigarillo'), MANUAL_UPDATE dropping 'cigarillo',
+  //     and subsequent MANUAL_DELETE must prune its snapshot from persisted log and dailyFinancials
+  await writeDoc(`users/${p1Uid}/configs/cigarillo`, {
+    name: 'Cigarillo', limit: 8, order: 2, type: 'CIGARETTE', pricePerUnit: 1.5,
+    isFinanciallyTracked: true, isPrimaryTracked: true, baseline: 10,
+  }, true);
+  r = await call(p1User.idToken, { operationId: 'p1_ml_create', type: 'MANUAL_CREATE', date: TODAY, logId: 'P1_ML1', counts: { cig: 1, cigarillo: 2 } });
+  assert.ok(r.ok, `manual create failed: ${JSON.stringify(r.body)}`);
+  p1Led = await readDoc(`users/${p1Uid}/dailyFinancials/${TODAY}`);
+  assert.ok(p1Led.snapshots.cigarillo, 'cigarillo snapshot added while manual log includes cigarillo');
+  assert.equal(p1Led.canonicalCredit.saved, 15, 'cig saved (10-4)*1=6 + cigarillo saved (8-2)*1.5=9 => 15');
+
+  // MANUAL_UPDATE drops 'cigarillo' from P1_ML1 (leaving only cig: 1)
+  r = await call(p1User.idToken, { operationId: 'p1_ml_update', type: 'MANUAL_UPDATE', date: TODAY, logId: 'P1_ML1', counts: { cig: 1 } });
+  assert.ok(r.ok, `manual update failed: ${JSON.stringify(r.body)}`);
+  const p1UpdatedLog = await readDoc(`users/${p1Uid}/logs/P1_ML1`);
+  assert.deepEqual(p1UpdatedLog.counts, { cig: 1 }, 'persisted log counts map must replace and drop cigarillo');
+  assert.equal(p1UpdatedLog.trackerSnapshots.cigarillo, undefined, 'persisted log trackerSnapshots map must drop cigarillo');
+  p1Led = await readDoc(`users/${p1Uid}/dailyFinancials/${TODAY}`);
+  assert.equal(p1Led.snapshots.cigarillo, undefined, 'MANUAL_UPDATE dropping cigarillo must prune cigarillo snapshot from dailyFinancials');
+  assert.equal(p1Led.canonicalCredit.saved, 6, 'cigarillo must not leave (8-0)*1.5 = 12 phantom savings after MANUAL_UPDATE');
+
+  r = await call(p1User.idToken, { operationId: 'p1_ml_delete', type: 'MANUAL_DELETE', date: TODAY, logId: 'P1_ML1' });
+  assert.ok(r.ok, `manual delete failed: ${JSON.stringify(r.body)}`);
+  p1Led = await readDoc(`users/${p1Uid}/dailyFinancials/${TODAY}`);
+  assert.equal(p1Led.snapshots.cigarillo, undefined, 'deleting the manual log keeps cigarillo snapshot pruned from dailyFinancials');
+  assert.equal(p1Led.canonicalCredit.saved, 7, 'cig returns to 3 units -> saved 7');
+
+  // (b) Delete the last active tracker ('cig') on TODAY and verify reloaded day is ineligible and cannot be closed for phantom savings
+  r = await call(p1User.idToken, { operationId: 'p1_del_cig', type: 'TRACKER_DELETE', date: TODAY, trackerId: 'cig' });
+  assert.ok(r.ok, `last tracker delete failed: ${JSON.stringify(r.body)}`);
+  p1Day = await readDoc(`users/${p1Uid}/days/${TODAY}`);
+  assert.deepEqual(p1Day.counts || {}, {}, 'emptied day has no counts');
+  assert.deepEqual(p1Day.trackerSnapshots || {}, {}, 'emptied day has no snapshots');
+  assert.equal(await readDoc(`users/${p1Uid}/dailyFinancials/${TODAY}`), null, 'dailyFinancials must be deleted when last tracker is removed');
+
+  // Attempting to close the reloaded empty day must be rejected and must not credit cigarillo or cig
+  r = await call(p1User.idToken, { operationId: 'p1_close_empty', type: 'DAY_CLOSE', date: TODAY });
+  assert.equal(r.ok, false, 'closing an emptied open day after deleting its last tracker must be rejected');
+  assert.equal(r.body.error?.message, 'NOTHING_TO_ARCHIVE');
+  assert.equal(await readDoc(`users/${p1Uid}/dailyFinancials/${TODAY}`), null, 'reloaded empty day must not recreate dailyFinancials');
+  assert.deepEqual((await readDoc(`users/${p1Uid}`)).lifetimeAggregates, { saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
+
+  console.log('✅ integration: ALL 30 TEST SUITES PASSED (including cross-date collision prevention, strict server-authoritative restoration, strengthened idempotency fingerprints, and all 10 financial integrity invariants)');
 };
 
 main().catch((e) => { console.error('❌ integration failed:', e.message, e.stack); process.exit(1); });

@@ -546,8 +546,10 @@ class RegistryViewModel(
      */
     val financialMode: StateFlow<String> = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf("LEGACY")
-        else flow { emit(registryRepository.getFinancialMode(uid)) }
-            .catch { e -> setError(e, "Could not read the account financial mode."); emit(UNKNOWN_FINANCIAL_MODE) }
+        else flow {
+            emit(registryRepository.getFinancialMode(uid))
+            emitAll(registryRepository.subscribeToFinancialMode(uid))
+        }.catch { e -> setError(e, "Could not read the account financial mode."); emit(UNKNOWN_FINANCIAL_MODE) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "LEGACY")
 
     /** Canonical OPTION B daily ledgers (bounded recent window; the trusted callable writes them). */
@@ -720,7 +722,7 @@ class RegistryViewModel(
     private fun mutationBlocked(): Boolean {
         val profile = userProfile.value ?: return false
         val lease = profile.smokingMigrationLeaseUntil
-        val leased = lease != null && lease.seconds * 1000 + lease.nanoseconds / 1_000_000 > Clock.System.now().toEpochMilliseconds()
+        val leased = lease != null && lease.seconds * 1000 + lease.nanoseconds / 1_000_000 > clock.now().toEpochMilliseconds()
         if (!profile.deleting && !leased) return false
         setError(Exception(if (profile.deleting) "ACCOUNT_DELETING" else "MIGRATION_IN_PROGRESS"),
             if (profile.deleting) "Account deletion is in progress. Retry deletion from Settings." else "History migration is in progress. Try again shortly.")

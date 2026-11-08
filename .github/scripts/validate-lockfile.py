@@ -38,5 +38,13 @@ def check(path: Path) -> int:
 
 
 if __name__ == "__main__":
-    lockfile = Path(__file__).resolve().parents[2] / "webApp" / "package-lock.json"
-    sys.exit(check(lockfile))
+    root = Path(__file__).resolve().parents[2]
+    lockfiles = [
+        root / "webApp" / "package-lock.json",
+        root / "functions" / "package-lock.json",
+    ]
+    rc = 0
+    for lockfile in lockfiles:
+        if check(lockfile) != 0:
+            rc = 1
+    sys.exit(rc)
