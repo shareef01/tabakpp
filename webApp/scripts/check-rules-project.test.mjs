@@ -39,7 +39,7 @@ describe('checkRulesProject (Firestore rules predeploy guard)', () => {
       expectedProject: STAGING_PROJECT_ID,
     });
     expect(result.ok).toBe(false);
-    expect(result.reason).toMatch(/Deployment project mismatch: Expected staging project "tabakpp-staging", but actual CLI project is "unrelated-project-id"/);
+    expect(result.reason).toMatch(new RegExp(`Deployment project mismatch: Expected staging project "${STAGING_PROJECT_ID}", but actual CLI project is "unrelated-project-id"`));
   });
 
   it('rejects deployment when firestore.rules file is missing', () => {

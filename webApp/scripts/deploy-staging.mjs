@@ -64,7 +64,7 @@ export function validateStagingDeployment(operation, options = {}) {
   if (!project) {
     return {
       ok: false,
-      reason: 'Omitted project argument: staging deployment requires an explicit --project tabakpp-staging argument and does not fall back to default project.',
+      reason: `Omitted project argument: staging deployment requires an explicit --project ${STAGING_PROJECT_ID} argument and does not fall back to default project.`,
     };
   }
 
@@ -362,7 +362,7 @@ if (isMain) {
   const skipProjectCheck = hasFlag('--skip-project-check');
 
   if (!operation) {
-    console.error('\n✖ Usage: node webApp/scripts/deploy-staging.mjs <hosting|firestore:rules> --project tabakpp-staging [--dry-run]\n');
+    console.error(`\n✖ Usage: node webApp/scripts/deploy-staging.mjs <hosting|firestore:rules> --project ${STAGING_PROJECT_ID} [--dry-run]\n`);
     process.exit(1);
   }
 

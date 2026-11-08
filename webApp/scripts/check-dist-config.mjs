@@ -47,7 +47,7 @@ export const PROD_PROJECT_ID = 'tabakpp-ff036';
 export const PROD_SITE_ID = 'tabakpp';
 export const PROD_FUNCTION_ENDPOINT = 'europe-west1-tabakpp-ff036.cloudfunctions.net';
 export const STAGING_TARGET_NAME = 'staging-app';
-export const STAGING_PROJECT_ID = 'tabakpp-staging';
+export const STAGING_PROJECT_ID = 'tabakpwa';
 
 /**
  * @param {string} distDir

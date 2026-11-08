@@ -192,7 +192,7 @@ tasks.register<CheckStagingFirebaseConfigTask>("checkStagingFirebaseConfig") {
     group = "verification"
     description = "Guards against missing, placeholder, or production Firebase config in Android staging builds."
     configFile.from(layout.projectDirectory.file("src/staging/google-services.json"))
-    expectedProjectId.set("tabakpp-staging")
+    expectedProjectId.set("tabakpwa")
     forbiddenProjectId.set("tabakpp-ff036")
     expectedPackageName.set("${android.defaultConfig.applicationId}.staging")
 }

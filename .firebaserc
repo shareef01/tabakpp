@@ -1,13 +1,13 @@
 {
   "projects": {
     "default": "tabakpp-ff036",
-    "staging": "tabakpp-staging"
+    "staging": "tabakpwa"
   },
   "targets": {
-    "tabakpp-staging": {
+    "tabakpwa": {
       "hosting": {
         "staging-app": [
-          "tabakpp-staging"
+          "tabakpwa"
         ]
       }
     }
