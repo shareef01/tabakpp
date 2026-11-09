@@ -629,7 +629,7 @@ const AppContent = () => {
                 }
               }}
               title="Delete tracker?"
-              message="This counter will be removed from your dashboard. Logged history stays available."
+              message="This counter will be removed from your dashboard. Closed-day history is kept; any open counts for it today are removed."
               confirmText="Delete"
             />
           </AnimatePresence>

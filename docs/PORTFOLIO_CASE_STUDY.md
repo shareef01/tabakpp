@@ -5,8 +5,25 @@ one product, a native Android client and an installable web PWA, sharing domain 
 and a Firebase backend, on the free tier.
 
 Everything below describes the implementation as it exists in this repository at
-`v1.0.9`. No usage figures, team sizes or business outcomes are claimed — there are
-none to claim; this is a personal project with a single maintainer.
+`v1.0.14` (audited 9 November 2026). No usage figures, team sizes or business
+outcomes are claimed — there are none to claim; this is a personal project with a
+single maintainer.
+
+## See it
+
+- **Web PWA:** <https://tabakpp.web.app>
+- **Android APK:** <https://github.com/shareef01/tabakpp/releases/latest>
+- **Screenshots:** [`assets/screenshots/showcase/`](../assets/screenshots/showcase/)
+
+<p align="center">
+  <img src="../assets/screenshots/showcase/web-track.png" width="780" alt="Web track screen with gauges and today's metrics" />
+</p>
+
+<p align="center">
+  <img src="../assets/screenshots/showcase/android-track.png" width="190" alt="Android track screen" />
+  <img src="../assets/screenshots/showcase/android-history.png" width="190" alt="Android history screen" />
+  <img src="../assets/screenshots/showcase/android-settings.png" width="190" alt="Android settings screen" />
+</p>
 
 ---
 
@@ -82,9 +99,10 @@ offset while the profile is still loading rather than writing a plausible-but-wr
 **3. Historical records that cannot be rewritten.**
 Repricing a tracker today must not change what last month cost. When a day closes, its
 tracker snapshot is stamped and frozen — enforced in `firestore.rules`, not only in the
-client — so subsequent edits cannot reach back into closed history. The limit is stated
-plainly: a closed day is immutable, and the rules that guarantee it are covered by 176
-emulator-backed assertions including the denial cases.
+client — so later repricing cannot change what that day cost or meant. Counts stay
+owner-editable within rules-validated bounds (the deliberate correction path for a
+mistyped day); the snapshot and one-way status rules are covered by the 180-test
+emulator suite, including the denial cases.
 
 **4. A CI job that reported success while the test run had failed.**
 The instrumentation job parsed Gradle's XML output with `grep`/`awk`, which silently
@@ -101,7 +119,7 @@ On the Spark plan, rules can validate the shape and ownership of a write but can
 recompute money, so an account owner can rewrite their own aggregates. Rather than
 hide this, the trusted path is implemented and tested but not deployed: three callables
 (`executeFinancialOperation`, `migrateAccount`, `deleteAccountData`) reconcile the four
-canonical ledger metrics atomically server-side, exercised by 62 unit tests and 25
+canonical ledger metrics atomically server-side, exercised by 69 unit tests and 30
 emulator integration suites. Production stays client-computed, with the trust boundary
 documented in `README.md` and `SECURITY.md`. The upgrade is a deployment decision, not
 a rewrite.
@@ -136,24 +154,24 @@ a rewrite.
 
 | Suite | Count | What it protects |
 |---|---|---|
-| Web unit | 584 | UI and domain behaviour |
+| Web unit | 622 | UI and domain behaviour |
 | Contract | 76 | JS ↔ Kotlin semantic parity |
-| Firestore rules | 176 | Real rules against the emulator, allows *and* denials |
-| Android JVM | 257 | KMP domain, repositories, view models, Compose UI |
-| Android instrumentation | 31 | Behaviour on a real emulator, behind the fail-closed gate |
-| Functions unit | 62 | Trusted-ledger math and validation |
-| Functions emulator integration | 25 suites | Callables end-to-end |
+| Firestore rules + emulator | 180 | Real rules against the emulator, allows *and* denials, plus service paths |
+| Android JVM | 280 | KMP domain, repositories, view models, Compose UI |
+| Android instrumentation | 31 (last device run, 2026-10-26) | Behaviour on a real emulator, behind the fail-closed gate |
+| Functions unit | 69 | Trusted-ledger math and validation |
+| Functions emulator integration | 30 suites | Callables end-to-end |
 | Gate self-tests | 26 | The result parser itself |
 
 CI: `web-and-rules`, `mobile`, `functions`, `test`, `validate-action-pins` — all five
 green on the release commit. Actions are SHA-pinned, asserted by a pin-check job, and
 the release workflow is manual-dispatch-only behind a required reviewer.
 
-## Capabilities shipped (v1.0.9)
+## Capabilities shipped (v1.0.14)
 
 Dated counts with undo · per-tracker daily limits and burn-down · spend, savings and
 streak analytics with an optional personal baseline · editable and backfillable history
-with frozen closed days · realtime cross-device sync · five accent themes and layout
+with frozen closed-day stamps · realtime cross-device sync · ten accent themes and layout
 density · profile settings · account deletion · installable PWA with an offline shell ·
 Android APK distributed via GitHub Releases with checksum.
 

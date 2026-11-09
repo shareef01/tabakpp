@@ -6,6 +6,7 @@ import { UI, Button, Input } from '../Common';
 import { cn } from '../../utils/utils';
 import { useKeyboardInset } from '../../hooks/useKeyboardInset';
 import { useDialogA11y } from '../../hooks/useDialogA11y';
+import { mapFirestoreError } from '../../utils/errorHandlers';
 
 /**
  * Manual historical backfill — Android ManualEntryForm parity.
@@ -44,7 +45,9 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
       onClose();
     } catch (e) {
       console.error('[SYS] Manual entry failed', e);
-      setError('Could not log entry. Check your connection and try again.');
+      // Preserve the specific reason (tracker cap, future date, invalid date)
+      // instead of collapsing every rejection into a connectivity message.
+      setError(mapFirestoreError(e, 'Could not log entry. Check your connection and try again.'));
     } finally {
       setSaving(false);
     }
@@ -144,7 +147,7 @@ export const ManualEntryOverlay = ({ configs, initialDate = '', maxDate = '', on
 
         <div className="mt-10 space-y-4">
           {error ? (
-            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-rose-400 text-center leading-relaxed">
+            <p role="alert" className="text-[11px] font-black uppercase tracking-[0.18em] text-rose-400 text-center leading-relaxed">
               {error}
             </p>
           ) : null}

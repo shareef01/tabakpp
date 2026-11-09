@@ -69,6 +69,6 @@ export const mapFirestoreError = (err, fallback = 'Could not save. Try again.') 
   if (msg === 'INVALID_COUNT') return 'Counts must be whole numbers between 0 and 10000.';
   if (msg === 'FUTURE_DATE') return 'Pick today or an earlier date.';
   if (msg === 'INVALID_DATE') return 'That date does not exist. Check the day and month.';
-  if (msg === 'CONFIG_NOT_FOUND') return 'That tracker no longer exists. Refresh and try again.';
+  if (msg === 'INVALID_TRACKER' || msg === 'CONFIG_NOT_FOUND') return 'That tracker no longer exists. Refresh and try again.';
   return fallback;
 };

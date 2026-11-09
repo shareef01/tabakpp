@@ -19,6 +19,13 @@ import tempfile
 import shutil
 import textwrap
 
+# CI runners default to UTF-8, but Windows consoles often use cp1252 and would
+# crash on this script's status glyphs. Reconfigure only when supported.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 # Import the validator's functions
 # The validator file uses hyphens in its name (validate-action-pins.py),
 # so we load it manually via importlib

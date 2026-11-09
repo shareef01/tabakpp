@@ -27,6 +27,13 @@ import sys
 import urllib.error
 import urllib.request
 
+# CI runners default to UTF-8, but Windows consoles often use cp1252 and would
+# crash on this script's status glyphs. Reconfigure only when supported.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 # --- Regex patterns ------------------------------------------------------------
 
 # A 40-character lowercase hexadecimal Git object ID
