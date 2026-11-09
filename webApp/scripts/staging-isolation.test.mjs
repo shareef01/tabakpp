@@ -8,7 +8,7 @@ import { checkFunctionsDeploy, OPT_IN_ENV } from '../../scripts/guard-functions-
 
 const rootDir = resolve(__dirname, '../..');
 const FAKE_KEY = 'AIza' + 'x'.repeat(35);
-const VALID_STAGING_CONFIG = `const c={apiKey:"${FAKE_KEY}",projectId:"tabakpp-staging",authDomain:"tabakpp-staging.firebaseapp.com",storageBucket:"tabakpp-staging.firebasestorage.app",messagingSenderId:"123456789",appId:"1:123456789:web:abcdef"};`;
+const VALID_STAGING_CONFIG = `const c={apiKey:"${FAKE_KEY}",projectId:"${STAGING_PROJECT_ID}",authDomain:"${STAGING_PROJECT_ID}.firebaseapp.com",storageBucket:"${STAGING_PROJECT_ID}.firebasestorage.app",messagingSenderId:"123456789",appId:"1:123456789:web:abcdef"};`;
 const PROD_CONFIG_LEAK = `const c={apiKey:"${FAKE_KEY}",projectId:"${PROD_PROJECT_ID}",authDomain:"tabakpp.firebaseapp.com"};`;
 
 const makeDist = (chunks) => {
@@ -75,7 +75,7 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       expect(cspHeader.value).not.toContain('europe-west1-tabakpp-ff036.cloudfunctions.net');
       // ...but it must allow staging's own callable origin, or Option B could
       // never be exercised on staging hosting.
-      expect(cspHeader.value).toContain('https://europe-west1-tabakpp-staging.cloudfunctions.net');
+      expect(cspHeader.value).toContain(`https://europe-west1-${STAGING_PROJECT_ID}.cloudfunctions.net`);
     });
 
     it('limits img-src to data/blob avatars and Google profile photos (prod and staging)', () => {
@@ -98,7 +98,7 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       expect(firestoreConfig.firestore).toBeDefined();
       expect(firestoreConfig.firestore.rules).toBe('firestore.rules');
       expect(firestoreConfig.firestore.predeploy).toEqual([
-        'node webApp/scripts/check-rules-project.mjs --expected-project tabakpp-staging --forbid-project tabakpp-ff036'
+        `node webApp/scripts/check-rules-project.mjs --expected-project ${STAGING_PROJECT_ID} --forbid-project tabakpp-ff036`
       ]);
 
       // 2. MUST NOT define hosting or functions
@@ -165,7 +165,7 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
         project: 'incorrect-staging-alias',
       });
       expect(result.ok).toBe(false);
-      expect(result.reason).toMatch(/Project mismatch: Expected staging project "tabakpp-staging"/);
+      expect(result.reason).toMatch(new RegExp(`Project mismatch: Expected staging project "${STAGING_PROJECT_ID}"`));
     });
 
     it('5. rejects missing or incorrect Hosting target mappings in .firebaserc', () => {
@@ -179,7 +179,7 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
           firebaserc: emptyRc,
         });
         expect(result.ok).toBe(false);
-        expect(result.reason).toMatch(/Hosting target "staging-app" is not defined for project "tabakpp-staging" in .firebaserc/);
+        expect(result.reason).toMatch(new RegExp(`Hosting target "staging-app" is not defined for project "${STAGING_PROJECT_ID}" in .firebaserc`));
       } finally {
         rmSync(dist, { recursive: true, force: true });
       }
@@ -249,10 +249,10 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
         const result = validateStagingDeployment('hosting', {
           project: STAGING_PROJECT_ID,
           distDir: dist,
-          availableProjects: ['tabakpp-ff036', 'ledger-7c14b', 'tabakpwa'], // tabakpp-staging missing
+          availableProjects: ['tabakpp-ff036', 'ledger-7c14b', 'some-other-project'], // staging missing
         });
         expect(result.ok).toBe(false);
-        expect(result.reason).toMatch(/Staging project "tabakpp-staging" has not been provisioned in the authenticated Firebase account/);
+        expect(result.reason).toMatch(new RegExp(`Staging project "${STAGING_PROJECT_ID}" has not been provisioned in the authenticated Firebase account`));
       } finally {
         rmSync(dist, { recursive: true, force: true });
       }
@@ -267,14 +267,14 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
           availableProjects: null,
         });
         expect(result.ok).toBe(false);
-        expect(result.reason).toMatch(/Could not verify that "tabakpp-staging" exists/);
+        expect(result.reason).toMatch(new RegExp(`Could not verify that "${STAGING_PROJECT_ID}" exists`));
       } finally {
         rmSync(dist, { recursive: true, force: true });
       }
     });
 
     it('9. blocks staging deployment when build artifacts contain synthetic/placeholder credentials', () => {
-      const placeholderChunk = 'const c={apiKey:"AIzaSyB_stagingKeyValidationQA001234567",projectId:"tabakpp-staging",appId:"1:100000000001:web:abcdef1234567890"};';
+      const placeholderChunk = `const c={apiKey:"AIzaSyB_stagingKeyValidationQA001234567",projectId:"${STAGING_PROJECT_ID}",appId:"1:100000000001:web:abcdef1234567890"};`;
       const dist = makeDist([placeholderChunk]);
       try {
         const result = validateStagingDeployment('hosting', {
