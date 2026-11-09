@@ -3,6 +3,7 @@
 /*/build
 /local.properties
 .idea/
+.vscode/
 *.iml
 .DS_Store
 /captures
