@@ -157,7 +157,7 @@ a rewrite.
 | Web unit | 622 | UI and domain behaviour |
 | Contract | 76 | JS ↔ Kotlin semantic parity |
 | Firestore rules + emulator | 180 | Real rules against the emulator, allows *and* denials, plus service paths |
-| Android JVM | 280 | KMP domain, repositories, view models, Compose UI |
+| Android JVM | 282 | KMP domain, repositories, view models, Compose UI, app-level policy |
 | Android instrumentation | 31 (last device run, 2026-10-26) | Behaviour on a real emulator, behind the fail-closed gate |
 | Functions unit | 69 | Trusted-ledger math and validation |
 | Functions emulator integration | 30 suites | Callables end-to-end |
@@ -183,6 +183,5 @@ Android APK distributed via GitHub Releases with checksum.
 - **Contract fixtures beat good intentions** for cross-language parity. Any future
   domain rule should arrive with a vector in `shared-tests/`.
 - Possible next steps, none required for personal use: enable the protected checks
-  (`functions`, `test`) on `main`; add a small JVM unit suite for `:androidApp`, whose
-  Gradle task is currently a no-op; and, only if billing is ever acceptable, deploy the
+  (`functions`, `test`) on `main`; and, only if billing is ever acceptable, deploy the
   Option B callables behind a migration plan.

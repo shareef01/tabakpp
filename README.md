@@ -320,7 +320,7 @@ adding `google-services.json`, or install a signed APK from
 | PWA offline + freshness | `npm run test:pwa` (after `npm run build`) | Offline navigation and deploy freshness of the production build |
 | Accessibility | `npm run test:a11y` | axe-core over 4 viewports × 4 views, per-accent contrast, and 200% zoom reflow — exits non-zero on any violation |
 | Kotlin unit | `./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest` | KMP domain math, repositories, view models, Compose UI (includes the Kotlin side of the contract fixtures) |
-| Android app unit | `./gradlew :androidApp:testDebugUnitTest` | No local unit tests today: the only one was the App Check provider-selection guard, removed together with App Check (the Gradle task is a no-op in CI). App-level behaviour is covered by the `:shared`/`:composeApp` unit suites and the Android instrumentation suite |
+| Android app unit | `./gradlew :androidApp:testDebugUnitTest` | App-level JVM policy tests (reduced-motion signal); runs in the `mobile` CI job |
 | Cloud Functions | `cd functions && npm test` | Option B financial math and input validation |
 | Functions integration | see the `functions` job in [`ci.yml`](.github/workflows/ci.yml) | Option B callables end-to-end against the Auth/Firestore/Functions emulators |
 | Android instrumentation | `./gradlew :androidApp:connectedDebugAndroidTest` | Android/KMP behavior against a real emulator |
