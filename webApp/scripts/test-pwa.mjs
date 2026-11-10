@@ -13,7 +13,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'tabakpp-pwa-'));
 const evidence = { builds: {}, scenarios: [], documents: [], scripts: [], workerErrors: [], consoleErrors: [], warnings: [], caches: {} };
 const output = process.env.PWA_TEST_REPORT || path.join(temporary, 'results.json');
-const sessions = new WeakMap();
 const deniedNavigationURLs = new Set();
 evidence.expectedNetworkFailures = [];
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
@@ -136,7 +135,6 @@ async function pageFor(context) {
       `Uncaught (in promise) no-response: no-response :: ${JSON.stringify([{ url, error: {} }])}`);
     (expected ? evidence.expectedNetworkFailures : evidence.workerErrors).push(error);
   });
-  sessions.set(page, session);
   return { page, session };
 }
 
@@ -148,11 +146,16 @@ async function shell(page, base, route, label, offline = false) {
   await page.goto(base + route, { waitUntil: 'domcontentloaded', timeout: 30000 });
   const response = evidence.documents.slice(firstDocument).find(document => document.url === base + route);
   assert(response, 'actual HTML navigation response required');
-  const body = await sessions.get(page).send('Network.getResponseBody', { requestId: response.requestId });
-  const actual = body.base64Encoded ? Buffer.from(body.body, 'base64').toString() : body.body;
-  assert(actual.includes(evidence.builds[label].entry), `${route} serves ${label} HTML`);
   await page.waitForSelector('input[type="email"]');
   await page.waitForFunction(expected => localStorage.getItem('tabak_build_id') === expected, {}, label);
+  // Read the build marker from the settled DOM rather than from
+  // Network.getResponseBody. The build-id effect can issue a one-shot reload
+  // right after navigation; Chrome may then evict the previous document's
+  // response body, making a later getResponseBody call fail with "No resource
+  // with given identifier found". The parsed DOM still carries the HTML that
+  // was actually served, including the hashed entry script.
+  const servedHtml = await page.evaluate(() => document.documentElement.outerHTML);
+  assert(servedHtml.includes(evidence.builds[label].entry), `${route} serves ${label} HTML`);
   if (offline) {
     assert(response.worker, `${route} must be served by the controlling SW`);
     assert.equal(documentResponses, before, 'offline navigation cannot receive an HTTP document');
