@@ -345,7 +345,7 @@ fun SettingsScreen(
     configToDelete?.let { config ->
         ConfirmModal(
             title = "Delete tracker?",
-            message = "\"${config.name}\" will be removed from your dashboard. Logged history stays in the vault.",
+            message = "\"${config.name}\" will be removed from your dashboard. Closed-day history is kept; any open counts for it today are removed.",
             confirmLabel = "Delete",
             tintColor = ErrorColor,
             onConfirm = {

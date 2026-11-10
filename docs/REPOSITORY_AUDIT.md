@@ -1,6 +1,12 @@
 # Repository audit — tabak++
 
-Evidence-based snapshot of the repository as it stands at `main` = **`9548213`**
+> **Historical snapshot.** This audit describes `main` at **`9548213`**
+> (release `v1.0.9`) and is retained as an engineering record. It is **not** the
+> current state of the repository. For the current audit see
+> [`audit-2026-11-09.md`](audit-2026-11-09.md); for the latest release see
+> [GitHub Releases](https://github.com/shareef01/tabakpp/releases/latest).
+
+Evidence-based snapshot of the repository as it stood at `main` = **`9548213`**
 (release `v1.0.9`). Findings marked **Verified** were read from the repository,
 the GitHub API, or executed locally during this audit. Anything marked
 **Recommendation** is a proposal that has not been applied.
