@@ -21,11 +21,13 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
         )
         val reducedMotion =
-            Settings.Global.getFloat(
-                contentResolver,
-                Settings.Global.ANIMATOR_DURATION_SCALE,
-                1f
-            ) == 0f
+            isReducedMotion(
+                Settings.Global.getFloat(
+                    contentResolver,
+                    Settings.Global.ANIMATOR_DURATION_SCALE,
+                    1f
+                )
+            )
         setContent {
             App(reducedMotion = reducedMotion)
         }
