@@ -76,6 +76,8 @@ object RegistryErrorMapper {
                 "This day's record could not be read, so nothing was changed. Update the app and try again."
             normalized.contains("historical_price_unavailable") ->
                 "This older record has no reliable historical price. Its stored totals were preserved; changing its amounts is unavailable."
+            normalized.contains("invalid_count") ->
+                "Counts must be whole numbers between 0 and 10000."
             normalized.contains("tracker_limit") ->
                 "A tracking day supports up to 8 trackers. Remove an unused tracker before adding another."
             normalized.contains("permission_denied") ||

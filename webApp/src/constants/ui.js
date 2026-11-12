@@ -3,6 +3,19 @@
  * Standardized design tokens for consistent high-fidelity presentation.
  */
 
+/**
+ * "Close tracking day?" confirmation copy. Must match the Android
+ * CLOSE_DAY_CONFIRM_MESSAGE (composeApp/.../ui/screens/TrackScreen.kt).
+ *
+ * It used to promise "You can continue logging anytime today", but a closed
+ * day's tracker snapshots are frozen by firestore.rules, so only trackers
+ * already logged that day can still be adjusted; any other tracker is refused
+ * with DAY_CLOSED_NO_SNAPSHOT (audit 2026-11-12 TABAK-001).
+ */
+export const CLOSE_DAY_CONFIRM_MESSAGE =
+  "Your counts are already saved. Closing adds today to your lifetime totals now. "
+  + "You can still adjust trackers you've already logged today; any other tracker needs a manual entry in History.";
+
 export const BRAND = {
   NAME: "tabak",
   SUFFIX: "++",

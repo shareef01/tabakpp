@@ -25,7 +25,9 @@ rules_version = '2';
 //     `foldedIntoLifetime`, and `legacyMigrationApplied` (see
 //     validDayUpdate). `counts` and `aggregateCredit` remain writable by the
 //     authenticated owner — the application-layer `updateHistoricalDay`
-//     path additionally reconciles `lifetimeAggregates`.
+//     path additionally reconciles `lifetimeAggregates`. These freezes
+//     constrain in-place UPDATES only: the owner may delete a day and create
+//     it again (same Spark residual as owner-written lifetimeAggregates).
 //   users/{uid}/logs/{id}          legacy ledger: manual backfill entries
 //     (still written here) and pre-migration day archives (`{date}_DAY`,
 //     no longer created by updated clients, but still readable).
@@ -594,9 +596,9 @@ service cloud.firestore {
         && d.date == dateParam
         && d.date == before.date // date is the document identity — immutable
         && (!changed.hasAny(['counts']) || validCounterCountDelta(d, before) || validDayCountMap(d.counts))
-        // Once a day is closed, its historical config stamp is frozen — this is
-        // what makes trackerSnapshots actually immutable (item 2), not just a
-        // client convention. `counts`/`aggregateCredit` may still change (a
+        // Once a day is closed, its historical config stamp is frozen against
+        // updates — enforced by rules (item 2), not just a client convention.
+        // `counts`/`aggregateCredit` may still change (a
         // deliberate historical correction via updateHistoricalDay), but never
         // what the day *meant* at the time.
         && (!changed.hasAny(['trackerSnapshots']) || (before.status != 'closed' && (validCounterSnapshotDelta(d, before) || validSnapshotMap(d.trackerSnapshots))))
@@ -604,7 +606,8 @@ service cloud.firestore {
         // A day cannot be reopened once closed (one-way transition).
         && (!changed.hasAny(['status']) || (d.status in ['open', 'closed'] && before.status != 'closed'))
         // foldedIntoLifetime/legacyMigrationApplied can only go from unset/false
-        // -> true, never back — prevents a client from re-triggering a credit.
+        // -> true, never back, on an update — so an official client can never
+        // re-trigger a credit. (Delete + create is not covered; see header.)
         && (!changed.hasAny(['foldedIntoLifetime'])
           || (d.foldedIntoLifetime is bool && (!('foldedIntoLifetime' in before) || before.foldedIntoLifetime != true)))
         && (!changed.hasAny(['legacyMigrationApplied'])

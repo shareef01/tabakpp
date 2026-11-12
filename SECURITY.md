@@ -16,7 +16,7 @@ Only the latest release of `tabak++` is actively maintained and supported with s
 `tabak++` is built for two financial modes. Owner data isolation holds in both; server-verified financial integrity exists only in Option B:
 
 1. **Dual Financial Modes (Legacy vs Option B)**:
-   - **Legacy Mode**: Operates on direct client Firestore writes constrained by Firestore Security Rules (`firestore.rules`). On closed days, rules freeze `trackerSnapshots`, `status`, `date`, `foldedIntoLifetime`, and `legacyMigrationApplied`.
+   - **Legacy Mode**: Operates on direct client Firestore writes constrained by Firestore Security Rules (`firestore.rules`). On closed days, rules freeze `trackerSnapshots`, `status`, `date`, `foldedIntoLifetime`, and `legacyMigrationApplied` **against in-place updates**. This is integrity against client mistakes, not against the owner: the owner may still delete a day document and create it again with new values (the same Spark residual that lets an owner rewrite their own `lifetimeAggregates`).
    - **Option B Trusted Mode (not deployed)**: Financial mutations for migrated accounts route exclusively through trusted server-side Cloud Functions (`executeFinancialOperation`). Firestore Security Rules enforce a strict `financialLocked` fence denying all direct client writes to financial collections (`days`, `logs`, `dailyFinancials`, `financialOperations`, and profile `lifetimeAggregates`).
 2. **Zero-Trust Client Boundary & Admin Transactions**:
    - In Option B, client-supplied financial totals and price derivations are never trusted. All calculations (`calculateDailyFinancials`, `computeDayCredit`) execute server-side in Cloud Functions using immutable historical snapshots and server-verified profile configurations.

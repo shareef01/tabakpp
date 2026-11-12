@@ -184,8 +184,10 @@ users/{uid}/meta/profile           avatar — kept off the profile document so
 What the rules guarantee once a day is closed (see `validDayUpdate` in
 [`firestore.rules`](firestore.rules)):
 
-- **Frozen snapshot.** Any write that would change a closed day's stamped
-  `trackerSnapshots` is rejected. Changing a tracker's target today can never
+- **Frozen snapshot.** Any update that would change a closed day's stamped
+  `trackerSnapshots` is rejected. (These freezes cover in-place updates only;
+  the owner can still delete and recreate their own day document — see
+  [SECURITY.md](SECURITY.md).) Changing a tracker's target today can never
   retroactively change whether an old day was a success, and repricing a tracker
   can never rewrite what an old day cost.
 - **Locked identity.** `status`, `date`, `foldedIntoLifetime` and
@@ -229,7 +231,7 @@ flowchart LR
   Rules --> Owner["request.auth.uid == userId"]
   Rules --> Split["Settings vs mutation<br/>write-path split"]
   Rules --> Shape["Schema + bounds<br/>on profile · configs · days · logs · meta"]
-  Rules --> Frozen["Closed days: trackerSnapshots frozen;<br/>status one-way open→closed"]
+  Rules --> Frozen["Closed days (in-place updates): trackerSnapshots frozen;<br/>status one-way open→closed"]
   Rules --> Writability["Closed days: counts/aggregateCredit<br/>writable by owner (rules-validated);<br/>updateHistoricalDay reconciles lifetimeAggs"]
   Rules --> Deny["Default deny<br/>/{document=**}"]
 ```

@@ -28,6 +28,25 @@ object InputSanitizer {
             .take(50)
             .associate { it.toPair() }
 
+    /**
+     * Strict validation for CALLER-SUPPLIED counts (manual entry, historical
+     * day/log edits) — web parity with `validateCounts` in registryService.js.
+     *
+     * [counts] FILTERS, which is right for stored state but wrong for input:
+     * a negative value silently dropped from a manual entry leaves a zero-count
+     * record that still earns the full target allowance as `saved` (audit
+     * 2026-11-12 TABAK-005). This REJECTS instead, with INVALID_COUNT.
+     */
+    fun validateCounts(values: Map<String, Double>): Map<String, Double> {
+        if (values.size > 50) throw IllegalArgumentException("INVALID_COUNT")
+        values.forEach { (key, value) ->
+            if (!countKeyRegex.matches(key) || !value.isFinite() || value !in 0.0..10_000.0 || value % 1.0 != 0.0) {
+                throw IllegalArgumentException("INVALID_COUNT")
+            }
+        }
+        return values
+    }
+
     private fun text(value: String, maxLength: Int): String =
         value
             .filterNot { it.isISOControl() || it == '<' || it == '>' }

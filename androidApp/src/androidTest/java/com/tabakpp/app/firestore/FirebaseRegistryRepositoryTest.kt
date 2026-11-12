@@ -847,6 +847,43 @@ class FirebaseRegistryRepositoryTest {
     }
 
     // ============================================================
+    // Test D3b — Stale-day lookup is not bounded by history length
+    // (audit 2026-11-12 TABAK-003). The previous implementation scanned
+    // every day doc in ascending order with a 2000-doc cap, so with more
+    // than 2000 closed days it never reached a recent stale open day.
+    // ============================================================
+
+    @Test
+    fun testD3b_listStaleOpenDays_findsRecentStaleDayBeyondLongClosedHistory() {
+        runBlocking {
+            val days = firestore.collection("users").document(testUid).collection("days")
+            var date = java.time.LocalDate.of(2000, 1, 1)
+            repeat(6) {
+                var batch = firestore.batch()
+                repeat(350) {
+                    batch = batch.set(days.document(date.toString()), DayDocument(
+                        date = date.toString(), counts = mapOf(TEST_TRACKER_ID to 1.0),
+                        aggregateCredit = com.tabakpp.app.data.LifetimeAggregates(),
+                        status = "closed", foldedIntoLifetime = true,
+                    ))
+                    date = date.plusDays(1)
+                }
+                batch.commit()
+            }
+            // 2100 closed days written; one stale open day after them, and the
+            // current tracking day (open, NOT stale).
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, "2098-01-01", 0.5)
+            repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
+
+            assertEquals(listOf("2098-01-01"), repository.listStaleOpenDays(testUid, TEST_DATE))
+
+            repository.reconcileStaleDays(testUid, TEST_DATE)
+            assertEquals("closed", getDay(testUid, "2098-01-01")!!.status)
+            assertEquals("open", getDay(testUid, TEST_DATE)!!.status)
+        }
+    }
+
+    // ============================================================
     // Test D4 — An undecodable day is never overwritten (audit F-03)
     // ============================================================
 

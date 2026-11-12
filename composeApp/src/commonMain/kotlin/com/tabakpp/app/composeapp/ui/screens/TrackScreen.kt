@@ -37,6 +37,19 @@ import com.tabakpp.app.viewmodels.RegistryViewModel
 import kotlinx.coroutines.delay
 
 /**
+ * "Close tracking day?" confirmation copy — must match the web
+ * CLOSE_DAY_CONFIRM_MESSAGE (webApp/src/constants/ui.js).
+ *
+ * It used to promise "You can keep logging today", but a closed day's tracker
+ * snapshots are frozen by firestore.rules, so only trackers already logged
+ * that day can still be adjusted; any other tracker is refused with
+ * DAY_CLOSED_NO_SNAPSHOT (audit 2026-11-12 TABAK-001).
+ */
+internal const val CLOSE_DAY_CONFIRM_MESSAGE =
+    "Your counts are already saved. Closing adds today to your lifetime totals now. " +
+        "You can still adjust trackers you've already logged today; any other tracker needs a manual entry in History."
+
+/**
  * High-performance Track Dashboard.
  * Feature: Silent habit logging with a premium glassy Undo pill.
  */
@@ -214,7 +227,7 @@ fun TrackScreen(
     if (showEndDayConfirm) {
         ConfirmModal(
             title = "Close tracking day?",
-            message = "Your counts are already saved. Closing adds today to your lifetime totals now. You can keep logging today and edit this day in History.",
+            message = CLOSE_DAY_CONFIRM_MESSAGE,
             confirmLabel = "Close Day",
             tintColor = ErrorColor,
             isLoading = endingDay,
