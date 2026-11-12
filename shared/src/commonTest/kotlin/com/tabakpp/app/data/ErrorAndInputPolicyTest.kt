@@ -184,4 +184,36 @@ class ErrorAndInputPolicyTest {
         assertFalse("bad key!" in normalized)
         assertFalse("x".repeat(65) in normalized)
     }
+
+    /**
+     * Audit 2026-11-12 TABAK-005 — caller-supplied counts are REJECTED, never
+     * filtered (web `validateCounts` parity). A silently dropped negative value
+     * turned a manual entry into a zero-count record earning the full allowance.
+     */
+    @Test
+    fun validateCountsRejectsEveryInvalidCallerValue() {
+        val valid = mapOf("cig" to 0.0, "roll" to 3.0, "max" to 10_000.0)
+        assertEquals(valid, InputSanitizer.validateCounts(valid))
+
+        listOf(
+            mapOf("cig" to -1.0),
+            mapOf("cig" to 2.5),
+            mapOf("cig" to 10_001.0),
+            mapOf("cig" to Double.NaN),
+            mapOf("cig" to Double.POSITIVE_INFINITY),
+            mapOf("bad key!" to 1.0),
+            mapOf("x".repeat(65) to 1.0),
+            mapOf("cig" to 1.0, "neg" to -3.0),
+            (0 until 51).associate { "t$it" to 1.0 },
+        ).forEach { bad ->
+            val error = kotlin.test.assertFailsWith<IllegalArgumentException> { InputSanitizer.validateCounts(bad) }
+            assertEquals("INVALID_COUNT", error.message)
+        }
+    }
+
+    @Test
+    fun invalidCountIsMappedToAnActionableMessage() {
+        val msg = RegistryErrorMapper.map(IllegalArgumentException("INVALID_COUNT"), fallback = "x")
+        assertEquals("Counts must be whole numbers between 0 and 10000.", msg)
+    }
 }

@@ -247,7 +247,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
             {isEnding ? 'Closing session…' : 'Close tracking day'}
           </span>
           <span className="hidden sm:inline text-[11px] text-neutral-400 font-normal">
-            (saves milestone · you can keep logging)
+            (saves milestone · logged trackers stay adjustable)
           </span>
         </button>
       )}

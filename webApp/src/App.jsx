@@ -9,7 +9,7 @@ import { auth } from './firebase';
 import { hexToRgbValues } from './utils/formatters';
 import { SmokingCalculator } from './utils/smokingCalculator';
 import { pathForTab, tabForPath } from './utils/routing';
-import { DEFAULT_ACCENT } from './constants/ui';
+import { DEFAULT_ACCENT, CLOSE_DAY_CONFIRM_MESSAGE } from './constants/ui';
 const cn = (...classes) => classes.filter(Boolean).join(' ');
 
 // Was a local '#FF5F5F' literal duplicated here and in ensureUserDocument's
@@ -614,7 +614,7 @@ const AppContent = () => {
                 } catch { /* registryError set in hook */ }
               }}
               title="Close tracking day?"
-              message="Your counts are already safely saved. Closing finalizes today's milestone to your lifetime totals. You can continue logging anytime today, and edit any day in History."
+              message={CLOSE_DAY_CONFIRM_MESSAGE}
               confirmText="Close Day"
               danger={false}
             />

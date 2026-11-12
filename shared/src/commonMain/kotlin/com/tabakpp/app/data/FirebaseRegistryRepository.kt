@@ -497,12 +497,14 @@ class FirebaseRegistryRepository(
     }
 
     /**
-     * Batched stale-day reconciliation (AUD-010). Pages the `days` collection in
-     * ASCENDING date order (single-field, auto-indexed) so the oldest — and
-     * therefore stale — days are reached first, and stops early once a page
-     * reaches the current tracking date. Bounded by both a page size and a hard
-     * page cap so a runaway backlog can never block the caller; best-effort per
-     * day so one failure does not abort the rest.
+     * Batched stale-day reconciliation (AUD-010). Queries ONLY `status == "open"`
+     * day documents (single-field equality, auto-indexed — web parity with
+     * RegistryService.reconcileStaleDays), so the read cost is the number of open
+     * days, not the length of the account's history (audit 2026-11-12 TABAK-003:
+     * the previous full ascending scan billed every day doc on each start and,
+     * past its 2000-doc cap, never reached recent stale days). Bounded by a page
+     * size and a hard page cap; best-effort per day so one failure does not
+     * abort the rest.
      */
     override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) {
         for (date in listStaleOpenDays(uid, currentTrackingDate)) {
@@ -517,14 +519,18 @@ class FirebaseRegistryRepository(
     override suspend fun listStaleOpenDays(uid: String, currentTrackingDate: String): List<String> {
         val daysCollection = firestore.collection("users").document(uid).collection("days")
         val pageSize = 200L
-        val maxPages = 10 // ≤2000 days per call — bounded, resumable on the next call
+        val maxPages = 10 // ≤2000 open days per call — bounded, resumable on the next call
         val stale = mutableListOf<String>()
         var lastDoc: DocumentSnapshot? = null
         var page = 0
         while (page < maxPages) {
             page++
+            // No explicit orderBy: an equality-only query is ordered by document
+            // id, and a day doc's id IS its date (rules: d.date == dateParam), so
+            // results arrive in ascending date order — which the early return
+            // below relies on. Adding orderBy("date") would need a composite index.
             var query: Query = daysCollection
-                .orderBy("date", Direction.ASCENDING)
+                .where { "status" equalTo "open" }
                 .limit(pageSize)
             if (lastDoc != null) query = query.startAfter(lastDoc!!)
             val snap = try {
@@ -537,7 +543,7 @@ class FirebaseRegistryRepository(
             for (doc in docs) {
                 val day = decodeDayDocument(doc) ?: continue
                 if (day.status != "open") continue
-                // Ascending order: no later document can be stale.
+                // Ascending (document-id = date) order: no later document can be stale.
                 if (day.date >= currentTrackingDate) return stale
                 stale.add(day.date)
             }
@@ -550,7 +556,7 @@ class FirebaseRegistryRepository(
     override suspend fun updateHistoricalDay(uid: String, date: String, counts: Map<String, Double>) {
         val userRef = firestore.collection("users").document(uid)
         val dayRef = userRef.collection("days").document(date)
-        val normalized = InputSanitizer.counts(counts)
+        val normalized = InputSanitizer.validateCounts(counts) // rejects, never filters (TABAK-005)
 
         firestore.runTransaction {
             val daySnap = get(dayRef)
@@ -611,8 +617,11 @@ class FirebaseRegistryRepository(
                     val snapshots = previous + (id to (previous[id] ?: SmokingCalculator.buildTrackerSnapshot(config, price)))
                     val credit = SmokingCalculator.computeDayCredit(counts, snapshots)
                     if (day == null) {
+                        // status is explicit (not the model default) so the
+                        // `status == "open"` reconcile query always matches it.
                         set(dayRef, DayDocument(date = date, counts = counts, trackerSnapshots = snapshots,
-                            aggregateCredit = credit, updatedTrackerId = id, createdAt = nowTimestamp(), updatedAt = nowTimestamp()))
+                            aggregateCredit = credit, status = "open", updatedTrackerId = id,
+                            createdAt = nowTimestamp(), updatedAt = nowTimestamp()))
                     } else {
                         updateFields(dayRef) {
                             "counts" to counts
@@ -761,7 +770,7 @@ class FirebaseRegistryRepository(
         val configsRef = userRef.collection("configs")
         val logsRef = userRef.collection("logs")
         val configIds = listConfigIds(uid)
-        val normalized = InputSanitizer.counts(counts)
+        val normalized = InputSanitizer.validateCounts(counts) // rejects, never filters (TABAK-005)
         if (configIds.size > 8) throw IllegalStateException("TRACKER_LIMIT")
         if (normalized.any { (id, value) -> value > 0 && id !in configIds }) throw IllegalStateException("INVALID_TRACKER")
 
@@ -818,7 +827,7 @@ class FirebaseRegistryRepository(
         val ledgerRef = userRef.collection("dailyFinancials").document(date)
         val logRef = userRef.collection("logs").document(logId)
         val receiptRef = userRef.collection("financialOperations").document(operationId)
-        val normalized = InputSanitizer.counts(counts)
+        val normalized = InputSanitizer.validateCounts(counts) // rejects, never filters (TABAK-005)
         val fingerprint = "createManualLog|$date|$logId|" +
             normalized.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
 
@@ -939,7 +948,7 @@ class FirebaseRegistryRepository(
         val ledgerRef = userRef.collection("dailyFinancials").document(date)
         val logRef = userRef.collection("logs").document(logId)
         val receiptRef = userRef.collection("financialOperations").document(operationId)
-        val normalized = InputSanitizer.counts(counts)
+        val normalized = InputSanitizer.validateCounts(counts) // rejects, never filters (TABAK-005)
         val fingerprint = ledgerFingerprint("updateManualLog", date, logId,
             normalized.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" })
 
@@ -1263,7 +1272,7 @@ class FirebaseRegistryRepository(
         val configsRef = userRef.collection("configs")
         val logRef = userRef.collection("logs").document(logId)
         val configIds = listConfigIds(uid)
-        val normalized = InputSanitizer.counts(counts)
+        val normalized = InputSanitizer.validateCounts(counts) // rejects, never filters (TABAK-005)
 
         firestore.runTransaction {
             val oldLogSnap = get(logRef)
