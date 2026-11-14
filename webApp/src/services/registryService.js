@@ -1,5 +1,5 @@
 import {
-  collection, doc, setDoc, updateDoc, getDoc, getDocs,
+  collection, doc, setDoc, updateDoc, getDoc, getDocs, getDocsFromServer,
   query, onSnapshot, orderBy, where, writeBatch, limit, serverTimestamp,
   runTransaction, deleteField, startAfter, Timestamp
 } from 'firebase/firestore';
@@ -59,6 +59,42 @@ const financialWritesLocked = async (uid) => {
   const snap = await getDoc(doc(db, 'users', uid));
   const mode = snap?.exists?.() ? snap.data()?.financialMode : null;
   return mode === 'MIGRATING' || mode === 'OPTION_B';
+};
+
+// Firestore filters omit absent fields. Scan existing days once per account,
+// then use the indexed open-day query for normal reconciliation.
+const backfillDayStatus = async (uid) => {
+  const marker = doc(db, 'users', uid, 'meta', 'dayStatusBackfill');
+  const days = collection(db, 'users', uid, 'days');
+  const pageSize = 200;
+  for (let page = 0; page < 10; page++) {
+    const progress = (await getDoc(marker)).data() || {};
+    if (progress.complete) return;
+    if (page === 0 && await financialWritesLocked(uid)) return;
+    const afterDate = progress.afterDate || '';
+    let nextPage = query(days, orderBy('date', 'asc'), limit(pageSize));
+    if (afterDate) nextPage = query(nextPage, startAfter(afterDate));
+    const snapshot = await getDocsFromServer(nextPage);
+    for (const day of snapshot.docs) {
+      if (day.data().status !== undefined) continue;
+      await runTransaction(db, async (transaction) => {
+        const latest = await transaction.get(day.ref);
+        if (latest.exists() && latest.data().status === undefined) {
+          transaction.update(day.ref, { status: 'open' });
+        }
+      });
+    }
+    const complete = snapshot.size < pageSize;
+    const nextDate = snapshot.docs.at(-1)?.data().date || afterDate;
+    if (!complete && nextDate <= afterDate) return;
+    const advanced = await runTransaction(db, async (transaction) => {
+      const current = (await transaction.get(marker)).data() || {};
+      if (current.complete || (current.afterDate || '') !== afterDate) return false;
+      transaction.set(marker, { afterDate: nextDate, complete });
+      return true;
+    });
+    if (!advanced || complete) return;
+  }
 };
 
 /** Stable FNV-1a hash of a canonical JSON form. */
@@ -892,6 +928,11 @@ export const RegistryService = {
    */
   reconcileStaleDays: async (uid, currentTrackingDate) => {
     if (!uid || !currentTrackingDate) return;
+    try {
+      await backfillDayStatus(uid);
+    } catch (e) {
+      console.warn('[REGISTRY] day status backfill failed', e);
+    }
     const PAGE_SIZE = 40;
     const MAX_PAGES = 10; // ≤400 days per call — bounded work, resumable later
     let lastDoc = null;

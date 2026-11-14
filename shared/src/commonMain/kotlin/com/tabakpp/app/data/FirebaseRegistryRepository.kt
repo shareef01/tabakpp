@@ -7,6 +7,7 @@ import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.domain.HistoryCursor
 import com.tabakpp.app.domain.HistoryPage
 import dev.gitlive.firebase.firestore.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlin.time.Clock
@@ -15,6 +16,9 @@ import kotlinx.serialization.Serializable
 /** Minimal projection used to read `users/{uid}.financialMode` without touching UserProfile. */
 @Serializable
 private data class FinancialModeDoc(val financialMode: String = "LEGACY")
+
+@Serializable
+private data class DayStatusBackfill(val afterDate: String = "", val complete: Boolean = false)
 
 /** Schema version marking the dated-daily-document migration. */
 private const val CURRENT_SCHEMA_VERSION = 2
@@ -497,7 +501,8 @@ class FirebaseRegistryRepository(
     }
 
     /**
-     * Batched stale-day reconciliation (AUD-010). Queries ONLY `status == "open"`
+     * Batched stale-day reconciliation (AUD-010). After the one-time status
+     * backfill, queries only `status == "open"`
      * day documents (single-field equality, auto-indexed — web parity with
      * RegistryService.reconcileStaleDays), so the read cost is the number of open
      * days, not the length of the account's history (audit 2026-11-12 TABAK-003:
@@ -507,12 +512,54 @@ class FirebaseRegistryRepository(
      * abort the rest.
      */
     override suspend fun reconcileStaleDays(uid: String, currentTrackingDate: String) {
+        try {
+            backfillDayStatus(uid)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Retry from the last completed page on the next reconciliation.
+        }
         for (date in listStaleOpenDays(uid, currentTrackingDate)) {
             try {
                 closeDay(uid, date, true)
             } catch (_: Exception) {
                 // Best-effort — one failure must not block the rest.
             }
+        }
+    }
+
+    private suspend fun backfillDayStatus(uid: String) {
+        val user = firestore.collection("users").document(uid)
+        val marker = user.collection("meta").document("dayStatusBackfill")
+        val days = user.collection("days")
+        val pageSize = 200
+        repeat(10) {
+            val progress = marker.get().let { if (it.exists) it.data<DayStatusBackfill>() else DayStatusBackfill() }
+            if (progress.complete) return
+            if (it == 0 && getFinancialMode(uid) in setOf("MIGRATING", "OPTION_B")) return
+            var query = days.orderBy("date", Direction.ASCENDING).limit(pageSize.toLong())
+            if (progress.afterDate.isNotEmpty()) query = query.startAfterFieldValues { add(progress.afterDate) }
+            val docs = query.get(Source.SERVER).documents
+            for (day in docs) {
+                if (day.contains("status")) continue
+                firestore.runTransaction {
+                    val latest = get(day.reference)
+                    if (latest.exists && !latest.contains("status")) {
+                        updateFields(day.reference) { "status" to "open" }
+                    }
+                }
+            }
+            val next = DayStatusBackfill(
+                afterDate = docs.lastOrNull()?.get<String>("date") ?: progress.afterDate,
+                complete = docs.size < pageSize,
+            )
+            val advanced = firestore.runTransaction {
+                val current = get(marker).let { if (it.exists) it.data<DayStatusBackfill>() else DayStatusBackfill() }
+                if (current != progress) return@runTransaction false
+                set(marker, next)
+                true
+            }
+            if (!advanced || next.complete) return
         }
     }
 

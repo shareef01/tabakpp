@@ -883,6 +883,27 @@ class FirebaseRegistryRepositoryTest {
         }
     }
 
+    @Test
+    fun testD3c_reconcileStaleDays_backfillsMissingStatusAndFoldsCreditOnce() {
+        runBlocking {
+            val date = "2098-01-01"
+            ownerPatch(
+                "users/$testUid/days/$date",
+                """{"fields":{"date":{"stringValue":"$date"},"counts":{"mapValue":{"fields":{}}},""" +
+                    """"aggregateCredit":{"mapValue":{"fields":{"wasted":{"doubleValue":4.0}}}}}}"""
+            )
+            val user = firestore.collection("users").document(testUid)
+            val before = user.get().data<UserProfile>().lifetimeAggregates.wasted
+
+            repository.reconcileStaleDays(testUid, TEST_DATE)
+            repository.reconcileStaleDays(testUid, TEST_DATE)
+
+            assertEquals("closed", getDay(testUid, date)?.status)
+            assertEquals(true, getDay(testUid, date)?.foldedIntoLifetime)
+            assertEquals(before + 4.0, user.get().data<UserProfile>().lifetimeAggregates.wasted, 0.001)
+        }
+    }
+
     // ============================================================
     // Test D4 — An undecodable day is never overwritten (audit F-03)
     // ============================================================

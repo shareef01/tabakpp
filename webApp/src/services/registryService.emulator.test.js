@@ -285,6 +285,38 @@ describe('RegistryService against the real SDK and rules', () => {
     expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(4);
   });
 
+  it('backfills missing day status and folds stale credit exactly once across concurrent clients', async () => {
+    await seed();
+    const oldDate = '2026-07-18';
+    const today = '2026-07-21';
+    const oldDay = {
+      date: oldDate,
+      counts: { cig: 4 },
+      aggregateCredit: { saved: 6, wasted: 4, smokingUnits: 4, baselineSaved: 0 },
+    };
+    await expect(setDoc(doc(holder.db, 'users', UID, 'days', oldDate), oldDay))
+      .rejects.toMatchObject({ code: 'permission-denied' });
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await setDoc(doc(db, 'users', UID, 'days', oldDate), oldDay);
+      await setDoc(doc(db, 'users', UID, 'days', today), { date: today, counts: { cig: 1 } });
+    });
+
+    await Promise.all([
+      RegistryService.reconcileStaleDays(UID, today),
+      RegistryService.reconcileStaleDays(UID, today),
+    ]);
+    await RegistryService.reconcileStaleDays(UID, today);
+
+    expect(await dayDoc(oldDate)).toMatchObject({
+      ...oldDay, status: 'closed', foldedIntoLifetime: true,
+    });
+    expect(await dayDoc(today)).toMatchObject({ counts: { cig: 1 }, status: 'open' });
+    expect((await profile()).lifetimeAggregates).toEqual(oldDay.aggregateCredit);
+    const marker = await getDoc(doc(holder.db, 'users', UID, 'meta', 'dayStatusBackfill'));
+    expect(marker.data()).toEqual({ afterDate: today, complete: true });
+  });
+
   it('updateHistoricalDay corrects a closed day\'s counts using its own stamped snapshot', async () => {
     await seed();
     await RegistryService.adjustCounter(UID, 'cig', 4, '2026-07-10', 0.5);

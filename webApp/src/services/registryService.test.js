@@ -144,7 +144,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 
   return {
     doc, collection, query, orderBy, where, limit, startAfter, serverTimestamp, deleteField, Timestamp,
-    getDoc, getDocs, setDoc, updateDoc, deleteDoc, runTransaction, writeBatch, onSnapshot,
+    getDoc, getDocs, getDocsFromServer: getDocs, setDoc, updateDoc, deleteDoc, runTransaction, writeBatch, onSnapshot,
   };
 });
 
