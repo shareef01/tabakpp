@@ -543,12 +543,12 @@ service cloud.firestore {
           'date', 'counts', 'trackerSnapshots', 'aggregateCredit', 'status',
           'foldedIntoLifetime', 'legacyMigrationApplied', 'createdAt', 'updatedAt', 'closedAt', 'updatedTrackerId'
         ])
-        && d.keys().hasAll(['date', 'counts'])
+        && d.keys().hasAll(['date', 'counts', 'status'])
         && isDateString(d.date)
         && validDayCountMap(d.counts)
         && (!('trackerSnapshots' in d) || validSnapshotMap(d.trackerSnapshots))
         && (!('aggregateCredit' in d) || validLifetimeAggregates(d.aggregateCredit))
-        && (!('status' in d) || d.status in ['open', 'closed'])
+        && d.status in ['open', 'closed']
         && (!('foldedIntoLifetime' in d) || d.foldedIntoLifetime is bool)
         && (!('legacyMigrationApplied' in d) || d.legacyMigrationApplied is bool);
     }
@@ -601,10 +601,10 @@ service cloud.firestore {
         // `counts`/`aggregateCredit` may still change (a
         // deliberate historical correction via updateHistoricalDay), but never
         // what the day *meant* at the time.
-        && (!changed.hasAny(['trackerSnapshots']) || (before.status != 'closed' && (validCounterSnapshotDelta(d, before) || validSnapshotMap(d.trackerSnapshots))))
+        && (!changed.hasAny(['trackerSnapshots']) || (before.get('status', 'open') != 'closed' && (validCounterSnapshotDelta(d, before) || validSnapshotMap(d.trackerSnapshots))))
         && (!changed.hasAny(['aggregateCredit']) || validLifetimeAggregates(d.aggregateCredit))
         // A day cannot be reopened once closed (one-way transition).
-        && (!changed.hasAny(['status']) || (d.status in ['open', 'closed'] && before.status != 'closed'))
+        && (!changed.hasAny(['status']) || (d.status in ['open', 'closed'] && before.get('status', 'open') != 'closed'))
         // foldedIntoLifetime/legacyMigrationApplied can only go from unset/false
         // -> true, never back, on an update — so an official client can never
         // re-trigger a credit. (Delete + create is not covered; see header.)
@@ -780,6 +780,10 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow create, update: if isOwner(userId) && accountWritable(userId) && (
           (metaId == 'profile' && validMetaShape()) ||
+          (metaId == 'dayStatusBackfill' && !financialLocked(database, userId)
+            && request.resource.data.keys().hasOnly(['afterDate', 'complete'])
+            && (request.resource.data.afterDate == '' || isDateString(request.resource.data.afterDate))
+            && request.resource.data.complete is bool) ||
           (metaId.matches('^legacy_[0-9-]+_[A-Za-z0-9_-]+_[0-9]+$')
             && request.resource.data.keys().hasOnly(['date', 'applied'])
             && isDateString(request.resource.data.date)

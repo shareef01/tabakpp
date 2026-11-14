@@ -32,6 +32,7 @@ vi.mock('firebase/firestore', () => ({
   deleteDoc: vi.fn(),
   getDoc: h.getDoc,
   getDocs: h.getDocs,
+  getDocsFromServer: async () => ({ docs: [], size: 0 }),
   query: vi.fn(),
   onSnapshot: vi.fn(),
   orderBy: vi.fn(),
@@ -168,7 +169,9 @@ describe('reconcileStaleDays — inherits day-close routing (W1B-3)', () => {
 
   it('LEGACY: stale days are closed by the direct client transaction', async () => {
     TrustedFinancial.isEnabled.mockReturnValue(true);
-    h.getDoc.mockResolvedValue(snapOf({ financialMode: 'LEGACY' }));
+    h.getDoc
+      .mockResolvedValueOnce(snapOf({ complete: true }))
+      .mockResolvedValue(snapOf({ financialMode: 'LEGACY' }));
     h.getDocs
       .mockResolvedValueOnce(stalePage(['2026-09-30'], 1))
       .mockResolvedValue(stalePage([], 0));
