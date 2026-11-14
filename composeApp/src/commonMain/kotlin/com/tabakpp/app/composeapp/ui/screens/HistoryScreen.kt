@@ -134,7 +134,6 @@ fun HistoryScreen(
                         HistoricalInsightsContent(
                             logs = logs,
                             dayDocs = dayDocs,
-                            configs = configs,
                             trackingDay = trackingDay,
                             activeCounts = activeCounts,
                             ledgers = ledgers,
@@ -173,7 +172,7 @@ fun HistoryScreen(
                         ) {
                             Column(modifier = Modifier.padding(24.dp)) {
                                 Text(
-                                    "USAGE VELOCITY",
+                                    "DAILY USE",
                                     style = TabakTypography.labelSmall.copy(letterSpacing = 2.sp, fontWeight = FontWeight.Black),
                                     color = accentColor
                                 )

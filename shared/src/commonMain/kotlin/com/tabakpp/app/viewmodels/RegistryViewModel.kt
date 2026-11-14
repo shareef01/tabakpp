@@ -13,6 +13,8 @@ import com.tabakpp.app.domain.FinancialTotals
 import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.domain.HistoryCursor
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -71,10 +73,16 @@ class RegistryViewModel(
     // propagate as an uncaught exception and kill the app. This mirrors the
     // web client's onListenerError callbacks, which have always done this.
 
-    val userProfile: StateFlow<UserProfile?> = userUid.flatMapLatest { uid ->
+    private val sessionProfile = userUid.flatMapLatest { uid ->
         if (uid == null) flowOf(null)
         else registryRepository.subscribeToUserProfile(uid)
-    }.catch { e -> setError(e, "Could not sync your profile. Check your connection and try again."); emit(null) }
+            .map { profile -> profile?.let { uid to it } }
+            .onStart { emit(null) }
+            .catch { e -> setError(e, "Could not sync your profile. Check your connection and try again."); emit(null) }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val userProfile: StateFlow<UserProfile?> = sessionProfile
+        .map { session -> session?.takeIf { it.first == authUser.value?.uid }?.second }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val configs: StateFlow<List<TrackerConfig>> = userUid.flatMapLatest { uid ->
@@ -388,9 +396,8 @@ class RegistryViewModel(
             userProfile.collect { _trackingDay.value = currentTrackingDate() }
         }
 
-        // On each auth session: ensure profile exists, then clear loading (with timeout).
-        // Singleton VM must re-run this per uid — a one-shot take(1) would hang forever
-        // if the first session had no user doc. collectLatest cancels in-flight work on sign-out.
+        // The profile listener is enough to render the main screen. Keep account
+        // preparation scoped to this session, but let it finish in the background.
         viewModelScope.launch {
             authUser.collectLatest { user ->
                 if (user == null) {
@@ -403,31 +410,30 @@ class RegistryViewModel(
                 }
                 lastSubmittedProfile = null
                 _loading.value = true
-                try {
-                    registryRepository.ensureUserDocument(user.uid, user.displayName)
-                    // The two financial legacy migrations write lifetimeAggregates /
-                    // day docs, which a MIGRATING/OPTION_B account's rules deny — and
-                    // the trusted migration already owns that state. Skip them there
-                    // (web parity) instead of failing "Could not prepare your profile".
-                    if (!financialLocked(user.uid)) {
-                        registryRepository.migrateSmokingUnitsIfNeeded(user.uid)
-                        // One-time, idempotent, self-healing migration (activeCounts ->
-                        // days). Safe every session: a no-op once already applied.
-                        registryRepository.migrateLegacyActiveCounts(user.uid)
+                coroutineScope {
+                    launch {
+                        try {
+                            registryRepository.ensureUserDocument(user.uid, user.displayName)
+                            if (!financialLocked(user.uid)) {
+                                registryRepository.migrateSmokingUnitsIfNeeded(user.uid)
+                                registryRepository.migrateLegacyActiveCounts(user.uid)
+                            }
+                            registryRepository.migrateAvatarToProfileMeta(user.uid)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            setError(e, "Could not prepare your profile. Try again.")
+                        }
                     }
-                    // avatar -> meta/profile is not financial and is always allowed.
-                    registryRepository.migrateAvatarToProfileMeta(user.uid)
-                } catch (e: Exception) {
-                    setError(e, "Could not prepare your profile. Try again.")
+                    val profile = withTimeoutOrNull(12_000L) {
+                        sessionProfile.filterNotNull().first { it.first == user.uid }
+                    }
+                    if (profile == null) {
+                        _error.value = _error.value
+                            ?: "Profile sync timed out. Check your connection and try again."
+                    }
+                    _loading.value = false
                 }
-                val profile = withTimeoutOrNull(12_000L) {
-                    userProfile.filterNotNull().first()
-                }
-                if (profile == null && userProfile.value == null) {
-                    _error.value = _error.value
-                        ?: "Profile sync timed out. Check your connection and try again."
-                }
-                _loading.value = false
             }
         }
 

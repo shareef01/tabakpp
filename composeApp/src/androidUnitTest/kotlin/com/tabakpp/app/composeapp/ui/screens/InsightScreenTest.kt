@@ -1,5 +1,6 @@
 package com.tabakpp.app.composeapp.ui.screens
 
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -36,12 +37,15 @@ class InsightScreenTest {
     private fun render(logs: List<LogEntry>) {
         rule.setContent {
             TabakTheme(reducedMotion = true) {
-                HistoricalInsightsContent(
-                    logs = logs,
-                    dayDocs = emptyList(),
-                    configs = emptyList(),
-                    trackingDay = trackingDay
-                )
+                LazyColumn {
+                    item {
+                        HistoricalInsightsContent(
+                            logs = logs,
+                            dayDocs = emptyList(),
+                            trackingDay = trackingDay
+                        )
+                    }
+                }
             }
         }
     }
