@@ -87,6 +87,7 @@ private class FakeRegistryRepository : RegistryRepository {
     var liveCounterGate: CompletableDeferred<Unit>? = null
     /** When set, updateProfileSettings suspends on it — for settings write serialization. */
     var profileSettingsGate: CompletableDeferred<Unit>? = null
+    var ensureUserGate: CompletableDeferred<Unit>? = null
 
     val liveCounterCalls = mutableListOf<LiveCounterCall>()
     val closeDayCalls = mutableListOf<Pair<String, String>>()
@@ -166,7 +167,9 @@ private class FakeRegistryRepository : RegistryRepository {
     override suspend fun updateProfileSettings(uid: String, profile: UserProfile) {
         profileSettingsGate?.await(); maybeFail(); profileSettingsCalls.add(uid to profile)
     }
-    override suspend fun ensureUserDocument(uid: String, displayName: String?) {}
+    override suspend fun ensureUserDocument(uid: String, displayName: String?) {
+        ensureUserGate?.await()
+    }
     var smokingUnitsMigrationCalls = 0
     override suspend fun migrateSmokingUnitsIfNeeded(uid: String) { smokingUnitsMigrationCalls++ }
     override suspend fun deleteAllUserData(uid: String) { maybeFail() }
@@ -1464,6 +1467,23 @@ class RegistryViewModelTest {
         scheduler.runCurrent()
         assertEquals("2026-06-02", vm.trackingDay.value)
         assertEquals("2026-06-02", reg.liveCounterCalls.first().trackingDate)
+    }
+
+    @Test
+    fun existingProfile_isReadyWhileAccountPreparationIsStillPending() {
+        val gate = CompletableDeferred<Unit>()
+        val reg = FakeRegistryRepository().apply {
+            ensureUserGate = gate
+            profileFlow.value = UserProfile(dayStartHour = 6)
+        }
+        val vm = RegistryViewModel(FakeAuthRepository(user), reg, FakeLocalSettings(), FakeNetworkObserver())
+        scheduler.runCurrent()
+
+        assertFalse(vm.loading.value)
+        assertEquals(0, reg.legacyMigrationCalls)
+        gate.complete(Unit)
+        scheduler.runCurrent()
+        assertEquals(1, reg.legacyMigrationCalls)
     }
 
     @Test

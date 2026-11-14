@@ -212,7 +212,7 @@ fun SettingsScreen(
             // 4. Night Owl Mode
             item {
                 Column {
-                    SettingsHeader("night owl mode")
+                    SettingsHeader("tracking day")
                     DayStartSettings(
                         hour = profile?.dayStartHour ?: 6,
                         onHourChange = { viewModel.updateProfile { p -> p.copy(dayStartHour = it) } },
@@ -224,7 +224,7 @@ fun SettingsScreen(
             // 5. Economics (web Settings parity)
             item {
                 Column {
-                    SettingsHeader("economic constants")
+                    SettingsHeader("cost settings")
                     EconomicsSettings(
                         profile = profile,
                         accentColor = accentColor,
@@ -940,7 +940,7 @@ fun EconomicsSettings(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        "SYNCHRONIZE ECONOMICS",
+                        "SAVE COST SETTINGS",
                         style = TabakTypography.labelSmall.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp, color = accentColor)
                     )
                 }
@@ -981,7 +981,7 @@ fun DayStartSettings(
     SettingsGroupCard {
         Column(modifier = Modifier.padding(20.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("DAY RESET PROTOCOL", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp), color = TextPrimary)
+                Text("DAY START TIME", style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp), color = TextPrimary)
                 Text(amPm, style = TabakTypography.headlineMedium.copy(fontSize = 18.sp, fontWeight = FontWeight.Black, color = accentColor))
             }
             Spacer(modifier = Modifier.height(8.dp))

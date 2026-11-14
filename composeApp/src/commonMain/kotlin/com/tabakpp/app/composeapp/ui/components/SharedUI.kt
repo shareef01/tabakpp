@@ -313,13 +313,7 @@ fun TrackSkeleton() {
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        repeat(2) {
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                SkeletonBox(modifier = Modifier.weight(1f).height(210.dp))
-                SkeletonBox(modifier = Modifier.weight(1f).height(210.dp))
-            }
-        }
-        Spacer(modifier = Modifier.height(12.dp))
+        SkeletonBox(modifier = Modifier.fillMaxWidth().height(210.dp))
         SkeletonBox(modifier = Modifier.fillMaxWidth().height(120.dp))
     }
 }

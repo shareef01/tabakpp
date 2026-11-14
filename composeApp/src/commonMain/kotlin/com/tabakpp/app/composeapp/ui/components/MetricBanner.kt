@@ -70,7 +70,7 @@ fun MetricBanner(
             Column(modifier = Modifier.padding(20.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     MetricItem(
                         label = "REMAINING",
@@ -80,7 +80,6 @@ fun MetricBanner(
                     )
                     GoalStatusItem(
                         goalStatus = metrics.goalStatus,
-                        accentColor = accentColor,
                         modifier = Modifier.weight(1f)
                     )
                     SpentMetricItem(
@@ -97,7 +96,7 @@ fun MetricBanner(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     MetricItem(
                         label = "ENGAGEMENT",
@@ -267,12 +266,11 @@ private fun MetricItem(
  *
  * Aggregate wording uses tracker-count semantics (item 6): "N tracker(s) above
  * target" rather than pooled deltas, since tracker types may be heterogeneous.
- * "Within today's targets" covers both "all at" and "mixed at+under" states.
+ * Staying within target covers both at-target and under-target trackers.
  */
 @Composable
 private fun GoalStatusItem(
     goalStatus: SmokingCalculator.GoalStatus?,
-    accentColor: Color,
     modifier: Modifier = Modifier
 ) {
     val goalColor = when (goalStatus?.status) {
@@ -286,9 +284,9 @@ private fun GoalStatusItem(
         else -> when (goalStatus.status) {
             "over" -> {
                 val n = goalStatus.overTrackers
-                if (n == 1) "1 tracker above target" else "$n trackers above target"
+                "$n above target"
             }
-            "at", "under" -> "Within today's targets"
+            "at", "under" -> "Within target"
             else -> "No target set"
         }
     }

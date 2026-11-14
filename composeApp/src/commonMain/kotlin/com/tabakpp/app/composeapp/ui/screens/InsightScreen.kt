@@ -4,8 +4,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DateRange
@@ -17,14 +15,13 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 
@@ -40,31 +37,31 @@ import com.tabakpp.app.composeapp.theme.tabakCardShadow
 import com.tabakpp.app.data.DailyFinancialRecord
 import com.tabakpp.app.data.DayDocument
 import com.tabakpp.app.data.LogEntry
-import com.tabakpp.app.data.TrackerConfig
 import com.tabakpp.app.domain.SmokingCalculator
 
 /**
  * Historical Insights subview within the History screen.
  * Displays monthly trend comparisons for consumption, spending, and streaks.
- * Uses the same data streams as HistoryScreen (logs, dayDocs, configs, ledgers).
+ * History owns vertical scrolling for this content.
  */
 @Composable
 fun HistoricalInsightsContent(
     logs: List<LogEntry>,
     dayDocs: List<DayDocument>,
-    configs: List<TrackerConfig>,
     trackingDay: String,
     activeCounts: Map<String, Double> = emptyMap(),
     ledgers: List<DailyFinancialRecord> = emptyList(),
     modifier: Modifier = Modifier
 ) {
-    val (allMonths, currentMonthMtd) = SmokingCalculator.aggregateMonthlyData(
-        logs = logs,
-        dayDocs = dayDocs,
-        trackingDay = trackingDay,
-        activeCounts = activeCounts,
-        ledgers = ledgers
-    )
+    val (allMonths, currentMonthMtd) = remember(logs, dayDocs, trackingDay, activeCounts, ledgers) {
+        SmokingCalculator.aggregateMonthlyData(
+            logs = logs,
+            dayDocs = dayDocs,
+            trackingDay = trackingDay,
+            activeCounts = activeCounts,
+            ledgers = ledgers
+        )
+    }
     // aggregateMonthlyData's month list starts with the current month-to-date.
     // The chart and month list show complete months only (MTD has its own
     // card), and the trend never compares a partial month (web parity).
@@ -81,11 +78,7 @@ fun HistoricalInsightsContent(
         else -> TextMuted
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-    ) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val hasAnyData = completedMonths.isNotEmpty() || currentMonthMtd != null
 
         if (!hasAnyData) {
@@ -129,10 +122,10 @@ fun HistoricalInsightsContent(
                                 )
                             }
                         }
-                        if (pct != null) {
+                        if (pct != null && pct != 0.0) {
                             Icon(
                                 imageVector = if (pct > 0) Icons.Rounded.TrendingUp else Icons.Rounded.TrendingDown,
-                                contentDescription = "Trend direction",
+                                contentDescription = null,
                                 tint = directionColor,
                                 modifier = Modifier.size(28.dp)
                             )
@@ -140,8 +133,6 @@ fun HistoricalInsightsContent(
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
 
             // Monthly bar chart
             if (completedMonths.isNotEmpty()) {
@@ -161,8 +152,6 @@ fun HistoricalInsightsContent(
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
 
             // Current month MTD
             currentMonthMtd?.let { mtd ->
@@ -193,9 +182,6 @@ fun HistoricalInsightsContent(
                                 icon = Icons.Rounded.TrendingUp,
                                 modifier = Modifier.weight(1f)
                             )
-                            if (mtd.unknownEconomics) {
-                                Text("Some historical money is unknown.", style = TabakTypography.bodySmall, color = TextMuted)
-                            }
                             if (mtd.hasBaseline) {
                                 InsightMetricBlock(
                                     value = SmokingCalculator.formatCurrency(mtd.baselineSaved),
@@ -206,11 +192,13 @@ fun HistoricalInsightsContent(
                                 )
                             }
                         }
+                        if (mtd.unknownEconomics) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("Some historical costs are unavailable.", style = TabakTypography.bodySmall, color = TextMuted)
+                        }
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
 
             // Completed months detail list
             if (completedMonths.isNotEmpty()) {
@@ -331,12 +319,12 @@ private fun CompletedMonthsList(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "${month.trackedDays} tracked days · avg ${if (month.trackedDays > 0) (month.avgUnitsPerTrackedDay.toInt()) else 0} units/day",
+                        "${month.trackedDays} tracked days · avg ${SmokingCalculator.formatUnitsPerDay(month.avgUnitsPerTrackedDay)} units/day",
                         style = TabakTypography.bodySmall,
                         color = TextMuted
                     )
                     if (month.unknownEconomics) {
-                        Text("Some historical money is unknown.", style = TabakTypography.bodySmall, color = TextMuted)
+                        Text("Some historical costs are unavailable.", style = TabakTypography.bodySmall, color = TextMuted)
                     }
                     if (month.hasBaseline) {
                         Text(
@@ -358,7 +346,6 @@ private fun MonthlyBarChart(
 ) {
     val maxCount = months.maxOfOrNull { it.units } ?: 0
     val barMax = if (maxCount > 0) maxCount.toFloat() else 1f
-    val density = LocalDensity.current
 
     val chartDescription = months.joinToString(
         prefix = "Monthly consumption. ",
@@ -397,7 +384,7 @@ private fun MonthlyBarChart(
                 // Draw bars
                 months.forEachIndexed { index, month ->
                     val barHeight = if (barMax > 0) (month.units.toFloat() / barMax) * barAreaHeight else 0f
-                    val left = barAreaLeft + index * (barWidth + barSpacing)
+                    val left = barAreaLeft + index * (barWidth + barSpacing) + barSpacing / 2
                     val top = barAreaHeight - barHeight
                     val right = left + barWidth
                     val bottom = barAreaHeight
@@ -431,15 +418,17 @@ private fun MonthlyBarChart(
             // Month labels below chart
             Row(
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 24.dp, bottom = 8.dp)
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, bottom = 8.dp)
             ) {
                 months.forEach { month ->
                     Text(
                         text = month.label.take(3),
                         style = TabakTypography.labelSmall.copy(fontSize = 10.sp),
                         color = TextMuted,
-                        modifier = Modifier.width(with(density) { ((200f) / months.size).dp }),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
                         textAlign = TextAlign.Center
                     )
                 }
