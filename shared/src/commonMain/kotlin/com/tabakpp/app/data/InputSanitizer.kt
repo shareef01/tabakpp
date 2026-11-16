@@ -47,6 +47,29 @@ object InputSanitizer {
         return values
     }
 
+    /**
+     * Normalise raw keystrokes for a decimal money field: digits plus a single
+     * '.' separator. A ',' (the decimal key on many European keyboards) is
+     * treated as the separator rather than dropped — dropping it turned
+     * "6,50" into "650" (audit 2026-11-16 TABAK-008). Separators after the
+     * first are discarded.
+     */
+    fun decimalInput(raw: String): String {
+        val out = StringBuilder()
+        var seenSeparator = false
+        for (c in raw) {
+            when {
+                c.isDigit() -> out.append(c)
+                (c == '.' || c == ',') && !seenSeparator -> { out.append('.'); seenSeparator = true }
+            }
+        }
+        return out.toString()
+    }
+
+    /** Parse a decimal money string, accepting ',' or '.' as the separator. */
+    fun parseDecimal(text: String): Double? =
+        text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+
     private fun text(value: String, maxLength: Int): String =
         value
             .filterNot { it.isISOControl() || it == '<' || it == '>' }
