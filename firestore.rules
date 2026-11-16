@@ -25,9 +25,10 @@ rules_version = '2';
 //     `foldedIntoLifetime`, and `legacyMigrationApplied` (see
 //     validDayUpdate). `counts` and `aggregateCredit` remain writable by the
 //     authenticated owner — the application-layer `updateHistoricalDay`
-//     path additionally reconciles `lifetimeAggregates`. These freezes
-//     constrain in-place UPDATES only: the owner may delete a day and create
-//     it again (same Spark residual as owner-written lifetimeAggregates).
+//     path additionally reconciles `lifetimeAggregates`. A day can be
+//     deleted only during an account wipe (profile tombstoned), and a
+//     tombstoned account can't create one, so delete + recreate can't
+//     bypass these freezes (TABAK-002).
 //   users/{uid}/logs/{id}          legacy ledger: manual backfill entries
 //     (still written here) and pre-migration day archives (`{date}_DAY`,
 //     no longer created by updated clients, but still readable).
@@ -332,6 +333,12 @@ service cloud.firestore {
       let path = /databases/$(database)/documents/users/$(uid);
       return !exists(path) || !smokingLeaseHeld(get(path).data) || get(path).data.get('deleting', false) == true;
     }
+    // The profile carries the account-wipe tombstone. A missing profile is NOT
+    // tombstoned: current clients always write the marker before wiping.
+    function accountTombstoned(uid) {
+      let path = /databases/$(database)/documents/users/$(uid);
+      return exists(path) && get(path).data.get('deleting', false) == true;
+    }
     function validSmokingLease(d) {
       return (d.get('smokingMigrationLeaseId', null) == null || validCountKey(d.smokingMigrationLeaseId))
         && (d.get('smokingMigrationLeaseUntil', null) == null
@@ -607,7 +614,7 @@ service cloud.firestore {
         && (!changed.hasAny(['status']) || (d.status in ['open', 'closed'] && before.get('status', 'open') != 'closed'))
         // foldedIntoLifetime/legacyMigrationApplied can only go from unset/false
         // -> true, never back, on an update — so an official client can never
-        // re-trigger a credit. (Delete + create is not covered; see header.)
+        // re-trigger a credit. (Delete + create is blocked by the delete rule.)
         && (!changed.hasAny(['foldedIntoLifetime'])
           || (d.foldedIntoLifetime is bool && (!('foldedIntoLifetime' in before) || before.foldedIntoLifetime != true)))
         && (!changed.hasAny(['legacyMigrationApplied'])
@@ -770,10 +777,15 @@ service cloud.firestore {
         allow read: if isOwner(userId);
         allow create: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validDayCreate(date);
         allow update: if isOwner(userId) && !financialLocked(database, userId) && accountWritable(userId) && validDayUpdate(date);
-        // Deletion is intentionally still permitted (Spark account wipe, and
-        // an owner's general right to erase their own data) — it does not
-        // rewrite a day's meaning, only remove the record entirely.
-        allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
+        // Day deletes are allowed only during an account wipe, i.e. once the
+        // profile is tombstoned (`deleting: true`), which every client wipe
+        // since v1.0.9 does before deleting subcollections. Otherwise delete +
+        // recreate would bypass the closed-day freezes above (audit 2026-11-12
+        // TABAK-002): a tombstoned account rejects every create
+        // (accountWritable), so a deleted day can't come back rewritten.
+        // Android v1.0.6–v1.0.8 wiped without tombstoning first; their account
+        // deletion now stops at `days` and can be finished from a current client.
+        allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountTombstoned(userId);
       }
 
       match /meta/{metaId} {

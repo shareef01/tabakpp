@@ -325,6 +325,9 @@ class FirebaseRegistryRepositoryTest {
         }
     }
 
+    // Best-effort only: the rules allow day deletes only on a tombstoned
+    // account (TABAK-002), so this is normally denied and swallowed. Test
+    // isolation comes from [setup], which resets the emulator before each test.
     private suspend fun cleanDay(uid: String, date: String) {
         try { firestore.collection("users").document(uid).collection("days").document(date).delete() } catch (_: Exception) { }
     }
