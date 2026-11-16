@@ -112,11 +112,6 @@ async function pageFor(context) {
     if (message.type() === 'error') evidence.consoleErrors.push(message.text());
     if (message.type() === 'warn') evidence.warnings.push(message.text());
   });
-  // Cosmetic external fonts are fixture CSS, avoiding a dependency on public
-  // Google Fonts connectivity. Firebase/backend availability is never mocked.
-  await page.setRequestInterception(true);
-  page.on('request', request => new URL(request.url()).hostname === 'fonts.googleapis.com'
-    ? request.respond({ status: 200, contentType: 'text/css', body: '' }) : request.continue());
   const session = await page.createCDPSession();
   await session.send('Network.enable', { maxTotalBufferSize: 4 * 1024 * 1024, maxResourceBufferSize: 1024 * 1024, enableDurableMessages: true });
   session.on('Network.responseReceived', event => {

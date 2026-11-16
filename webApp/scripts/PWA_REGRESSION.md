@@ -39,7 +39,7 @@ contents and worker/browser errors are checked, including a 390×844 viewport.
 This covers Chromium, not a new Firefox/WebKit matrix or authenticated data.
 
 The fixture uses non-secret Firebase client configuration and never signs in
-or mocks backend responses. Only cosmetic Google Fonts CSS is intercepted.
+or mocks backend responses, and intercepts no requests (fonts are self-hosted).
 The existing missing-App-Check-site-key diagnostic is recorded and expected
 for this fixture; enforcement/settings remain untouched.
 

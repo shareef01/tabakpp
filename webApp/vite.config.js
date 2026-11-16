@@ -40,7 +40,10 @@ export default defineConfig({
         // Versioned offline snapshot only; normal HTML stays network-first.
         globPatterns: ['**/*.{js,css,ico,png,svg,woff2}', 'offline-shell.html'],
         // Keep HEIC converter out of the install precache (lazy-loaded on demand).
-        globIgnores: ['**/heic2any*.js'],
+        // Self-hosted Inter: only the Latin subsets are precached; other scripts
+        // are still served same-origin, fetched only when a page needs them
+        // (unicode-range).
+        globIgnores: ['**/heic2any*.js', '**/inter-{cyrillic,greek,vietnamese}*'],
         // generateSW's NavigationRoute would serve precached HTML before the
         // runtime strategy. Use one network-first route with an error fallback.
         navigateFallback: null,
