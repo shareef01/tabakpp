@@ -3,6 +3,12 @@ import ReactDOM from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import { firebaseConfigError } from './firebase.js'
 import App from './App.jsx'
+// Inter is self-hosted (bundled from @fontsource/inter), not loaded from Google Fonts.
+import '@fontsource/inter/400.css'
+import '@fontsource/inter/500.css'
+import '@fontsource/inter/600.css'
+import '@fontsource/inter/700.css'
+import '@fontsource/inter/900.css'
 import './index.css'
 
 // Installable shell cache only — Firebase Auth/Firestore stay NetworkOnly in the SW.
