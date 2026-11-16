@@ -802,11 +802,11 @@ fun EconomicsSettings(
 
     val unitCost = remember(ecoMode, packPrice, packQty, pouchPrice, estimatedYield) {
         if (ecoMode == "PACK") {
-            val rp = packPrice.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+            val rp = InputSanitizer.parseDecimal(packPrice)?.coerceAtLeast(0.0) ?: 0.0
             val rq = packQty.toIntOrNull()?.coerceAtLeast(1) ?: 1
             rp / rq
         } else {
-            val bp = pouchPrice.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+            val bp = InputSanitizer.parseDecimal(pouchPrice)?.coerceAtLeast(0.0) ?: 0.0
             val by = estimatedYield.toIntOrNull()?.coerceAtLeast(1) ?: 1
             bp / by
         }
@@ -855,8 +855,8 @@ fun EconomicsSettings(
                     BasicTextField(
                         value = if (ecoMode == "PACK") packPrice else pouchPrice,
                         onValueChange = { v ->
-                            if (ecoMode == "PACK") packPrice = v.filter { it.isDigit() || it == '.' }
-                            else pouchPrice = v.filter { it.isDigit() || it == '.' }
+                            if (ecoMode == "PACK") packPrice = InputSanitizer.decimalInput(v)
+                            else pouchPrice = InputSanitizer.decimalInput(v)
                         },
                         singleLine = true,
                         textStyle = TabakTypography.bodyMedium.copy(color = TextPrimary),
@@ -917,11 +917,11 @@ fun EconomicsSettings(
             Surface(
                 onClick = {
                     if (ecoMode == "PACK") {
-                        val rp = packPrice.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                        val rp = InputSanitizer.parseDecimal(packPrice)?.coerceAtLeast(0.0) ?: 0.0
                         val rq = (packQty.toIntOrNull() ?: 1).coerceIn(1, 1000)
                         onSave("PACK", rp / rq, rq, 0.0, 0)
                     } else {
-                        val bp = pouchPrice.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+                        val bp = InputSanitizer.parseDecimal(pouchPrice)?.coerceAtLeast(0.0) ?: 0.0
                         val by = estimatedYield.toIntOrNull()?.coerceAtLeast(1) ?: 1
                         // Carry the pack quantity through untouched — switching to
                         // POUCH must not discard it, matching the web path which
