@@ -800,17 +800,10 @@ fun EconomicsSettings(
         )
     }
 
-    val unitCost = remember(ecoMode, packPrice, packQty, pouchPrice, estimatedYield) {
-        if (ecoMode == "PACK") {
-            val rp = InputSanitizer.parseDecimal(packPrice)?.coerceAtLeast(0.0) ?: 0.0
-            val rq = packQty.toIntOrNull()?.coerceAtLeast(1) ?: 1
-            rp / rq
-        } else {
-            val bp = InputSanitizer.parseDecimal(pouchPrice)?.coerceAtLeast(0.0) ?: 0.0
-            val by = estimatedYield.toIntOrNull()?.coerceAtLeast(1) ?: 1
-            bp / by
-        }
+    val costSettings = remember(ecoMode, packPrice, packQty, pouchPrice, estimatedYield) {
+        costSettingsFromInput(ecoMode, packPrice, packQty, pouchPrice, estimatedYield)
     }
+    val unitCost = costSettings.unitPrice
 
     SettingsGroupCard {
         Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -916,19 +909,8 @@ fun EconomicsSettings(
 
             Surface(
                 onClick = {
-                    if (ecoMode == "PACK") {
-                        val rp = InputSanitizer.parseDecimal(packPrice)?.coerceAtLeast(0.0) ?: 0.0
-                        val rq = (packQty.toIntOrNull() ?: 1).coerceIn(1, 1000)
-                        onSave("PACK", rp / rq, rq, 0.0, 0)
-                    } else {
-                        val bp = InputSanitizer.parseDecimal(pouchPrice)?.coerceAtLeast(0.0) ?: 0.0
-                        val by = estimatedYield.toIntOrNull()?.coerceAtLeast(1) ?: 1
-                        // Carry the pack quantity through untouched — switching to
-                        // POUCH must not discard it, matching the web path which
-                        // simply omits unitsPerPack from a POUCH save.
-                        val keepQty = (packQty.toIntOrNull() ?: 20).coerceIn(1, 1000)
-                        onSave("POUCH", bp / by, keepQty, bp, by)
-                    }
+                    val s = costSettings
+                    onSave(s.purchaseType, s.unitPrice, s.unitsPerPack, s.pouchPrice, s.estimatedYield)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -946,6 +928,45 @@ fun EconomicsSettings(
                 }
             }
         }
+    }
+}
+
+/** Cost settings exactly as they will be saved (and previewed). */
+internal data class CostSettings(
+    val purchaseType: String,
+    val unitPrice: Double,
+    val unitsPerPack: Int,
+    val pouchPrice: Double,
+    val estimatedYield: Int,
+)
+
+/**
+ * Parse the economics editor's text fields into values `validSettingsShape`
+ * in firestore.rules accepts: unitPrice 0..1000, unitsPerPack 1..1000,
+ * pouchPrice 0..10000, estimatedYield 1..10000. Out-of-range input is
+ * clamped (as the pack quantity always was) instead of being sent and
+ * rejected with a generic save error (audit 2026-11-16 TABAK-009).
+ */
+internal fun costSettingsFromInput(
+    mode: String,
+    packPrice: String,
+    packQty: String,
+    pouchPrice: String,
+    estimatedYield: String,
+): CostSettings {
+    fun price(text: String, max: Double) = (InputSanitizer.parseDecimal(text) ?: 0.0).coerceIn(0.0, max)
+    return if (mode == "PACK") {
+        val qty = (packQty.toIntOrNull() ?: 1).coerceIn(1, 1000)
+        val unit = (price(packPrice, 1_000_000.0) / qty).coerceAtMost(1000.0)
+        CostSettings("PACK", unit, qty, 0.0, 0)
+    } else {
+        val bp = price(pouchPrice, 10_000.0)
+        val by = (estimatedYield.toIntOrNull() ?: 1).coerceIn(1, 10_000)
+        // Carry the pack quantity through untouched — switching to POUCH must
+        // not discard it, matching the web path which simply omits
+        // unitsPerPack from a POUCH save.
+        val keepQty = (packQty.toIntOrNull() ?: 20).coerceIn(1, 1000)
+        CostSettings("POUCH", (bp / by).coerceAtMost(1000.0), keepQty, bp, by)
     }
 }
 
