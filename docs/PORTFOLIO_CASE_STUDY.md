@@ -98,7 +98,7 @@ offset while the profile is still loading rather than writing a plausible-but-wr
 
 **3. Historical records that cannot be rewritten.**
 Repricing a tracker today must not change what last month cost. When a day closes, its
-tracker snapshot is stamped and frozen against updates — enforced in `firestore.rules`,
+tracker snapshot is stamped and frozen — enforced in `firestore.rules`,
 not only in the client — so later repricing cannot change what that day cost or meant. Counts stay
 owner-editable within rules-validated bounds (the deliberate correction path for a
 mistyped day); the snapshot and one-way status rules are covered by the 180-test
@@ -138,7 +138,7 @@ a rewrite.
 ## Security and privacy
 
 - Every Firestore path is owner-scoped: `request.auth.uid == userId`, with per-collection
-  shape validation and update-frozen closed-day stamps.
+  shape validation and frozen closed-day stamps (days deletable only during an account wipe).
 - The web API key is public by design; the actual controls are rules plus Google Cloud
   API-key restrictions (HTTP referrer for web, package + signing certificate for Android).
   Neither substitutes for authorization.

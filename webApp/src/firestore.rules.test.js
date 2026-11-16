@@ -1093,11 +1093,85 @@ describe('audit regressions: lease forgery, tombstone mode drop, tombstoned ledg
         await assertSucceeds(deleteDoc(doc(db, path)));
       });
 
-      it(`${path}: delete allowed without a lease`, async () => {
+      // TABAK-002: days are deletable only once the account is tombstoned,
+      // lease or no lease; every other subcollection keeps the lease-only gate.
+      it(`${path}: delete without a lease ${path.includes('/days/') ? 'denied (not tombstoned)' : 'allowed'}`, async () => {
         const db = await seedDocs(emptyProfile);
-        await assertSucceeds(deleteDoc(doc(db, path)));
+        const del = deleteDoc(doc(db, path));
+        await (path.includes('/days/') ? assertFails(del) : assertSucceeds(del));
       });
     }
+  });
+});
+
+describe('TABAK-002: a closed day cannot be deleted and recreated', () => {
+  const closedDay = {
+    date: '2026-07-20',
+    counts: { cig: 4 },
+    trackerSnapshots: { cig: { name: 'Cig', type: 'CIGARETTE', target: 10, baseline: 20, unitPrice: 1, isFinanciallyTracked: true } },
+    aggregateCredit: { saved: 6, wasted: 4, smokingUnits: 4, baselineSaved: 16 },
+    status: 'closed',
+    foldedIntoLifetime: true,
+  };
+  const seed = async (profile) => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const fs = context.firestore();
+      if (profile) await setDoc(doc(fs, 'users/alice'), profile);
+      await setDoc(doc(fs, 'users/alice/days/2026-07-20'), closedDay);
+    });
+    return testEnv.authenticatedContext('alice').firestore();
+  };
+
+  it('denies deleting a closed day on a live account (PROBE-1 step 1)', async () => {
+    const db = await seed(emptyProfile);
+    await assertFails(deleteDoc(doc(db, 'users/alice/days/2026-07-20')));
+  });
+
+  it('denies deleting an open day on a live account', async () => {
+    const db = await seed(emptyProfile);
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'users/alice/days/2026-07-21'), { ...closedDay, date: '2026-07-21', status: 'open', foldedIntoLifetime: false });
+    });
+    await assertFails(deleteDoc(doc(db, 'users/alice/days/2026-07-21')));
+  });
+
+  it('denies a delete + recreate with inflated snapshots in one batch', async () => {
+    const db = await seed(emptyProfile);
+    const batch = writeBatch(db);
+    batch.delete(doc(db, 'users/alice/days/2026-07-20'));
+    batch.set(doc(db, 'users/alice/days/2026-07-20'), {
+      ...closedDay, status: 'open', foldedIntoLifetime: false,
+      trackerSnapshots: { cig: { ...closedDay.trackerSnapshots.cig, target: 1000, unitPrice: 1000 } },
+    });
+    await assertFails(batch.commit());
+  });
+
+  it('denies deleting a day when the profile does not exist', async () => {
+    const db = await seed(null);
+    await assertFails(deleteDoc(doc(db, 'users/alice/days/2026-07-20')));
+  });
+
+  it('allows deleting a day once the account is tombstoned (account wipe)', async () => {
+    const db = await seed({ ...emptyProfile, deleting: true });
+    await assertSucceeds(deleteDoc(doc(db, 'users/alice/days/2026-07-20')));
+  });
+
+  it('a tombstoned account still cannot recreate the deleted day', async () => {
+    const db = await seed({ ...emptyProfile, deleting: true });
+    await assertSucceeds(deleteDoc(doc(db, 'users/alice/days/2026-07-20')));
+    await assertFails(setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...closedDay, status: 'open', foldedIntoLifetime: false }));
+  });
+
+  it('the wipe order clients use works: tombstone first, then delete days', async () => {
+    const db = await seed(emptyProfile);
+    await assertSucceeds(updateDoc(doc(db, 'users/alice'), { deleting: true }));
+    await assertSucceeds(deleteDoc(doc(db, 'users/alice/days/2026-07-20')));
+  });
+
+  it('another user cannot delete the day even when the owner is tombstoned', async () => {
+    await seed({ ...emptyProfile, deleting: true });
+    const bob = testEnv.authenticatedContext('bob').firestore();
+    await assertFails(deleteDoc(doc(bob, 'users/alice/days/2026-07-20')));
   });
 });
 
