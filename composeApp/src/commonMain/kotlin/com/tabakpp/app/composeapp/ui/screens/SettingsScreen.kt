@@ -48,6 +48,7 @@ import com.tabakpp.app.data.WidgetSize
 import com.tabakpp.app.viewmodels.RegistryViewModel
 import com.tabakpp.app.viewmodels.AuthViewModel
 import com.tabakpp.app.domain.ExportState
+import com.tabakpp.app.domain.SmokingCalculator
 import com.tabakpp.app.domain.ExportFormat
 import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
@@ -980,8 +981,13 @@ internal fun pouchPriceText(purchaseType: String?, pouchPrice: Double?): String 
     if (purchaseType == "POUCH" && pouchPrice != null && pouchPrice.isFinite()) twoDecimals(pouchPrice.coerceAtLeast(0.0))
     else "6.50"
 
-private fun twoDecimals(value: Double): String {
-    val cents = kotlin.math.round(value * 100.0).toLong()
+/**
+ * Format a money amount with two decimals, rounding halves up (0.325 → "0.33").
+ * `kotlin.math.round` rounds exact halves to even, so 0.325 * 100 == 32.5 showed
+ * "0.32"; [SmokingCalculator.roundMoney] is the app's half-up money rounding.
+ */
+internal fun twoDecimals(value: Double): String {
+    val cents = kotlin.math.round(SmokingCalculator.roundMoney(value) * 100.0).toLong()
     val neg = cents < 0
     val abs = kotlin.math.abs(cents)
     val whole = abs / 100
