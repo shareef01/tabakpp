@@ -14,7 +14,7 @@ PASS · OPEN · BLOCKED · APPROVAL_REQUIRED · PARKED
 | UI/UX preserved, no unapproved visual change | **PASS (so far)** | no UI files touched this engagement |
 | Security: authorization intact, no weakening | **PASS** | rules 131/131; `financialLocked`, ownership, ledger/receipt validation, 50-entry contract all intact |
 | Dependency vulnerabilities | **OPEN (low risk)** | Web prod 0; Web dev 19H/1C/14M (build tooling only); functions prod 8 moderate (GCP SDK transitives) — no high/critical shipped |
-| Production Firebase | **PARTIAL (rules + hosting)** | Firestore rules deployed to `tabakpp-ff036` from `main` f024a95 on 2026-11-17 (TABAK-002 + TABAK-007); LEGACY hosting (ledger off) from `main` c10d851 on 2026-11-16 (OPTION_B/MIGRATING gates live but inert). Functions NOT deployed; no migration; no Option-B activation |
+| Production Firebase | **PARTIAL (rules + hosting)** | Firestore rules and LEGACY hosting (ledger off) deployed to `tabakpp-ff036` from `main` 2791ada on 2026-11-18 (TABAK-001, on top of TABAK-002 + TABAK-007) (OPTION_B/MIGRATING gates live but inert). Functions NOT deployed; no migration; no Option-B activation |
 | Production actions (deploy/migrate/activate Option B) | **PARKED (owner decision, 2026-10-11)** | The project stays on the Spark plan. Option-B needs Cloud Functions (Blaze), so it stays dormant: the code is kept, tested in CI against the emulators, and inert in production |
 
 ## Previously-fail-closed Option-B gaps — RESOLVED (2026)
@@ -46,6 +46,13 @@ Spark, no account can be migrated to OPTION_B and no account can mutate canonica
 state, so production runs as the original **LEGACY** app, which is fully functional.
 
 Latest production deploys (each after `CI` and `Android Instrumentation Tests` passed on that commit):
+
+- **2026-11-18, `main` 2791ada, `firebase deploy --only firestore:rules`, then `--only hosting`:**
+  - ✅ Firestore Security Rules with TABAK-001 (#181): a closed day may gain exactly one new stamp,
+    for `updatedTrackerId` (`validLateSnapshotAdd`); existing stamps stay frozen. The CLI uploaded a
+    new ruleset and released it. Deployed before the clients that use it.
+  - ✅ Hosting: web build with the TABAK-001 late stamp and the new close-day copy. The live
+    `index.html` serves the same entry (`index-B-nquC9U.js`) as the local build of 2791ada.
 
 - **2026-11-17, `main` f024a95, `firebase deploy --only firestore:rules`:**
   ✅ Firestore Security Rules with TABAK-007 (#179): tracker (`configs`) creates and updates
