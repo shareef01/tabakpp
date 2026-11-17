@@ -105,8 +105,21 @@ async function caches(page, label) {
   return urls;
 }
 
+// Puppeteer's default 30 s limit is too tight for the settle waits on slow CI
+// runners since the PWA precache grew (self-hosted Inter, #170): two runs timed
+// out in waitForNetworkIdle right after the deployment-B navigation.
+const SETTLE_TIMEOUT = 90_000;
+// Requests still in flight per page, recorded on failure so a timeout says
+// what kept the network busy.
+const inFlight = new Map();
+
 async function pageFor(context) {
   const page = await context.newPage();
+  const pending = new Map();
+  inFlight.set(page, pending);
+  page.on('request', request => pending.set(request, `${request.resourceType()} ${request.url()}`));
+  page.on('requestfinished', request => pending.delete(request));
+  page.on('requestfailed', request => pending.delete(request));
   page.on('pageerror', error => evidence.consoleErrors.push(error.message));
   page.on('console', message => {
     if (message.type() === 'error') evidence.consoleErrors.push(message.text());
@@ -209,7 +222,7 @@ async function run() {
     assert(documentResponses > offlineCount, 'online deployment really reaches server');
     // The build-id effect sets localStorage immediately before its one-shot
     // reload. Let that navigation finish before asking the browser to update.
-    await page.waitForNetworkIdle({ idleTime: 500 });
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: SETTLE_TIMEOUT });
     await page.waitForSelector('input[type="email"]');
     // Use the real browser update API, then a normal online refresh. Chrome's
     // DevTools updateRegistration can stop a worker mid-activation; it is not
@@ -218,7 +231,7 @@ async function run() {
       // autoUpdate may reload the calling document as the new worker claims it.
       if (!error.message.includes('Execution context was destroyed')) throw error;
     });
-    await page.waitForNetworkIdle({ idleTime: 500 });
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: SETTLE_TIMEOUT });
     await page.waitForSelector('input[type="email"]');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(async entry => {
@@ -228,8 +241,8 @@ async function run() {
         if (await (await window.caches.open(name)).match(entry)) return true;
       }
       return false;
-    }, { timeout: 30000, polling: 100 }, evidence.builds['pwa-regression-B'].entry);
-    await page.waitForNetworkIdle({ idleTime: 500 });
+    }, { timeout: SETTLE_TIMEOUT, polling: 100 }, evidence.builds['pwa-regression-B'].entry);
+    await page.waitForNetworkIdle({ idleTime: 500, timeout: SETTLE_TIMEOUT });
     await page.waitForSelector('input[type="email"]');
     assert(navigations <= 4, `no SW/build-identity reload loop (${navigations})`);
     const urls = await caches(page, 'activated-B');
@@ -289,7 +302,7 @@ async function run() {
         const element = document.createElement('script');
         element.src = src; element.onload = resolve; element.onerror = reject; document.head.append(element);
       }), crossOrigin);
-      await hosting.waitForNetworkIdle({ idleTime: 500 });
+      await hosting.waitForNetworkIdle({ idleTime: 500, timeout: SETTLE_TIMEOUT });
       const probe = evidence.scripts.find(script => script.url === crossOrigin);
       assert(probe, 'cross-origin probe script response observed');
       assert.equal(probe.worker, false, 'cross-origin script is fetched by the browser, not the SW');
@@ -321,6 +334,7 @@ async function run() {
         waiting: registration?.waiting?.state, cacheContents,
       };
     }).catch(failure => ({ diagnosticError: failure.message }))));
+    evidence.inFlightRequests = [...inFlight.values()].map(pending => [...pending.values()]);
     throw error;
   } finally { await browser.close(); }
 }
