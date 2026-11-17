@@ -13,7 +13,49 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Decides whether a pull request touches anything the emulator suite
+  # exercises. A required check skipped by a job-level `if` reports as passing,
+  # so unrelated PRs (docs, web-only) don't wait for the emulator, while a
+  # workflow-level `paths:` filter would leave the required check pending
+  # forever. Pushes to main always run in full: the release gate
+  # (check-release-ci.py) needs a successful run on the exact release SHA.
+  # Web emulator tests (`test:rules`) also run in ci.yml's web-and-rules job.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      android: ${{ steps.filter.outputs.android }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2  # the PR merge commit and its base parent
+      - name: Detect Android-relevant changes
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "android=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request: running the full suite."
+            exit 0
+          fi
+          # The checked-out PR merge commit's first parent is the base branch,
+          # so this lists exactly the files the PR changes.
+          changed="$(git diff --name-only HEAD^1 HEAD)"
+          echo "Changed files:"; echo "$changed"
+          pattern='^(androidApp/|shared/|composeApp/|gradle/|functions/|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradlew(\.bat)?$|firestore\.rules$|firebase\.json$|\.github/workflows/android-integration\.yml$|\.github/scripts/(test-)?android-test-results-gate\.py$)'
+          if echo "$changed" | grep -qE "$pattern"; then
+            echo "android=true" >> "$GITHUB_OUTPUT"
+            echo "Android-relevant files changed: running the emulator suite."
+          else
+            echo "android=false" >> "$GITHUB_OUTPUT"
+            echo "No Android-relevant files changed: skipping the emulator suite."
+          fi
+
   test:
+    needs: changes
+    # Fail safe: if change detection itself fails, run the suite anyway.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.android == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
