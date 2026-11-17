@@ -1104,6 +1104,54 @@ describe('audit regressions: lease forgery, tombstone mode drop, tombstoned ledg
   });
 });
 
+describe('TABAK-007: trackers need a profile; the deletion marker is permanent', () => {
+  const tracker = { name: 'Cig', limit: 10, order: 0, baseline: 20 };
+  const seed = async (profile, configs = {}) => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const fs = context.firestore();
+      if (profile) await setDoc(doc(fs, 'users/alice'), profile);
+      for (const [id, data] of Object.entries(configs)) await setDoc(doc(fs, `users/alice/configs/${id}`), data);
+    });
+    return testEnv.authenticatedContext('alice').firestore();
+  };
+
+  it('denies creating a tracker when the profile does not exist (PROBE-2)', async () => {
+    const db = await seed(null);
+    await assertFails(setDoc(doc(db, 'users/alice/configs/cig'), tracker));
+  });
+
+  it('allows creating a tracker once the profile exists', async () => {
+    const db = await seed(emptyProfile);
+    await assertSucceeds(setDoc(doc(db, 'users/alice/configs/cig'), tracker));
+  });
+
+  it('allows creating the profile and a tracker in the same batch', async () => {
+    const db = await seed(null);
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'users/alice'), emptyProfile);
+    batch.set(doc(db, 'users/alice/configs/cig'), tracker);
+    await assertSucceeds(batch.commit());
+  });
+
+  it('denies updating an orphan tracker whose profile does not exist', async () => {
+    const db = await seed(null, { cig: tracker });
+    await assertFails(updateDoc(doc(db, 'users/alice/configs/cig'), { limit: 12 }));
+  });
+
+  it('still denies tracker writes on a tombstoned account', async () => {
+    const db = await seed({ ...emptyProfile, deleting: true });
+    await assertFails(setDoc(doc(db, 'users/alice/configs/cig'), tracker));
+  });
+
+  it('the deletion marker cannot be cleared (permanent by design)', async () => {
+    const db = await seed({ ...emptyProfile, deleting: true });
+    await assertFails(updateDoc(doc(db, 'users/alice'), { deleting: false }));
+    await assertFails(updateDoc(doc(db, 'users/alice'), { deleting: deleteField() }));
+    await assertFails(setDoc(doc(db, 'users/alice'), emptyProfile));
+    await assertFails(deleteDoc(doc(db, 'users/alice')));
+  });
+});
+
 describe('TABAK-002: a closed day cannot be deleted and recreated', () => {
   const closedDay = {
     date: '2026-07-20',

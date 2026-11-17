@@ -53,3 +53,6 @@ We will acknowledge receipt within 48 hours and work toward timely remediation a
 ## Account lifecycle and migration fences
 
 The audit follow-up rules fence account writes during smoking-unit migration and after deletion begins. Deletion retains a minimal UID-keyed marker to prevent surviving tokens from recreating data. These guarantees require deploying the follow-up rules before the corresponding clients. See [audit follow-up](docs/audit-follow-up-2026-10-07.md) for rollout limits and dependency triage.
+
+- **Trackers need a profile.** A tracker (`configs`) can be created or updated only once the profile document exists, so no tracker can be orphaned without a profile (TABAK-007).
+- **The deletion marker is permanent (accepted).** No rule clears `deleting: true`, so a surviving session can never bring a deleted account's data back. As a consequence, an owner who sets the marker on their own profile with a raw API call (the apps only set it in Delete Account) can't undo it. Recovery is deleting their Firebase Authentication user, which an administrator does in the Firebase console; signing up again then starts a fresh account.

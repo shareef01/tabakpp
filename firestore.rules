@@ -333,6 +333,9 @@ service cloud.firestore {
       let path = /databases/$(database)/documents/users/$(uid);
       return !exists(path) || !smokingLeaseHeld(get(path).data) || get(path).data.get('deleting', false) == true;
     }
+    function profileExistsAfter(uid) {
+      return existsAfter(/databases/$(database)/documents/users/$(uid));
+    }
     // The profile carries the account-wipe tombstone. A missing profile is NOT
     // tombstoned: current clients always write the marker before wiping.
     function accountTombstoned(uid) {
@@ -718,6 +721,11 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isOwner(userId);
+      // The `{deleting: true}` tombstone is permanent by design (TABAK-007,
+      // accepted): no rule clears it, so an old session or stale token can
+      // never recreate data after an account wipe. The flip side is that an
+      // owner who tombstones their own profile through a raw API call can't
+      // undo it; recovery is deleting the Firebase Auth user (support action).
       allow create: if isOwner(userId) && (validCreateProfile() || request.resource.data.keys().hasOnly(['deleting']) && request.resource.data.deleting == true);
       // The client may never rewrite its own financial mode (the trusted
       // migration function owns LEGACY→MIGRATING→OPTION_B via the Admin SDK),
@@ -754,7 +762,12 @@ service cloud.firestore {
 
       match /configs/{configId} {
         allow read: if isOwner(userId);
-        allow create, update: if isOwner(userId) && accountWritable(userId) && validConfig();
+        // A tracker needs an existing profile (TABAK-007). accountWritable
+        // alone treats a missing profile as writable, which let configs exist
+        // with no profile. Both clients only reach "add tracker" after the
+        // profile has loaded. existsAfter also allows a batch that creates
+        // the profile and a config together.
+        allow create, update: if isOwner(userId) && profileExistsAfter(userId) && accountWritable(userId) && validConfig();
         allow delete: if isOwner(userId) && !financialLocked(database, userId) && accountDeletable(userId);
       }
 
