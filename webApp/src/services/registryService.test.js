@@ -233,9 +233,13 @@ describe('RegistryService.adjustCounter (dated daily-document model — item 1 P
     await expect(RegistryService.adjustCounter(UID, 'cig', 1, 'not-a-date', 0.5)).rejects.toThrow('INVALID_TRACKING_DATE');
   });
 
-  it('refuses to write to a day that has already been closed', async () => {
+  // TABAK-001 lets a closed day stamp a tracker on its first late tap, but a
+  // tracker that already has a count and no stamp is pre-stamp legacy data:
+  // stamping it would price those units at today's config, so it's refused.
+  it('refuses a late tap for a tracker whose count on the closed day has no stamp (legacy)', async () => {
     seedDay(DATE, { counts: { cig: 5 }, trackerSnapshots: {}, status: 'closed', foldedIntoLifetime: true });
-    await expect(RegistryService.adjustCounter(UID, 'cig', 1, DATE, 0.5)).rejects.toThrow('DAY_CLOSED');
+    await expect(RegistryService.adjustCounter(UID, 'cig', 1, DATE, 0.5)).rejects.toThrow('DAY_CLOSED_NO_SNAPSHOT');
+    expect(dayDoc(DATE).counts).toEqual({ cig: 5 });
   });
 
   it('refreshing the snapshot on every tap does not let a later config edit rewrite an earlier tap\'s meaning', async () => {

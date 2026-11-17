@@ -5,11 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { CLOSE_DAY_CONFIRM_MESSAGE } from './ui';
 
 /**
- * Audit 2026-11-12 TABAK-001: the close-day dialog promised "You can continue
- * logging anytime today", but after closing, a tracker not yet logged that day
- * is refused (DAY_CLOSED_NO_SNAPSHOT — closed-day snapshots are frozen by
- * firestore.rules). The copy must state the limitation, identically on web and
- * Android.
+ * Audit 2026-11-12 TABAK-001: every tracker stays loggable after "Close day"
+ * (an unstamped tracker is stamped on its first late tap), so the copy says
+ * logging continues, identically on web and Android, and no longer points to
+ * a manual entry.
  */
 const here = path.dirname(fileURLToPath(import.meta.url));
 const trackScreenKt = fs.readFileSync(
@@ -25,19 +24,19 @@ const kotlinConstant = () => {
 };
 
 describe('close-day confirmation copy', () => {
-  it('does not promise unrestricted logging after closing', () => {
-    expect(CLOSE_DAY_CONFIRM_MESSAGE).not.toMatch(/continue logging anytime|keep logging today/i);
-    expect(CLOSE_DAY_CONFIRM_MESSAGE).toMatch(/already logged today/);
-    expect(CLOSE_DAY_CONFIRM_MESSAGE).toMatch(/manual entry in History/);
+  it('says every tracker stays loggable and totals follow', () => {
+    expect(CLOSE_DAY_CONFIRM_MESSAGE).toMatch(/log any tracker today/);
+    expect(CLOSE_DAY_CONFIRM_MESSAGE).toMatch(/totals update/);
+    expect(CLOSE_DAY_CONFIRM_MESSAGE).not.toMatch(/manual entry|already logged/i);
   });
 
   it('matches the Android TrackScreen copy exactly', () => {
     expect(kotlinConstant()).toBe(CLOSE_DAY_CONFIRM_MESSAGE);
   });
 
-  it('the Close-day button hint does not promise unrestricted logging either', () => {
+  it('the Close-day button hint says logging stays open', () => {
     const banner = fs.readFileSync(path.join(here, '../components/dashboard/MetricBanner.jsx'), 'utf8');
-    expect(banner).not.toMatch(/you can keep logging/i);
-    expect(banner).toMatch(/logged trackers stay adjustable/);
+    expect(banner).toMatch(/logging stays open/);
+    expect(banner).not.toMatch(/logged trackers stay adjustable/);
   });
 });

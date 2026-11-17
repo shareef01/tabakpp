@@ -302,12 +302,27 @@ const mergeHistoricalEditCounts = (incoming, previous, liveConfigIds, historical
 
 /**
  * Counter tap on a CLOSED day (see adjustCounter). Recomputes the day's credit
- * from its frozen snapshots and, when the day was already folded, moves
+ * from its snapshots and, when the day was already folded, moves
  * lifetimeAggregates by exactly the credit delta in the same transaction.
+ *
+ * Existing stamps stay frozen. A tracker not yet stamped on the day is stamped
+ * now from its live config, exactly as its first tap on an open day would have
+ * (TABAK-001); firestore.rules allow only that one added stamp. A minus tap on
+ * an unstamped tracker has nothing to remove and is a no-op. A tracker that
+ * already has a count but no stamp (pre-stamp legacy data) is still refused
+ * with DAY_CLOSED_NO_SNAPSHOT.
  */
-const applyLateCounterWrite = async (transaction, uid, dayRef, day, counterId, delta) => {
-  const snapshots = day.trackerSnapshots || {};
-  if (!Object.hasOwn(snapshots, counterId)) throw new Error('DAY_CLOSED_NO_SNAPSHOT');
+const applyLateCounterWrite = async (transaction, uid, dayRef, day, counterId, delta, config, defaultUnitPrice) => {
+  const stamped = day.trackerSnapshots || {};
+  const isNewStamp = !Object.hasOwn(stamped, counterId);
+  // A count without a stamp is pre-stamp legacy data: stamping it now would
+  // price those earlier units at today's config. Keep refusing that case.
+  if (isNewStamp && (day.counts?.[counterId] || 0) > 0) throw new Error('DAY_CLOSED_NO_SNAPSHOT');
+  if (isNewStamp && delta <= 0) return;
+  if (isNewStamp && Object.keys(stamped).length >= MAX_TRACKERS) throw new Error('TRACKER_LIMIT');
+  const snapshots = isNewStamp
+    ? { ...stamped, [counterId]: SmokingCalculator.buildTrackerSnapshot(config, defaultUnitPrice) }
+    : stamped;
   const oldCounts = day.counts || {};
   const counts = { ...oldCounts, [counterId]: Math.max(0, (oldCounts[counterId] || 0) + delta) };
   if (countsEqual(counts, oldCounts)) return;
@@ -330,6 +345,7 @@ const applyLateCounterWrite = async (transaction, uid, dayRef, day, counterId, d
   }
   transaction.update(dayRef, {
     counts, aggregateCredit: newCredit, updatedTrackerId: counterId, updatedAt: serverTimestamp(),
+    ...(isNewStamp ? { trackerSnapshots: snapshots } : {}),
   });
 };
 
@@ -826,7 +842,7 @@ export const RegistryService = {
         // clock is ahead) must not stop the user logging it. The stamped
         // snapshot stays frozen, so only trackers stamped that day can move;
         // the lifetime rollup is reconciled by delta, as in updateHistoricalDay.
-        return applyLateCounterWrite(transaction, uid, dayRef, existing, counterId, delta);
+        return applyLateCounterWrite(transaction, uid, dayRef, existing, counterId, delta, config, defaultUnitPrice);
       }
       if (!Object.hasOwn(existing?.trackerSnapshots || {}, counterId)
         && Object.keys(existing?.trackerSnapshots || {}).length >= MAX_TRACKERS) throw new Error('TRACKER_LIMIT');

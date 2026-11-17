@@ -831,21 +831,39 @@ class FirebaseRegistryRepositoryTest {
         }
     }
 
+    // TABAK-001: a closed day accepts the first tap of a tracker not yet
+    // stamped on it. The tracker is stamped from its live config, existing
+    // stamps stay frozen, and the folded day moves lifetime by the delta.
+    // Runs against the deployed-in-CI firestore.rules (validLateSnapshotAdd).
     @Test
-    fun testD3_lateWriteOnUnstampedTracker_isRefusedWithoutWriting() {
+    fun testD3_lateWriteOnUnstampedTracker_stampsAndMovesLifetime() {
         runBlocking {
             cleanDay(testUid, TEST_DATE)
             repository.updateLiveCounter(testUid, TEST_TRACKER_ID, 1.0, TEST_DATE, 0.5)
             repository.closeDay(testUid, TEST_DATE)
-            repository.addConfig(testUid, TrackerConfig(id = "late1", name = "Late", limit = 5, order = 9, type = TrackerType.CIGARETTE))
-            val configId = "late1"
+            val closed = getDay(testUid, TEST_DATE)!!
+            val userRef = firestore.collection("users").document(testUid)
+            val before = userRef.get().data<UserProfile>().lifetimeAggregates
+            val lateConfig = TrackerConfig(id = "late1", name = "Late", limit = 5, order = 9, type = TrackerType.CIGARETTE)
+            repository.addConfig(testUid, lateConfig)
 
-            val error = assertFailsWith<Exception> {
-                repository.updateLiveCounter(testUid, configId, 1.0, TEST_DATE, 0.5)
-            }
-            assertTrue(error.message.orEmpty().contains("DAY_CLOSED_NO_SNAPSHOT"), error.message)
-            assertEquals(mapOf(TEST_TRACKER_ID to 1.0), getDay(testUid, TEST_DATE)!!.counts)
-            firestore.collection("users").document(testUid).collection("configs").document(configId).delete()
+            repository.updateLiveCounter(testUid, "late1", 1.0, TEST_DATE, 0.5)
+
+            val day = getDay(testUid, TEST_DATE)!!
+            assertEquals("closed", day.status)
+            assertEquals(mapOf(TEST_TRACKER_ID to 1.0, "late1" to 1.0), day.counts)
+            assertEquals(closed.trackerSnapshots[TEST_TRACKER_ID], day.trackerSnapshots[TEST_TRACKER_ID])
+            assertTrue("late1" in day.trackerSnapshots, "the late tracker must be stamped")
+            val expected = SmokingCalculator.computeDayCredit(day.counts, day.trackerSnapshots)
+            val oldCredit = closed.aggregateCredit ?: com.tabakpp.app.data.LifetimeAggregates()
+            val after = userRef.get().data<UserProfile>().lifetimeAggregates
+            assertEquals(before.wasted - oldCredit.wasted + expected.wasted, after.wasted, 0.001)
+            assertEquals(before.saved - oldCredit.saved + expected.saved, after.saved, 0.001)
+
+            // A minus tap on another unstamped tracker is a no-op.
+            repository.addConfig(testUid, lateConfig.copy(id = "late2", name = "Late 2", order = 10))
+            repository.updateLiveCounter(testUid, "late2", -1.0, TEST_DATE, 0.5)
+            assertEquals(mapOf(TEST_TRACKER_ID to 1.0, "late1" to 1.0), getDay(testUid, TEST_DATE)!!.counts)
         }
     }
 

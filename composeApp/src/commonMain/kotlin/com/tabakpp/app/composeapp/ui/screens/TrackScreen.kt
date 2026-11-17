@@ -40,14 +40,13 @@ import kotlinx.coroutines.delay
  * "Close tracking day?" confirmation copy — must match the web
  * CLOSE_DAY_CONFIRM_MESSAGE (webApp/src/constants/ui.js).
  *
- * It used to promise "You can keep logging today", but a closed day's tracker
- * snapshots are frozen by firestore.rules, so only trackers already logged
- * that day can still be adjusted; any other tracker is refused with
- * DAY_CLOSED_NO_SNAPSHOT (audit 2026-11-12 TABAK-001).
+ * Every tracker stays loggable on a closed day: a tracker not yet logged that
+ * day is stamped on its first late tap, and the lifetime totals move with it
+ * (audit 2026-11-12 TABAK-001).
  */
 internal const val CLOSE_DAY_CONFIRM_MESSAGE =
     "Your counts are already saved. Closing adds today to your lifetime totals now. " +
-        "You can still adjust trackers you've already logged today; any other tracker needs a manual entry in History."
+        "You can still log any tracker today, and your totals update as you do."
 
 /**
  * High-performance Track Dashboard.
