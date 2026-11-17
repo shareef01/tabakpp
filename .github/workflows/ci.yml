@@ -29,7 +29,51 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Decides whether a pull request touches anything the `mobile` job builds or
+  # tests (same approach as android-integration.yml's `changes`). A required
+  # check skipped by a job-level `if` reports as passing; a workflow-level
+  # `paths:` filter would leave it pending forever. Pushes to main always run
+  # in full, because check-release-ci.py needs a successful ci.yml run on the
+  # exact release SHA. The Kotlin tests also read firestore.rules
+  # (AccountWipeCoverageTest) and shared-tests/ (DomainContractFixturesTest).
+  mobile-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      mobile: ${{ steps.filter.outputs.mobile }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2  # the PR merge commit and its base parent
+      - name: Detect mobile-relevant changes
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "mobile=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request: running the mobile job."
+            exit 0
+          fi
+          # The checked-out PR merge commit's first parent is the base branch,
+          # so this lists exactly the files the PR changes.
+          changed="$(git diff --name-only HEAD^1 HEAD)"
+          echo "Changed files:"; echo "$changed"
+          pattern='^(androidApp/|shared/|composeApp/|shared-tests/|gradle/|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradlew(\.bat)?$|firestore\.rules$|\.github/workflows/ci\.yml$)'
+          if echo "$changed" | grep -qE "$pattern"; then
+            echo "mobile=true" >> "$GITHUB_OUTPUT"
+            echo "Mobile-relevant files changed: running the mobile job."
+          else
+            echo "mobile=false" >> "$GITHUB_OUTPUT"
+            echo "No mobile-relevant files changed: skipping the mobile job."
+          fi
+
   mobile:
+    needs: mobile-changes
+    # Fail safe: if change detection itself fails, run the job anyway.
+    if: ${{ !cancelled() && (needs.mobile-changes.result != 'success' || needs.mobile-changes.outputs.mobile == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
