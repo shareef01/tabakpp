@@ -200,9 +200,11 @@ What the rules guarantee once a day is closed (see `validDayUpdate` in
 - **Taps still count after closing.** Closing a day (with "Close Tracking Day",
   or automatically by another device whose clock or time zone is ahead) does not
   stop logging it. A +/− on a closed day updates its `counts` and
-  `aggregateCredit` from the frozen snapshot and moves `lifetimeAggregates` by
-  the same delta. A tracker with no snapshot that day can't be added this way,
-  because the snapshot is frozen; log it with a manual entry in History instead.
+  `aggregateCredit` from the day's snapshots and moves `lifetimeAggregates` by
+  the same delta. A tracker not yet logged that day is stamped from its current
+  config on its first tap, just as on an open day; existing stamps stay frozen.
+  (A tracker that has a count but no stamp, from before stamps existed, still
+  needs a manual entry in History.)
   This applies to the current Spark (`LEGACY`) path; the undeployed Option B
   callable still rejects closed days.
 
@@ -231,7 +233,7 @@ flowchart LR
   Rules --> Owner["request.auth.uid == userId"]
   Rules --> Split["Settings vs mutation<br/>write-path split"]
   Rules --> Shape["Schema + bounds<br/>on profile · configs · days · logs · meta"]
-  Rules --> Frozen["Closed days: trackerSnapshots frozen;<br/>status one-way open→closed"]
+  Rules --> Frozen["Closed days: existing stamps frozen;<br/>status one-way open→closed"]
   Rules --> Writability["Closed days: counts/aggregateCredit<br/>writable by owner (rules-validated);<br/>updateHistoricalDay reconciles lifetimeAggs"]
   Rules --> Deny["Default deny<br/>/{document=**}"]
 ```

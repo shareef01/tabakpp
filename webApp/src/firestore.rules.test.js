@@ -441,6 +441,95 @@ describe('users/{uid}/days/{date} — dated daily-document model (items 1, 2, 13
     }));
   });
 
+  describe('TABAK-001: a late tap may add the first stamp of a tracker on a closed day', () => {
+    const roll = { name: 'Roll', type: 'CIGARETTE', target: 5, baseline: null, unitPrice: 0.5, isFinanciallyTracked: true };
+    const closedDay = { ...openDay, status: 'closed', foldedIntoLifetime: true };
+    const seedClosed = async () => {
+      const db = await seedAlice();
+      await setDoc(doc(db, 'users/alice/days/2026-07-20'), closedDay);
+      return db;
+    };
+    const ref = (db) => doc(db, 'users/alice/days/2026-07-20');
+
+    it('allows adding exactly the stamp of updatedTrackerId, with its count', async () => {
+      const db = await seedClosed();
+      await assertSucceeds(updateDoc(ref(db), {
+        counts: { cig: 4, roll: 1 },
+        trackerSnapshots: { ...openDay.trackerSnapshots, roll },
+        aggregateCredit: { saved: 10, wasted: 4.5, smokingUnits: 5, baselineSaved: 16 },
+        updatedTrackerId: 'roll',
+      }));
+    });
+
+    it('denies adding a stamp whose id is not updatedTrackerId', async () => {
+      const db = await seedClosed();
+      await assertFails(updateDoc(ref(db), {
+        counts: { cig: 4, roll: 1 },
+        trackerSnapshots: { ...openDay.trackerSnapshots, roll },
+        updatedTrackerId: 'cig',
+      }));
+    });
+
+    it('denies adding a new stamp while also changing an existing one', async () => {
+      const db = await seedClosed();
+      await assertFails(updateDoc(ref(db), {
+        counts: { cig: 4, roll: 1 },
+        trackerSnapshots: { cig: { ...openDay.trackerSnapshots.cig, target: 999 }, roll },
+        updatedTrackerId: 'roll',
+      }));
+    });
+
+    it('denies adding two new stamps in one write', async () => {
+      const db = await seedClosed();
+      await assertFails(updateDoc(ref(db), {
+        counts: { cig: 4, roll: 1, pipe: 1 },
+        trackerSnapshots: { ...openDay.trackerSnapshots, roll, pipe: roll },
+        updatedTrackerId: 'roll',
+      }));
+    });
+
+    it('denies removing an existing stamp', async () => {
+      const db = await seedClosed();
+      await assertFails(updateDoc(ref(db), { trackerSnapshots: { roll }, updatedTrackerId: 'roll' }));
+    });
+
+    it('denies an invalid new stamp', async () => {
+      const db = await seedClosed();
+      await assertFails(updateDoc(ref(db), {
+        counts: { cig: 4, roll: 1 },
+        trackerSnapshots: { ...openDay.trackerSnapshots, roll: { ...roll, target: 1.5 } },
+        updatedTrackerId: 'roll',
+      }));
+    });
+
+    it('allows the eighth stamp on a closed day (seven existing), within the rules budget', async () => {
+      const db = await seedAlice();
+      const seven = Object.fromEntries(Array.from({ length: 7 }, (_, i) => [`t${i}`, roll]));
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice/days/2026-07-20'), {
+          ...closedDay, counts: Object.fromEntries(Object.keys(seven).map((k) => [k, 3])), trackerSnapshots: seven,
+        });
+      });
+      await assertSucceeds(updateDoc(ref(db), {
+        counts: { ...Object.fromEntries(Object.keys(seven).map((k) => [k, 3])), t7: 1 },
+        trackerSnapshots: { ...seven, t7: roll },
+        aggregateCredit: { saved: 1, wasted: 11, smokingUnits: 22, baselineSaved: 0 },
+        updatedTrackerId: 't7',
+      }));
+    });
+
+    it('denies a ninth stamp on a closed day (tracker cap)', async () => {
+      const db = await seedAlice();
+      const eight = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`t${i}`, roll]));
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'users/alice/days/2026-07-20'), { ...closedDay, counts: {}, trackerSnapshots: eight });
+      });
+      await assertFails(updateDoc(ref(db), {
+        counts: { t8: 1 }, trackerSnapshots: { ...eight, t8: roll }, updatedTrackerId: 't8',
+      }));
+    });
+  });
+
   it('foldedIntoLifetime cannot be reset to false once true', async () => {
     const db = await seedAlice();
     await setDoc(doc(db, 'users/alice/days/2026-07-20'), { ...openDay, status: 'closed', foldedIntoLifetime: true });

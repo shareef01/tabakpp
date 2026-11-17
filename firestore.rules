@@ -21,7 +21,8 @@ rules_version = '2';
 //     dateless mutable bucket. Also carries a per-tracker historical
 //     trackerSnapshots stamp (item 2) so editing/deleting/repricing a
 //     tracker later can never change what an old day meant. On a closed day,
-//     rules freeze `trackerSnapshots`, `status`, `date`,
+//     rules freeze the existing `trackerSnapshots` entries (a late tap may
+//     only add the first stamp of a tracker not yet on the day), `status`, `date`,
 //     `foldedIntoLifetime`, and `legacyMigrationApplied` (see
 //     validDayUpdate). `counts` and `aggregateCredit` remain writable by the
 //     authenticated owner — the application-layer `updateHistoricalDay`
@@ -595,6 +596,17 @@ service cloud.firestore {
         && snapshots.diff(before.get('trackerSnapshots', {})).affectedKeys().hasOnly([id])
         && (!(id in snapshots) || validSnapshotValue(snapshots[id]));
     }
+    // Closed day, late tap of a tracker not yet stamped that day (TABAK-001):
+    // the write may only ADD the stamp for `updatedTrackerId`. Every existing
+    // stamp stays frozen (no change, no removal).
+    function validLateSnapshotAdd(d, before) {
+      let id = d.get('updatedTrackerId', '');
+      let snapshots = d.trackerSnapshots;
+      let diff = snapshots.diff(before.get('trackerSnapshots', {}));
+      return id is string && validCountKey(id) && snapshots is map && snapshots.size() <= 8
+        && diff.affectedKeys().hasOnly([id]) && diff.addedKeys().hasAll([id])
+        && validSnapshotValue(snapshots[id]);
+    }
     function validDayUpdate(dateParam) {
       let d = request.resource.data;
       let before = resource.data;
@@ -606,12 +618,16 @@ service cloud.firestore {
         && d.date == dateParam
         && d.date == before.date // date is the document identity — immutable
         && (!changed.hasAny(['counts']) || validCounterCountDelta(d, before) || validDayCountMap(d.counts))
-        // Once a day is closed, its historical config stamp is frozen against
-        // updates — enforced by rules (item 2), not just a client convention.
+        // Once a day is closed, its existing config stamps are frozen —
+        // enforced by rules (item 2), not just a client convention.
         // `counts`/`aggregateCredit` may still change (a
         // deliberate historical correction via updateHistoricalDay), but never
-        // what the day *meant* at the time.
-        && (!changed.hasAny(['trackerSnapshots']) || (before.get('status', 'open') != 'closed' && (validCounterSnapshotDelta(d, before) || validSnapshotMap(d.trackerSnapshots))))
+        // what a stamped tracker *meant* at the time. The one closed-day
+        // stamp change allowed is adding the first stamp of a tracker on a
+        // late tap (validLateSnapshotAdd, TABAK-001).
+        && (!changed.hasAny(['trackerSnapshots'])
+          || (before.get('status', 'open') != 'closed' && (validCounterSnapshotDelta(d, before) || validSnapshotMap(d.trackerSnapshots)))
+          || (before.get('status', 'open') == 'closed' && validLateSnapshotAdd(d, before)))
         && (!changed.hasAny(['aggregateCredit']) || validLifetimeAggregates(d.aggregateCredit))
         // A day cannot be reopened once closed (one-way transition).
         && (!changed.hasAny(['status']) || (d.status in ['open', 'closed'] && before.get('status', 'open') != 'closed'))

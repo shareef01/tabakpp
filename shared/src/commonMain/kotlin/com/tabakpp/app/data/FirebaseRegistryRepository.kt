@@ -218,23 +218,40 @@ class FirebaseRegistryRepository(
     }
 
     /**
-     * Counter tap on a CLOSED day. The frozen snapshot decides the money, so
-     * only trackers stamped that day can move; when the day was already folded,
-     * lifetimeAggregates moves by exactly the credit delta (as in
-     * [updateHistoricalDay]). All reads happen before any write.
+     * Counter tap on a CLOSED day. The day's snapshots decide the money; when
+     * the day was already folded, lifetimeAggregates moves by exactly the
+     * credit delta (as in [updateHistoricalDay]). All reads happen before any
+     * write.
+     *
+     * Existing stamps stay frozen. A tracker not yet stamped on the day is
+     * stamped now from its live config, exactly as its first tap on an open day
+     * would have (TABAK-001, web parity); firestore.rules allow only that one
+     * added stamp. A minus tap on an unstamped tracker is a no-op. A tracker
+     * that already has a count but no stamp (pre-stamp legacy data) is still
+     * refused with DAY_CLOSED_NO_SNAPSHOT.
      */
     private suspend fun Transaction.applyLateCounterWrite(
         uid: String,
         dayRef: DocumentReference,
         day: DayDocument,
         trackerId: String,
-        delta: Double
+        delta: Double,
+        config: TrackerConfig,
+        defaultUnitPrice: Double
     ) {
-        if (trackerId !in day.trackerSnapshots) throw IllegalStateException("DAY_CLOSED_NO_SNAPSHOT")
+        val isNewStamp = trackerId !in day.trackerSnapshots
+        // A count without a stamp is pre-stamp legacy data: stamping it now
+        // would price those earlier units at today's config. Keep refusing.
+        if (isNewStamp && (day.counts[trackerId] ?: 0.0) > 0.0) throw IllegalStateException("DAY_CLOSED_NO_SNAPSHOT")
+        if (isNewStamp && delta <= 0.0) return
+        if (isNewStamp && day.trackerSnapshots.size >= 8) throw IllegalStateException("TRACKER_LIMIT")
+        val snapshots = if (isNewStamp) {
+            day.trackerSnapshots + (trackerId to SmokingCalculator.buildTrackerSnapshot(config, defaultUnitPrice))
+        } else day.trackerSnapshots
         val counts = day.counts + (trackerId to maxOf(0.0, (day.counts[trackerId] ?: 0.0) + delta))
         if (SmokingCalculator.countsEqual(counts, day.counts)) return
-        SmokingCalculator.requireHistoricalPrices(counts, day.trackerSnapshots)
-        val newCredit = SmokingCalculator.computeDayCredit(counts, day.trackerSnapshots)
+        SmokingCalculator.requireHistoricalPrices(counts, snapshots)
+        val newCredit = SmokingCalculator.computeDayCredit(counts, snapshots)
 
         if (day.foldedIntoLifetime) {
             val userRef = firestore.collection("users").document(uid)
@@ -255,6 +272,7 @@ class FirebaseRegistryRepository(
             "aggregateCredit" to newCredit
             "updatedTrackerId" to trackerId
             "updatedAt" to (Timestamp.ServerTimestamp as BaseTimestamp)
+            if (isNewStamp) "trackerSnapshots" to snapshots
         }
     }
 
@@ -380,7 +398,7 @@ class FirebaseRegistryRepository(
                 // Late write: closing a day (manually, or by another device whose
                 // clock is ahead) must not stop the user logging it. Web parity:
                 // RegistryService.adjustCounter → applyLateCounterWrite.
-                applyLateCounterWrite(uid, dayRef, existing, trackerId, delta)
+                applyLateCounterWrite(uid, dayRef, existing, trackerId, delta, config, defaultUnitPrice)
                 return@runTransaction
             }
             if (trackerId !in (existing?.trackerSnapshots ?: emptyMap()) && (existing?.trackerSnapshots?.size ?: 0) >= 8) throw Exception("TRACKER_LIMIT")

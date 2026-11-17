@@ -228,14 +228,53 @@ describe('RegistryService against the real SDK and rules', () => {
     expect((await profile()).lifetimeAggregates.wasted).toBeCloseTo(3);
   });
 
-  it('a tracker with no snapshot on a closed day is refused with a specific error', async () => {
+  // TABAK-001: a closed day accepts the first tap of a tracker not yet
+  // stamped on it. The tracker is stamped from its live config (as on an
+  // open day), existing stamps stay frozen, and the folded day moves lifetime
+  // totals by exactly the credit delta.
+  it('the first tap of an unstamped tracker on a closed day stamps it and moves lifetime by the delta', async () => {
+    await seed();
+    await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
+    await RegistryService.closeDay(UID, '2026-07-30');
+    const closed = await dayDoc('2026-07-30');
+    const before = (await profile()).lifetimeAggregates;
+    const rollConfig = { ...cigConfig, name: 'Roll-ups', order: 1 };
+    await setDoc(doc(holder.db, 'users', UID, 'configs', 'roll'), rollConfig);
+
+    await RegistryService.adjustCounter(UID, 'roll', 1, '2026-07-30', 0.5);
+
+    const d = await dayDoc('2026-07-30');
+    expect(d.status).toBe('closed');
+    expect(d.counts).toEqual({ cig: 1, roll: 1 });
+    expect(d.trackerSnapshots.cig).toEqual(closed.trackerSnapshots.cig);
+    expect(d.trackerSnapshots.roll).toEqual(SmokingCalculator.buildTrackerSnapshot({ ...rollConfig, id: 'roll' }, 0.5));
+    const expected = SmokingCalculator.computeDayCredit(d.counts, d.trackerSnapshots);
+    expect(d.aggregateCredit.saved).toBeCloseTo(expected.saved);
+    expect(d.aggregateCredit.wasted).toBeCloseTo(expected.wasted);
+    const after = (await profile()).lifetimeAggregates;
+    expect(after.wasted).toBeCloseTo(before.wasted - closed.aggregateCredit.wasted + expected.wasted);
+    expect(after.saved).toBeCloseTo(before.saved - closed.aggregateCredit.saved + expected.saved);
+    expect(after.smokingUnits).toBe(before.smokingUnits - closed.aggregateCredit.smokingUnits + expected.smokingUnits);
+
+    // A second tap moves the now-stamped tracker like any other.
+    await RegistryService.adjustCounter(UID, 'roll', 1, '2026-07-30', 0.5);
+    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 1, roll: 2 });
+  });
+
+  it('a minus tap on an unstamped tracker on a closed day changes nothing', async () => {
     await seed();
     await RegistryService.adjustCounter(UID, 'cig', 1, '2026-07-30', 0.5);
     await RegistryService.closeDay(UID, '2026-07-30');
     await setDoc(doc(holder.db, 'users', UID, 'configs', 'roll'), { ...cigConfig, name: 'Roll-ups', order: 1 });
+    const closed = await dayDoc('2026-07-30');
+    const before = (await profile()).lifetimeAggregates;
 
-    await expect(RegistryService.adjustCounter(UID, 'roll', 1, '2026-07-30', 0.5)).rejects.toThrow('DAY_CLOSED_NO_SNAPSHOT');
-    expect((await dayDoc('2026-07-30')).counts).toEqual({ cig: 1 });
+    await RegistryService.adjustCounter(UID, 'roll', -1, '2026-07-30', 0.5);
+
+    const d = await dayDoc('2026-07-30');
+    expect(d.counts).toEqual({ cig: 1 });
+    expect(d.trackerSnapshots).toEqual(closed.trackerSnapshots);
+    expect((await profile()).lifetimeAggregates).toEqual(before);
   });
 
   it('a count written under an explicit prior date lands there even after "today" moved on', async () => {
