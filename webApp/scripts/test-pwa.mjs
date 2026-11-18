@@ -105,13 +105,32 @@ async function caches(page, label) {
   return urls;
 }
 
-// Puppeteer's default 30 s limit is too tight for the settle waits on slow CI
-// runners since the PWA precache grew (self-hosted Inter, #170): two runs timed
-// out in waitForNetworkIdle right after the deployment-B navigation.
+// Generous limit for the settle waits on slow CI runners.
 const SETTLE_TIMEOUT = 90_000;
+// Chrome fetches the favicon outside the page. When the service worker answers
+// it, Puppeteer can miss its "finished" event, so it looks in flight forever
+// and page.waitForNetworkIdle never resolves (CI evidence: the only pending
+// request at a 90 s timeout was `other …/favicon.svg`). settle() ignores it.
+const IGNORED_IN_FLIGHT = /^other \S+\/favicon\.(?:svg|ico)(?:\?\S*)?$/;
 // Requests still in flight per page, recorded on failure so a timeout says
 // what kept the network busy.
 const inFlight = new Map();
+
+// Like page.waitForNetworkIdle({ idleTime: 500 }), but over this page's own
+// in-flight tracking, so a stuck favicon fetch can't block it forever.
+async function settle(page, idleTime = 500) {
+  const pending = inFlight.get(page);
+  const busy = () => [...pending.values()].filter(entry => !IGNORED_IN_FLIGHT.test(entry));
+  const deadline = Date.now() + SETTLE_TIMEOUT;
+  let idleSince = null;
+  while (Date.now() < deadline) {
+    if (busy().length) idleSince = null;
+    else if (idleSince === null) idleSince = Date.now();
+    else if (Date.now() - idleSince >= idleTime) return;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`settle timed out after ${SETTLE_TIMEOUT} ms; in flight: ${busy().join(', ')}`);
+}
 
 async function pageFor(context) {
   const page = await context.newPage();
@@ -222,7 +241,7 @@ async function run() {
     assert(documentResponses > offlineCount, 'online deployment really reaches server');
     // The build-id effect sets localStorage immediately before its one-shot
     // reload. Let that navigation finish before asking the browser to update.
-    await page.waitForNetworkIdle({ idleTime: 500, timeout: SETTLE_TIMEOUT });
+    await settle(page);
     await page.waitForSelector('input[type="email"]');
     // Use the real browser update API, then a normal online refresh. Chrome's
     // DevTools updateRegistration can stop a worker mid-activation; it is not
@@ -231,7 +250,7 @@ async function run() {
       // autoUpdate may reload the calling document as the new worker claims it.
       if (!error.message.includes('Execution context was destroyed')) throw error;
     });
-    await page.waitForNetworkIdle({ idleTime: 500, timeout: SETTLE_TIMEOUT });
+    await settle(page);
     await page.waitForSelector('input[type="email"]');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(async entry => {
@@ -242,7 +261,7 @@ async function run() {
       }
       return false;
     }, { timeout: SETTLE_TIMEOUT, polling: 100 }, evidence.builds['pwa-regression-B'].entry);
-    await page.waitForNetworkIdle({ idleTime: 500, timeout: SETTLE_TIMEOUT });
+    await settle(page);
     await page.waitForSelector('input[type="email"]');
     assert(navigations <= 4, `no SW/build-identity reload loop (${navigations})`);
     const urls = await caches(page, 'activated-B');
@@ -302,7 +321,7 @@ async function run() {
         const element = document.createElement('script');
         element.src = src; element.onload = resolve; element.onerror = reject; document.head.append(element);
       }), crossOrigin);
-      await hosting.waitForNetworkIdle({ idleTime: 500, timeout: SETTLE_TIMEOUT });
+      await settle(hosting);
       const probe = evidence.scripts.find(script => script.url === crossOrigin);
       assert(probe, 'cross-origin probe script response observed');
       assert.equal(probe.worker, false, 'cross-origin script is fetched by the browser, not the SW');
