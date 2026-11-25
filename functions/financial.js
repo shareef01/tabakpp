@@ -36,6 +36,23 @@ export const roundMoney = (v) => {
 };
 
 /**
+ * Next lifetime `smokingUnits` after removing `debit` and adding `credit`,
+ * floored at 0 — the server port of the clients' (web + Kotlin)
+ * SmokingCalculator.nextLifetimeSmokingUnits; shared fixture op
+ * `lifetimeSmokingUnits`.
+ *
+ * The Admin SDK skips firestore.rules (`smokingUnits >= 0`), so a negative
+ * total here would be STORED, not rejected. It is reachable: migrateAccount
+ * keeps the LEGACY lifetime total and only adds Category-A deltas, so a total
+ * the client back-fill under-counted (logs for since-deleted smoking trackers)
+ * stays below Σ folded canonicalCredit, and a later MANUAL_DELETE /
+ * MANUAL_UPDATE debiting that canonicalCredit goes below zero. Money fields
+ * are deliberately NOT floored.
+ */
+export const nextLifetimeSmokingUnits = (current, debit, credit) =>
+  Math.max(0, Math.round(num(current) - num(debit) + num(credit)));
+
+/**
  * Day-level canonical credit: one target/baseline allowance per tracker/date.
  *  - wasted        = Σ count × price          (actual consumption cost)
  *  - saved         = Σ max(0, target − count) × price   (allowance ONCE)
