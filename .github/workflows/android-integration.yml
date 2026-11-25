@@ -43,7 +43,7 @@ jobs:
           # so this lists exactly the files the PR changes.
           changed="$(git diff --name-only HEAD^1 HEAD)"
           echo "Changed files:"; echo "$changed"
-          pattern='^(androidApp/|shared/|composeApp/|gradle/|functions/|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradlew(\.bat)?$|firestore\.rules$|firebase\.json$|\.github/workflows/android-integration\.yml$|\.github/scripts/(test-)?android-test-results-gate\.py$)'
+          pattern='^(androidApp/|shared/|composeApp/|gradle/|functions/|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradlew(\.bat)?$|firestore\.rules$|firebase\.json$|\.github/workflows/android-integration\.yml$|\.github/scripts/(test-)?android-test-results-gate\.py$|\.github/scripts/gradle-(retry\.sh|transient-failure\.py)$)'
           if echo "$changed" | grep -qE "$pattern"; then
             echo "android=true" >> "$GITHUB_OUTPUT"
             echo "Android-relevant files changed: running the emulator suite."
@@ -167,9 +167,14 @@ jobs:
       # ('cmd: Can't find service: package' / system_server restart).
       # With APKs pre-built, connectedDebugAndroidTest skips straight to
       # install + run, eliminating the build-vs-emulator resource contention.
+      # gradle-retry.sh retries only on a transient dependency download (Maven
+      # Central rate-limits hosted runners with HTTP 429); a compile failure
+      # still fails on the first attempt. The emulator run below is not wrapped:
+      # its failures are not download failures.
       - name: Pre-build test APKs
         run: |
-          ./gradlew :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest \
+          bash .github/scripts/gradle-retry.sh prebuild-test-apks \
+            :androidApp:assembleDebug :androidApp:assembleDebugAndroidTest \
             --no-daemon \
             --quiet
       - name: Create instrumentation test script

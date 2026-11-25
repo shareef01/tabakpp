@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-test for gradle-transient-failure.py (run in the release workflow)."""
+"""Self-test for gradle-transient-failure.py (run in CI and the release workflow)."""
 import importlib.util
 import os
 import subprocess
@@ -67,6 +67,43 @@ MISSING_ARTIFACT = """\
 # A 429 mentioned in a compile failure must still not be retried.
 COMPILE_WITH_429_NOISE = COMPILE_ERROR + "\nReceived status code 429 from server: Too Many Requests\n> Could not GET 'x'\n"
 
+# Verbatim shape of CI run 45645048588 (main, 7a580ce, job `mobile`): the test
+# task failed while resolving its runtime classpath, before any test ran. The
+# 2>&1 merge interleaves stdout into the cause chain, as in the real log.
+ROBOLECTRIC_429 = """\
+> Task :composeApp:testDebugUnitTest FAILED
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+
+Execution failed for task ':composeApp:testDebugUnitTest' (registered by plugin 'com.android.internal.library').
+> Could not resolve all files for configuration ':composeApp:debugUnitTestRuntimeClasspath'.
+   > Could not download nativeruntime-dist-compat-1.0.19.jar (org.robolectric:nativeruntime-dist-compat:1.0.19)
+      > Could not get resource 'https://repo.maven.apache.org/maven2/org/robolectric/nativeruntime-dist-compat/1.0.19/nativeruntime-dist-compat-1.0.19.jar'.
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+203 actionable tasks: 203 executed
+         > Could not GET 'https://repo.maven.apache.org/maven2/org/robolectric/nativeruntime-dist-compat/1.0.19/nativeruntime-dist-compat-1.0.19.jar'.
+            > Received status code 429 from server: Too Many Requests
+
+BUILD FAILED in 1m 51s
+"""
+
+# A real unit-test failure in the same task, with 429 noise elsewhere in the log.
+FAILING_TESTS_WITH_429_NOISE = """\
+> Task :composeApp:testDebugUnitTest FAILED
+* What went wrong:
+Execution failed for task ':composeApp:testDebugUnitTest'.
+> There were failing tests. See the report at: file:///home/runner/work/x/index.html
+> Could not GET 'https://repo.maven.apache.org/maven2/x.jar'.
+   > Received status code 429 from server: Too Many Requests
+"""
+
+# Two failures (parallel build): one resolution 429, one real lint failure.
+RESOLUTION_PLUS_LINT = ROBOLECTRIC_429 + """\
+Execution failed for task ':androidApp:lintDebug'.
+> Lint found errors in the project; aborting build.
+"""
+
 CASES = [
     ("maven central 429 (v1.0.21 attempt 1)", MAVEN_429, True),
     ("google maven 503", SERVER_503, True),
@@ -75,6 +112,9 @@ CASES = [
     ("signing/keystore error", SIGNING_ERROR, False),
     ("artifact really missing (404)", MISSING_ARTIFACT, False),
     ("compile error with 429 noise", COMPILE_WITH_429_NOISE, False),
+    ("robolectric 429 resolving test classpath (CI run 45645048588)", ROBOLECTRIC_429, True),
+    ("failing unit tests with 429 noise", FAILING_TESTS_WITH_429_NOISE, False),
+    ("resolution 429 plus a real lint failure", RESOLUTION_PLUS_LINT, False),
     ("empty log", "", False),
 ]
 
