@@ -24,6 +24,13 @@ jobs:
         run: python3 .github/scripts/test-validate-action-pins.py
       - name: Test release input and acceptance guards
         run: python3 .github/scripts/test-release-safety.py
+      # The Gradle steps in `mobile`, android-integration and the release
+      # workflow retry through these two scripts; a broken classifier or loop
+      # would either hide real failures or stop retrying, so test both here.
+      - name: Test the Gradle transient-failure classifier
+        run: python3 .github/scripts/test-gradle-transient-failure.py
+      - name: Test the Gradle retry loop
+        run: python3 .github/scripts/test-gradle-retry.py
       - name: Validate GitHub Action pins (immutable SHA policy)
         run: python3 .github/scripts/validate-action-pins.py
         env:
@@ -61,7 +68,7 @@ jobs:
           # so this lists exactly the files the PR changes.
           changed="$(git diff --name-only HEAD^1 HEAD)"
           echo "Changed files:"; echo "$changed"
-          pattern='^(androidApp/|shared/|composeApp/|shared-tests/|gradle/|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradlew(\.bat)?$|firestore\.rules$|\.github/workflows/ci\.yml$)'
+          pattern='^(androidApp/|shared/|composeApp/|shared-tests/|gradle/|build\.gradle\.kts$|settings\.gradle\.kts$|gradle\.properties$|gradlew(\.bat)?$|firestore\.rules$|\.github/workflows/ci\.yml$|\.github/scripts/gradle-(retry\.sh|transient-failure\.py)$)'
           if echo "$changed" | grep -qE "$pattern"; then
             echo "mobile=true" >> "$GITHUB_OUTPUT"
             echo "Mobile-relevant files changed: running the mobile job."
@@ -75,7 +82,9 @@ jobs:
     # Fail safe: if change detection itself fails, run the job anyway.
     if: ${{ !cancelled() && (needs.mobile-changes.result != 'success' || needs.mobile-changes.outputs.mobile == 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 40, not 30: gradle-retry.sh can add up to 3 minutes of waiting plus
+    # reruns of the Gradle steps after a transient download failure.
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -156,14 +165,17 @@ jobs:
       # the web job checks below, so this job fails on its own if the Kotlin
       # port drifts from the JS one (item 11).
       # :androidApp:testDebugUnitTest holds the App Check provider guard tests.
+      # gradle-retry.sh retries only on a transient dependency download (run
+      # 45645048588 failed here on a Maven Central 429 for a Robolectric jar);
+      # a compile, lint or test failure still fails on the first attempt.
       - name: Test shared code, Compose UI, and build Android
-        run: ./gradlew :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
+        run: bash .github/scripts/gradle-retry.sh mobile-test-and-build :shared:testDebugUnitTest :composeApp:testDebugUnitTest :androidApp:testDebugUnitTest :androidApp:lintDebug :androidApp:assembleDebug :androidApp:assembleRelease --no-daemon
       # Separate invocation: adding a third app variant to the run above
       # exhausted the 2 GB Gradle heap (mergeStagingResources: Java heap space).
       # Shared/compose outputs are already up to date, so this only builds the
       # staging-specific tasks in a fresh JVM.
       - name: Build Android staging variant
-        run: ./gradlew :androidApp:assembleStaging --no-daemon
+        run: bash .github/scripts/gradle-retry.sh mobile-staging :androidApp:assembleStaging --no-daemon
 
   web-and-rules:
     runs-on: ubuntu-latest
