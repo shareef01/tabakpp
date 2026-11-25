@@ -73,6 +73,9 @@ jobs:
       - name: Test the transient-failure classifier used by the signing retry
         run: python3 .github/scripts/test-gradle-transient-failure.py
 
+      - name: Test the Gradle retry loop used by the signing step
+        run: python3 .github/scripts/test-gradle-retry.py
+
       - name: Validate version input
         id: validate-version
         run: |
@@ -240,24 +243,11 @@ jobs:
         # a network cause, and never on compile/lint/test/signing failures, so a
         # real build error still fails on the first attempt. At most 3 attempts,
         # waiting 60 s then 120 s; nothing is tagged or published until the
-        # build succeeds.
-        run: |
-          set -uo pipefail
-          for attempt in 1 2 3; do
-            ./gradlew :androidApp:assembleRelease --no-daemon 2>&1 | tee "$RUNNER_TEMP/assemble-$attempt.log"
-            status=${PIPESTATUS[0]}
-            if [ "$status" -eq 0 ]; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ] && python3 .github/scripts/gradle-transient-failure.py "$RUNNER_TEMP/assemble-$attempt.log"; then
-              wait_s=$((60 * attempt))
-              echo "::warning::Transient dependency-download failure on attempt $attempt; retrying in ${wait_s}s."
-              sleep "$wait_s"
-              continue
-            fi
-            echo "::error::assembleRelease failed on attempt $attempt (exit $status); not a retryable network failure, or out of attempts."
-            exit "$status"
-          done
+        # build succeeds. The loop lives in gradle-retry.sh (self-tested in
+        # require-ci): the earlier inline loop ran under the step's default
+        # `bash -e`, so the first failed attempt ended the step before the
+        # classifier ran and it never retried.
+        run: bash .github/scripts/gradle-retry.sh assemble-release :androidApp:assembleRelease --no-daemon
 
       - name: Stage release artifact
         run: |
