@@ -82,7 +82,9 @@ jobs:
     # Fail safe: if change detection itself fails, run the job anyway.
     if: ${{ !cancelled() && (needs.mobile-changes.result != 'success' || needs.mobile-changes.outputs.mobile == 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 40, not 30: gradle-retry.sh can add up to 3 minutes of waiting plus
+    # reruns of the Gradle steps after a transient download failure.
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
