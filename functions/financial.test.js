@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import * as financialModule from './financial.js';
 import {
   computeDayCredit, calculateDailyFinancials, applyDelta, fingerprintOf, migrationPlan,
-  deriveSnapshotFromLog, manualUpdateCredit, roundMoney, stampFromConfig,
+  deriveSnapshotFromLog, manualUpdateCredit, roundMoney, stampFromConfig, nextLifetimeSmokingUnits,
 } from './financial.js';
 
 const snap = (target, baseline, unitPrice, type = 'CIGARETTE') => ({
@@ -262,6 +262,50 @@ for (const { case: name, input, expected } of sharedFixtures.filter((f) => f.op 
     assert.deepEqual(computeDayCredit(input.counts, input.trackerSnapshots, input.defaultUnitPrice), expected);
   });
 }
+
+for (const { case: name, input, expected } of sharedFixtures.filter((f) => f.op === 'lifetimeSmokingUnits')) {
+  test(`shared fixture parity — lifetimeSmokingUnits: ${name}`, () => {
+    assert.equal(nextLifetimeSmokingUnits(input.current, input.debit, input.credit), expected);
+  });
+}
+
+test('lifetime smokingUnits: a back-fill under-count carried through migration floors at 0 on MANUAL_DELETE', () => {
+  // A log for a since-deleted smoking tracker: the client back-fill (live
+  // configs only) left lifetime smokingUnits at 0, yet the log is stamped 5.
+  const log = {
+    id: 'L', logDate: '2026-09-01', counts: { gone: 5 }, origin: 'MANUAL_ENTRY',
+    trackerSnapshots: { gone: snap(0, 0, 1) },
+    aggregateCredit: { wasted: 5, saved: 0, smokingUnits: 5, baselineSaved: 0 },
+  };
+  const [p] = migrationPlan([{ date: '2026-09-01', day: null, logs: [log] }], [], 1);
+  // Stamp == canonical ⇒ Category D: migration adds NO delta, so lifetime
+  // stays at the under-counted 0 while the ledger folds canonical 5.
+  assert.equal(p.category, 'D');
+  assert.equal(p.deltaSmokingUnits, 0);
+  assert.equal(p.canonicalSmokingUnits, 5);
+  const lifetimeAfterMigration = 0 + p.deltaSmokingUnits;
+  // MANUAL_DELETE of the only log ⇒ date ineligible ⇒ debit the folded canonical.
+  const after = calculateDailyFinancials(null, [], [], 1);
+  assert.equal(after.eligible, false);
+  assert.equal(lifetimeAfterMigration - p.canonicalSmokingUnits, -5); // the unfloored write
+  assert.equal(nextLifetimeSmokingUnits(lifetimeAfterMigration, p.canonicalSmokingUnits, 0), 0);
+  // MANUAL_UPDATE (replace 5 → 2) from the same state also floors.
+  assert.equal(nextLifetimeSmokingUnits(lifetimeAfterMigration, 5, 2), 0);
+});
+
+test('lifetime smokingUnits floor leaves money fields signed and rounds to whole units', () => {
+  assert.equal(nextLifetimeSmokingUnits(10, 2.4, 0), 8);
+  assert.equal(nextLifetimeSmokingUnits(undefined, 3, null), 0);
+  assert.equal(roundMoney(0 - 5), -5); // money is not floored
+});
+
+test('index.js: every lifetimeAggregates.smokingUnits write goes through nextLifetimeSmokingUnits', () => {
+  // index.js needs firebase-admin at import time, so pin its write sites by source.
+  const src = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  const writes = src.split(/\r?\n/).filter((l) => /^\s*smokingUnits:\s*\S/.test(l) && /cur|Agg/.test(l));
+  assert.equal(writes.length, 4);
+  for (const line of writes) assert.match(line, /nextLifetimeSmokingUnits\(/);
+});
 
 // ============================================================================
 // REGRESSION SUITE: FULL REPOSITORY REMEDIATION (FIX 1, 2, 6, 7, 15)

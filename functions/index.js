@@ -17,7 +17,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { setGlobalOptions } from 'firebase-functions/v2';
 import {
   calculateDailyFinancials, computeDayCredit, fingerprintOf, applyDelta, isArchiveLog, manualUpdateCredit, migrationPlan,
-  roundMoney, stampFromConfig, resolveHistoricalDayEdit,
+  roundMoney, stampFromConfig, resolveHistoricalDayEdit, nextLifetimeSmokingUnits,
 } from './financial.js';
 import {
   MAX_COUNT, MAX_DAY_TRACKERS, consumeRateLimit, counterGraceTrackingDate, requireCounterDate, requireId,
@@ -86,7 +86,7 @@ function writeLedgerAndLifetime(t, userRef, ledgerRef, ledgerExisted, existing, 
       lifetimeAggregates: {
         saved: roundMoney(num(cur.saved) - num(oldCredit.saved) + num(newCredit.saved)),
         wasted: roundMoney(num(cur.wasted) - num(oldCredit.wasted) + num(newCredit.wasted)),
-        smokingUnits: Math.round(num(cur.smokingUnits) - num(oldCredit.smokingUnits) + num(newCredit.smokingUnits)),
+        smokingUnits: nextLifetimeSmokingUnits(cur.smokingUnits, oldCredit.smokingUnits, newCredit.smokingUnits),
         baselineSaved: roundMoney(num(cur.baselineSaved) - num(oldCredit.baselineSaved) + num(newCredit.baselineSaved)),
       },
     }, { merge: true });
@@ -521,7 +521,7 @@ export const executeFinancialOperation = onCall(async (request) => {
         lifetimeAggregates: {
           saved: roundMoney(num(cur.saved) - num(alreadyFolded.saved) + num(credit.saved)),
           wasted: roundMoney(num(cur.wasted) - num(alreadyFolded.wasted) + num(credit.wasted)),
-          smokingUnits: Math.round(num(cur.smokingUnits) - num(alreadyFolded.smokingUnits) + num(credit.smokingUnits)),
+          smokingUnits: nextLifetimeSmokingUnits(cur.smokingUnits, alreadyFolded.smokingUnits, credit.smokingUnits),
           baselineSaved: roundMoney(num(cur.baselineSaved) - num(alreadyFolded.baselineSaved) + num(credit.baselineSaved)),
         },
       }, { merge: true });
@@ -536,7 +536,7 @@ export const executeFinancialOperation = onCall(async (request) => {
             lifetimeAggregates: {
               saved: roundMoney(num(curAgg.saved) - num(old.saved)),
               wasted: roundMoney(num(curAgg.wasted) - num(old.wasted)),
-              smokingUnits: Math.round(num(curAgg.smokingUnits) - num(old.smokingUnits)),
+              smokingUnits: nextLifetimeSmokingUnits(curAgg.smokingUnits, old.smokingUnits, 0),
               baselineSaved: roundMoney(num(curAgg.baselineSaved) - num(old.baselineSaved)),
             },
           }, { merge: true });
@@ -720,7 +720,7 @@ export const migrateAccount = onCall(async (request) => {
           lifetimeAggregates: {
             saved: roundMoney(num(cur.saved) + num(p.deltaSaved)),
             wasted: roundMoney(num(cur.wasted) + num(p.deltaWasted)),
-            smokingUnits: Math.round(num(cur.smokingUnits) + num(p.deltaSmokingUnits)),
+            smokingUnits: nextLifetimeSmokingUnits(cur.smokingUnits, 0, p.deltaSmokingUnits),
             baselineSaved: roundMoney(num(cur.baselineSaved) + num(p.deltaBaselineSaved)),
           },
           updatedAt: new Date(),
