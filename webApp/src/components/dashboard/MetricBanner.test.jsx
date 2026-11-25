@@ -83,6 +83,41 @@ describe('MetricBanner tracking streak', () => {
     expect(screen.getByText('3 trackers above target')).toBeTruthy();
   });
 
+  it('colours an above-target goal as danger, never in the (green-by-default) accent', () => {
+    const m = makeMetrics({
+      count: 35, limit: 28,
+      goalStatus: { status: 'over', belowTarget: 0, aboveTarget: 7, overTrackers: 1, atTrackers: 1, underTrackers: 0, totalTrackers: 2 },
+    });
+    render(<MetricBanner m={m} onEndDay={vi.fn()} />);
+    const goal = screen.getByText('1 tracker above target');
+    expect(goal.className).toContain('text-danger');
+    expect(goal.className).not.toContain('text-accent');
+  });
+
+  it('colours Remaining by the day state: accent under, amber at, danger over', () => {
+    const { rerender } = render(<MetricBanner m={makeMetrics({ count: 7, limit: 20 })} onEndDay={vi.fn()} />);
+    expect(screen.getByText('13').className).toContain('text-accent');
+
+    rerender(<MetricBanner m={makeMetrics({ count: 20, limit: 20 })} onEndDay={vi.fn()} />);
+    expect(screen.getByText('0').className).toContain('text-amber-300');
+
+    rerender(<MetricBanner m={makeMetrics({ count: 35, limit: 28 })} onEndDay={vi.fn()} />);
+    const remaining = screen.getByText('0');
+    expect(remaining.className).toContain('text-danger');
+    expect(remaining.className).not.toContain('text-accent');
+  });
+
+  it('shows the real daily-use share above target, matching the count header', () => {
+    render(<MetricBanner m={makeMetrics({ count: 35, limit: 28 })} onEndDay={vi.fn()} />);
+    expect(screen.getByText('35 / 28 units')).toBeTruthy();
+    expect(screen.getByText('125%')).toBeTruthy();
+    expect(screen.queryByText('100%')).toBeNull();
+    expect(screen.getByText('7 over target')).toBeTruthy();
+    const bar = screen.getByRole('progressbar', { name: 'Daily use' });
+    expect(bar.getAttribute('aria-valuenow')).toBe('100');
+    expect(bar.getAttribute('aria-valuetext')).toBe("125% of today's target, 7 over");
+  });
+
   it('renders no-target fallback when goalStatus is null', () => {
     render(<MetricBanner m={makeMetrics({ goalStatus: null })} onEndDay={vi.fn()} />);
     expect(screen.getByText('No target')).toBeTruthy();

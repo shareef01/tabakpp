@@ -695,21 +695,29 @@ export const HistoryScreen = React.memo(({
                     isToday ? "bg-accent/[0.04]" : "bg-transparent hover:bg-white/[0.025]"
                   )}
                 >
+                  {/* The date owns the first line: on a phone the badge beside it
+                      left the date ~70px and truncated it to "M…". The badge
+                      takes the second line, which used to repeat it in words. */}
                   <div className="flex flex-col gap-1.5 min-w-0 flex-1">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-[13px] font-black text-white tracking-tight truncate">
-                        {isToday ? 'Today' : formatDateDisplay(log.logDate)}
-                      </span>
-                      <span className={cn(
-                        "shrink-0 inline-flex items-center px-1.5 h-5 rounded-md text-[11px] font-black uppercase tracking-[0.12em] ring-1 ring-inset",
-                        origin.tone
-                      )}>
-                        {origin.label}
-                      </span>
-                    </div>
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-400">
-                      {isToday ? 'Open day' : 'Logged session'}
+                    <span className="text-[13px] font-black text-white tracking-tight truncate">
+                      {isToday ? 'Today' : formatDateDisplay(log.logDate)}
                     </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        title={origin.label}
+                        className={cn(
+                          "min-w-0 truncate inline-flex items-center px-1.5 h-5 rounded-md text-[11px] font-black uppercase tracking-[0.12em] ring-1 ring-inset",
+                          origin.tone
+                        )}
+                      >
+                        <span className="truncate">{origin.label}</span>
+                      </span>
+                      {isToday && (
+                        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-400">
+                          Open day
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex flex-col items-end gap-0.5 shrink-0 mr-1">

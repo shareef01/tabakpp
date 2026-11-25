@@ -53,7 +53,7 @@ const TYPE_LABELS = {
   SIMPLE: 'Custom',
 };
 
-const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel }) => {
+export const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel }) => {
   const typeLabel = TYPE_LABELS[config.type] || 'Tracker';
   return (
     <div className="group flex items-center gap-3 md:gap-4 w-full px-3 py-3 md:px-4 rounded-2xl bg-white/[0.02] ring-1 ring-inset ring-white/[0.06] hover:bg-white/[0.035] hover:ring-white/[0.1] transition-colors duration-200">
@@ -62,7 +62,7 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           type="button"
           onClick={() => onReo(config.id, 'up')}
           disabled={idx === 0}
-          aria-label="Move up"
+          aria-label={`Move ${config.name} up`}
           className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.06] outline-hidden focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
         >
           <ArrowUp size={14} strokeWidth={2.75} />
@@ -71,30 +71,30 @@ const ProtocolListItem = React.memo(({ config, idx, total, onReo, onEdit, onDel 
           type="button"
           onClick={() => onReo(config.id, 'down')}
           disabled={idx === total - 1}
-          aria-label="Move down"
+          aria-label={`Move ${config.name} down`}
           className="min-w-11 min-h-11 w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-white hover:bg-white/[0.06] outline-hidden focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
         >
           <ArrowDown size={14} strokeWidth={2.75} />
         </button>
       </div>
 
+      {/* The name owns the first line; the limit and type share the second.
+          Before, a non-shrinking type badge sat beside the name and the limit
+          had its own column (and was repeated as "Daily limit N"), which left
+          the name ~10px on a phone: "Roll-ups" rendered as "R". */}
       <div className="flex flex-col gap-1.5 min-w-0 flex-1">
+        <span className="text-[14px] font-black text-white tracking-tight truncate" title={config.name}>
+          {config.name}
+        </span>
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[14px] font-black text-white tracking-tight truncate">
-            {config.name}
+          <span className="shrink-0 text-[13px] font-black tabular-nums text-white leading-none">
+            {config.limit}
+            <span className="ml-1 text-[11px] font-black uppercase tracking-[0.12em] text-neutral-400">/ day</span>
           </span>
-          <span className="shrink-0 inline-flex items-center px-1.5 h-5 rounded-md text-[11px] font-black uppercase tracking-[0.12em] text-neutral-400 bg-white/[0.04] ring-1 ring-inset ring-white/[0.06]">
+          <span title={typeLabel} className="min-w-0 truncate px-1.5 py-0.5 rounded-md text-[11px] leading-4 font-black uppercase tracking-[0.12em] text-neutral-400 bg-white/[0.04] ring-1 ring-inset ring-white/[0.06]">
             {typeLabel}
           </span>
         </div>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-400">
-          Daily limit {config.limit}
-        </span>
-      </div>
-
-      <div className="flex flex-col items-end gap-0.5 shrink-0 mr-1">
-        <span className="text-lg font-black tabular-nums text-white leading-none">{config.limit}</span>
-        <span className="text-[11px] font-black uppercase tracking-[0.14em] text-neutral-400">/ day</span>
       </div>
 
       <div className="flex items-center gap-0.5 shrink-0">

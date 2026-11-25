@@ -487,12 +487,16 @@ fun LogItem(
                 )
             }
             
+            // Each action names its day: identical "Edit history entry" labels
+            // on every row left TalkBack users unable to tell rows apart
+            // (web parity: "Edit entry for <date>").
+            val day = SmokingCalculator.formatDateDisplay(log.logDate)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 IconButton(onClick = onEdit, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.Edit, contentDescription = "Edit history entry", tint = TextMuted, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Edit, contentDescription = "Edit entry for $day", tint = TextMuted, modifier = Modifier.size(18.dp))
                 }
                 if (onDelete != null) IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete history entry", tint = ErrorColor, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Delete, contentDescription = "Delete entry for $day", tint = ErrorColor, modifier = Modifier.size(18.dp))
                 }
             }
         }
