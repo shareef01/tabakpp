@@ -69,7 +69,7 @@ object RegistryMutations {
         LifetimeAggregates(
             saved = SmokingCalculator.roundMoney(current.saved - credit.saved),
             wasted = SmokingCalculator.roundMoney(current.wasted - credit.wasted),
-            smokingUnits = current.smokingUnits - credit.smokingUnits,
+            smokingUnits = SmokingCalculator.nextLifetimeSmokingUnits(current.smokingUnits, credit.smokingUnits, 0.0),
             baselineSaved = SmokingCalculator.roundMoney(current.baselineSaved - credit.baselineSaved)
         )
 
@@ -81,7 +81,7 @@ object RegistryMutations {
         LifetimeAggregates(
             saved = SmokingCalculator.roundMoney(current.saved - oldCredit.saved + newCredit.saved),
             wasted = SmokingCalculator.roundMoney(current.wasted - oldCredit.wasted + newCredit.wasted),
-            smokingUnits = current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits,
+            smokingUnits = SmokingCalculator.nextLifetimeSmokingUnits(current.smokingUnits, oldCredit.smokingUnits, newCredit.smokingUnits),
             baselineSaved = SmokingCalculator.roundMoney(current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
         )
 

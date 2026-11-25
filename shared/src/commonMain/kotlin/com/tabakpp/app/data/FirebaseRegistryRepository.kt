@@ -262,7 +262,7 @@ class FirebaseRegistryRepository(
                 updateFields(userRef) {
                     "lifetimeAggregates.saved" to SmokingCalculator.roundMoney(current.saved - oldCredit.saved + newCredit.saved)
                     "lifetimeAggregates.wasted" to SmokingCalculator.roundMoney(current.wasted - oldCredit.wasted + newCredit.wasted)
-                    "lifetimeAggregates.smokingUnits" to (current.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits)
+                    "lifetimeAggregates.smokingUnits" to SmokingCalculator.nextLifetimeSmokingUnits(current.smokingUnits, oldCredit.smokingUnits, newCredit.smokingUnits)
                     "lifetimeAggregates.baselineSaved" to SmokingCalculator.roundMoney(current.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
                 }
             }
@@ -644,7 +644,7 @@ class FirebaseRegistryRepository(
                     updateFields(userRef) {
                         "lifetimeAggregates.saved" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.saved - oldCredit.saved + newCredit.saved)
                         "lifetimeAggregates.wasted" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.wasted - oldCredit.wasted + newCredit.wasted)
-                        "lifetimeAggregates.smokingUnits" to (profile.lifetimeAggregates.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits)
+                        "lifetimeAggregates.smokingUnits" to SmokingCalculator.nextLifetimeSmokingUnits(profile.lifetimeAggregates.smokingUnits, oldCredit.smokingUnits, newCredit.smokingUnits)
                         "lifetimeAggregates.baselineSaved" to SmokingCalculator.roundMoney(profile.lifetimeAggregates.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
                     }
                 }
@@ -949,7 +949,7 @@ class FirebaseRegistryRepository(
                 updateFields(userRef) {
                     "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + newCredit.saved)
                     "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + newCredit.wasted)
-                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + newCredit.smokingUnits)
+                    "lifetimeAggregates.smokingUnits" to SmokingCalculator.nextLifetimeSmokingUnits(cur.smokingUnits, oldCredit.smokingUnits, newCredit.smokingUnits)
                     "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + newCredit.baselineSaved)
                 }
             }
@@ -1049,7 +1049,7 @@ class FirebaseRegistryRepository(
                 updateFields(userRef) {
                     "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + n.saved)
                     "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + n.wasted)
-                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + n.smokingUnits)
+                    "lifetimeAggregates.smokingUnits" to SmokingCalculator.nextLifetimeSmokingUnits(cur.smokingUnits, oldCredit.smokingUnits, n.smokingUnits)
                     "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + n.baselineSaved)
                 }
             }
@@ -1091,7 +1091,7 @@ class FirebaseRegistryRepository(
                 updateFields(userRef) {
                     "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + n.saved)
                     "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + n.wasted)
-                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + n.smokingUnits)
+                    "lifetimeAggregates.smokingUnits" to SmokingCalculator.nextLifetimeSmokingUnits(cur.smokingUnits, oldCredit.smokingUnits, n.smokingUnits)
                     "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + n.baselineSaved)
                 }
             }
@@ -1138,7 +1138,7 @@ class FirebaseRegistryRepository(
                 updateFields(userRef) {
                     "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + n.saved)
                     "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + n.wasted)
-                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + n.smokingUnits)
+                    "lifetimeAggregates.smokingUnits" to SmokingCalculator.nextLifetimeSmokingUnits(cur.smokingUnits, oldCredit.smokingUnits, n.smokingUnits)
                     "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + n.baselineSaved)
                 }
             }
@@ -1220,7 +1220,7 @@ class FirebaseRegistryRepository(
                 updateFields(userRef) {
                     "lifetimeAggregates.saved" to (cur.saved - oldCredit.saved + n.saved)
                     "lifetimeAggregates.wasted" to (cur.wasted - oldCredit.wasted + n.wasted)
-                    "lifetimeAggregates.smokingUnits" to (cur.smokingUnits - oldCredit.smokingUnits + n.smokingUnits)
+                    "lifetimeAggregates.smokingUnits" to SmokingCalculator.nextLifetimeSmokingUnits(cur.smokingUnits, oldCredit.smokingUnits, n.smokingUnits)
                     "lifetimeAggregates.baselineSaved" to (cur.baselineSaved - oldCredit.baselineSaved + n.baselineSaved)
                 }
             }

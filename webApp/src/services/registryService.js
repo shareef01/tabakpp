@@ -338,7 +338,7 @@ const applyLateCounterWrite = async (transaction, uid, dayRef, day, counterId, d
       transaction.update(userRef, {
         'lifetimeAggregates.saved': SmokingCalculator.roundMoney((current.saved || 0) - (oldCredit.saved || 0) + newCredit.saved),
         'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((current.wasted || 0) - (oldCredit.wasted || 0) + newCredit.wasted),
-        'lifetimeAggregates.smokingUnits': (current.smokingUnits || 0) - (oldCredit.smokingUnits || 0) + newCredit.smokingUnits,
+        'lifetimeAggregates.smokingUnits': SmokingCalculator.nextLifetimeSmokingUnits(current.smokingUnits, oldCredit.smokingUnits, newCredit.smokingUnits),
         'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((current.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0)),
       });
     }
@@ -1031,7 +1031,7 @@ export const RegistryService = {
           transaction.update(userRef, {
             'lifetimeAggregates.saved': SmokingCalculator.roundMoney((current.saved || 0) - (oldCredit.saved || 0) + newCredit.saved),
             'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((current.wasted || 0) - (oldCredit.wasted || 0) + newCredit.wasted),
-            'lifetimeAggregates.smokingUnits': (current.smokingUnits || 0) - (oldCredit.smokingUnits || 0) + newCredit.smokingUnits,
+            'lifetimeAggregates.smokingUnits': SmokingCalculator.nextLifetimeSmokingUnits(current.smokingUnits, oldCredit.smokingUnits, newCredit.smokingUnits),
             'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((current.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0)),
           });
         }
@@ -1169,7 +1169,7 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.saved || 0) - oldCredit.saved + newCredit.saved),
         'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.wasted || 0) - oldCredit.wasted + newCredit.wasted),
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - oldCredit.smokingUnits + newCredit.smokingUnits,
+        'lifetimeAggregates.smokingUnits': SmokingCalculator.nextLifetimeSmokingUnits(profile.lifetimeAggregates?.smokingUnits, oldCredit.smokingUnits, newCredit.smokingUnits),
         'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.baselineSaved || 0) - (oldCredit.baselineSaved || 0) + (newCredit.baselineSaved || 0))
       });
     });
@@ -1213,7 +1213,7 @@ export const RegistryService = {
       transaction.update(userRef, {
         'lifetimeAggregates.saved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.saved || 0) - credit.saved),
         'lifetimeAggregates.wasted': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.wasted || 0) - credit.wasted),
-        'lifetimeAggregates.smokingUnits': (profile.lifetimeAggregates?.smokingUnits || 0) - credit.smokingUnits,
+        'lifetimeAggregates.smokingUnits': SmokingCalculator.nextLifetimeSmokingUnits(profile.lifetimeAggregates?.smokingUnits, credit.smokingUnits, 0),
         'lifetimeAggregates.baselineSaved': SmokingCalculator.roundMoney((profile.lifetimeAggregates?.baselineSaved || 0) - (credit.baselineSaved || 0))
       });
     });

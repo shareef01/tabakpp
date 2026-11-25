@@ -762,6 +762,20 @@ export const SmokingCalculator = {
     ), 0);
   },
 
+  /**
+   * Lifetime `smokingUnits` after removing `debit` and adding `credit`,
+   * floored at 0 (Kotlin SmokingCalculator.nextLifetimeSmokingUnits).
+   *
+   * The one-shot back-fill counts logs against LIVE configs, while later
+   * debits use the log's stamped credit. A log for a since-deleted smoking
+   * tracker is therefore under-counted at back-fill and over-debited later;
+   * without the floor the total goes negative and firestore.rules
+   * (`smokingUnits >= 0`) rejects the whole delete/edit with permission-denied.
+   * A count of consumed units below zero is never meaningful, so flooring
+   * only discards the back-fill's own under-count.
+   */
+  nextLifetimeSmokingUnits: (current, debit, credit) => Math.max(0, (current || 0) - (debit || 0) + (credit || 0)),
+
   sumSmokingUnitsFromLogs: (logs, configs) => {
     const logged = aggregateLoggedCountsCached(logs);
     return Object.values(logged).reduce(

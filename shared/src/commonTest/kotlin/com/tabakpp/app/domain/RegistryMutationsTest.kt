@@ -274,4 +274,25 @@ class RegistryMutationsTest {
         assertEquals(0.0, agg.baselineSaved)
         assertEquals(0.0, agg.smokingUnits)
     }
+
+    @Test
+    fun debitAndReplace_floorSmokingUnitsAtZero_moneyIsNotFloored() {
+        // The smokingUnits back-fill counts logs against live configs, so a log
+        // for a since-deleted smoking tracker is under-counted. Debiting its
+        // stamped credit must not drive the total negative: firestore.rules
+        // require smokingUnits >= 0 and would deny the whole delete/edit.
+        val stamped = LifetimeAggregates(saved = 5.0, wasted = 5.0, smokingUnits = 5.0)
+        val debited = RegistryMutations.applyDebit(LifetimeAggregates(saved = 1.0, wasted = 1.0, smokingUnits = 0.0), stamped)
+        assertEquals(0.0, debited.smokingUnits)
+        // Money keeps its signed arithmetic; the rules allow negative totals there.
+        assertEquals(-4.0, debited.saved)
+        assertEquals(-4.0, debited.wasted)
+
+        val replaced = RegistryMutations.applyReplace(
+            LifetimeAggregates(smokingUnits = 2.0),
+            LifetimeAggregates(smokingUnits = 9.0),
+            LifetimeAggregates(smokingUnits = 3.0)
+        )
+        assertEquals(0.0, replaced.smokingUnits)
+    }
 }
