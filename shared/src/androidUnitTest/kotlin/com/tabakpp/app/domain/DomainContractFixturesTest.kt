@@ -181,6 +181,14 @@ class DomainContractFixturesTest {
                 exp["completedMonth"]?.let { if (it is JsonNull) assertNull(firstCompleted) else assertEquals(it.jsonPrimitive.content, firstCompleted?.month, "completedMonth") }
                 exp["currentMonth"]?.let { if (it is JsonNull) assertNull(currentMonthMtd) else assertEquals(it.jsonPrimitive.content, currentMonthMtd?.month, "currentMonth") }
             }
+            "lifetimeSmokingUnits" -> {
+                val actual = SmokingCalculator.nextLifetimeSmokingUnits(
+                    input["current"]!!.jsonPrimitive.double,
+                    input["debit"]!!.jsonPrimitive.double,
+                    input["credit"]!!.jsonPrimitive.double
+                )
+                assertEquals(expected.jsonPrimitive.double, actual)
+            }
             "trendComparison" -> {
                 val actual = SmokingCalculator.calculateTrend(
                     input["currentAvg"]!!.jsonPrimitive.double,

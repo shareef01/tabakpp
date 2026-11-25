@@ -66,6 +66,8 @@ const runFixture = (op, input) => {
         currentMonth: current ? current.month : null,
       };
     }
+    case 'lifetimeSmokingUnits':
+      return SmokingCalculator.nextLifetimeSmokingUnits(input.current, input.debit, input.credit);
     case 'trendComparison':
       return SmokingCalculator.calculateTrend(input.currentAvg, input.previousAvg);
     case 'export': {

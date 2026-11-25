@@ -443,6 +443,40 @@ describe('RegistryService against the real SDK and rules', () => {
     expect((await profile()).lifetimeAggregates.saved).toBeCloseTo(7);
   });
 
+  it('deleting a log the smokingUnits back-fill undercounted floors the lifetime total at zero', async () => {
+    // Legacy account, not yet migrated. Its only log is stamped with 5 smoking
+    // units for a tracker that has since been deleted. The one-shot back-fill
+    // counts logs against LIVE configs, so it sees 0 units; the delete then
+    // debits the stamped 5. Without a floor that writes -5 and firestore.rules
+    // (smokingUnits >= 0) rejects the whole delete with permission-denied.
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const adminDb = context.firestore();
+      await setDoc(doc(adminDb, 'users', UID), {
+        ...baseProfile,
+        smokingUnitsMigrated: false,
+        lifetimeAggregates: { saved: 5, wasted: 5, smokingUnits: 0, baselineSaved: 0 },
+      });
+      await setDoc(doc(adminDb, 'users', UID, 'configs', 'cig'), cigConfig);
+      await setDoc(doc(adminDb, 'users', UID, 'logs', '2026-07-28_MANUAL'), {
+        id: '2026-07-28_MANUAL',
+        logDate: '2026-07-28',
+        counts: { retired: 5 },
+        trackerSnapshots: { retired: SmokingCalculator.buildTrackerSnapshot({ ...cigConfig, name: 'Rolling' }) },
+        origin: 'MANUAL_ENTRY',
+        aggregateCredit: { saved: 5, wasted: 5, smokingUnits: 5, baselineSaved: 0 },
+      });
+    });
+
+    await RegistryService.migrateSmokingUnitsIfNeeded(UID);
+    expect((await profile()).smokingUnitsMigrated).toBe(true);
+    expect((await profile()).lifetimeAggregates.smokingUnits).toBe(0);
+
+    await RegistryService.deleteLog(UID, '2026-07-28_MANUAL');
+
+    expect(await logs()).toHaveLength(0);
+    expect((await profile()).lifetimeAggregates).toEqual({ saved: 0, wasted: 0, smokingUnits: 0, baselineSaved: 0 });
+  });
+
   it('restoreLog is idempotent — a double undo cannot double-credit', async () => {
     await seed();
     await RegistryService.createManualEntry(UID, '2026-07-28', { cig: 3 });

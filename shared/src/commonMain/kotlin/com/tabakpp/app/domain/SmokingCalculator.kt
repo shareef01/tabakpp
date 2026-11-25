@@ -749,6 +749,19 @@ object SmokingCalculator {
         }
     }
 
+    /**
+     * Lifetime `smokingUnits` after removing [debit] and adding [credit],
+     * floored at 0 (web SmokingCalculator.nextLifetimeSmokingUnits).
+     *
+     * The one-shot back-fill counts logs against LIVE configs, while later
+     * debits use the log's stamped credit. A log for a since-deleted smoking
+     * tracker is therefore under-counted at back-fill and over-debited later;
+     * without the floor the total goes negative and firestore.rules
+     * (`smokingUnits >= 0`) rejects the whole delete/edit with permission-denied.
+     */
+    fun nextLifetimeSmokingUnits(current: Double, debit: Double, credit: Double): Double =
+        max(0.0, current - debit + credit)
+
     fun sumSmokingUnitsFromLogs(logs: List<LogEntry>, configs: List<TrackerConfig>): Double {
         val logged = aggregateLoggedCounts(logs)
         return logged.values.sumOf { sumSmokingUnits(it, configs) }

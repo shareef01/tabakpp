@@ -510,6 +510,18 @@
         "profile": null
       },
       "expected": { "exportVersion": 1, "daysCount": 3, "logsCount": 0,
-        "csvHeader": "date,source,tracker_id,tracker_name,count,target,baseline,unit_price,spent,saved,status" } }
+        "csvHeader": "date,source,tracker_id,tracker_name,count,target,baseline,unit_price,spent,saved,status" } },
+    { "case": "lifetime_smoking_units_debit_within_total", "op": "lifetimeSmokingUnits",
+      "input": { "current": 12, "debit": 5, "credit": 0 },
+      "expected": 7 },
+    { "case": "lifetime_smoking_units_replace_moves_by_delta", "op": "lifetimeSmokingUnits",
+      "input": { "current": 12, "debit": 5, "credit": 8 },
+      "expected": 15 },
+    { "case": "lifetime_smoking_units_backfill_undercount_floors_at_zero", "op": "lifetimeSmokingUnits",
+      "input": { "current": 0, "debit": 5, "credit": 0 },
+      "expected": 0 },
+    { "case": "lifetime_smoking_units_replace_floors_at_zero", "op": "lifetimeSmokingUnits",
+      "input": { "current": 2, "debit": 9, "credit": 3 },
+      "expected": 0 }
   ]
 }
