@@ -727,6 +727,26 @@ jobs:
             ${{ steps.sdk-cache.outputs.root }}/system-images/android-35/default/x86_64
           key: android-sdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.sdk-cache.outputs.image }}-api35-default-x86_64-${{ hashFiles('.github/workflows/android-integration.yml') }}
 
+      # GitHub's Ubuntu runners expose /dev/kvm, but not to the runner user, so
+      # the step below fell back to software emulation (-accel off). That was
+      # always slow (boots of ~7 min) and on runner image ubuntu-26.04
+      # 20261116.202.1 the emulator never reached adb within the 13-minute
+      # readiness window (PR #184, run 45522948870, attempts 1 and 2). Granting
+      # the runner user access lets the existing check pick hardware
+      # acceleration. Fail-soft: without /dev/kvm the old fallback still applies.
+      - name: Enable KVM for the emulator
+        run: |
+          set -euo pipefail
+          if [ -e /dev/kvm ]; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+              | sudo tee /etc/udev/rules.d/99-kvm4all.rules > /dev/null
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            ls -l /dev/kvm
+          else
+            echo "No /dev/kvm on this runner; the emulator step will use software emulation."
+          fi
+
       - name: Set up emulator and run instrumentation tests
         # Historical normal duration is ~10 min; a successful full run is
         # ~16 min. Without a per-step cap an emulator boot hang (observed:
