@@ -34,17 +34,40 @@ NETWORK_CAUSE = re.compile(
 )
 
 # Never retry these, even if a download error also appears.
-REAL_FAILURE = re.compile(
-    r"Compilation error"
-    r"|Execution failed for task '[^']*(?:compile|lint|test|sign|package|validateSigning)[^']*'",
+COMPILATION_ERROR = re.compile(r"Compilation error", re.IGNORECASE)
+TASK_FAILURE = re.compile(
+    r"Execution failed for task '[^']*(?:compile|lint|test|sign|package|validateSigning)[^']*'",
     re.IGNORECASE,
 )
+
+# The first cause line under a task failure when the task never ran its own
+# work because its inputs could not be downloaded. CI run 45645048588 failed
+# ':composeApp:testDebugUnitTest' this way: Maven Central answered 429 for
+# org.robolectric:nativeruntime-dist-compat while Gradle resolved the test
+# runtime classpath, so no test had run. A failing test, lint finding or
+# signing error has a different first cause ("There were failing tests", ...)
+# and is still refused.
+RESOLUTION_CAUSE = re.compile(
+    r"^\s*> Could not resolve all (?:files|dependencies|artifacts) for configuration "
+)
+
+
+def _real_task_failure(log: str) -> bool:
+    """True if any matching task failed for a reason other than resolution."""
+    lines = log.splitlines()
+    for i, line in enumerate(lines):
+        if not TASK_FAILURE.search(line):
+            continue
+        cause = next((l for l in lines[i + 1:] if l.strip()), "")
+        if not RESOLUTION_CAUSE.match(cause):
+            return True
+    return False
 
 
 def is_transient(log: str) -> bool:
     if not log.strip():
         return False
-    if REAL_FAILURE.search(log):
+    if COMPILATION_ERROR.search(log) or _real_task_failure(log):
         return False
     return bool(DOWNLOAD_CONTEXT.search(log) and NETWORK_CAUSE.search(log))
 
