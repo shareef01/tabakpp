@@ -148,6 +148,26 @@ the Spark plan.
 > and including v1.0.7 did request Play Integrity / reCAPTCHA Enterprise
 > tokens; builds from this revision do not.
 
+### Option B Cloud Functions (experimental, not deployed)
+
+Production runs on the Spark plan with no Cloud Functions. The production
+`firebase.json` therefore has no `functions` block, no Functions emulator, and
+its hosting CSP allows no `cloudfunctions.net` origin. The parked Option B code
+in `functions/` is configured only in `firebase.functions.json`, which CI uses
+to run it against the emulators:
+
+```bash
+firebase emulators:exec --config firebase.functions.json --only functions,firestore,auth "node functions/emulator.integration.mjs"
+```
+
+Deploying them needs Blaze and is not planned. That config still keeps the
+`scripts/guard-functions-deploy.mjs` predeploy guard, so even
+`firebase deploy --config firebase.functions.json` stops unless
+`TABAKPP_DEPLOY_FUNCTIONS=1` is set. A real Option B rollout would also have to
+add `https://europe-west1-<project>.cloudfunctions.net` back to `connect-src`
+in `firebase.json`. The web client loads the Functions SDK lazily, only when an
+Option B account first calls a function, so production never downloads it.
+
 ### Adding App Check later (not currently used)
 
 If attestation is ever wanted, it is a separate, opt-in change and must be

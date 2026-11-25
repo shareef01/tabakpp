@@ -21,6 +21,13 @@ vi.mock('firebase/functions', () => ({
 import { FUNCTIONS_REGION, TrustedFinancial } from './trustedFinancial';
 
 describe('TrustedFinancial', () => {
+  it('does not load or initialise the Functions SDK until a callable is used', () => {
+    // Production (Spark, LEGACY accounts) never reaches a callable, so the SDK
+    // must stay out of the startup path (lazy chunk, see vite.config.js).
+    expect(h.getFunctions).not.toHaveBeenCalled();
+    expect(h.httpsCallable).not.toHaveBeenCalled();
+  });
+
   it('calls the callable in the region the function is deployed to', async () => {
     const res = await TrustedFinancial.execute('DAY_CLOSE', { operationId: 'close_2026-10-01', date: '2026-10-01' });
 

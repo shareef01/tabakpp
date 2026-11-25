@@ -262,7 +262,7 @@ jobs:
         working-directory: webApp
         run: >-
           npx firebase emulators:exec
-          --config ../firebase.json
+          --config ../firebase.functions.json
           --project demo-takabpp-test
           --only functions,firestore,auth
           "node ../functions/emulator.integration.mjs"

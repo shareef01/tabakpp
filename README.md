@@ -102,7 +102,7 @@ Why the stack and the boundaries look the way they do — the short version for 
 - **Contract tests are what stop calculation drift.** The web port of that math is hand-mirrored rather than code-shared, so `npm run test:contract` runs one set of semantic fixtures ([`shared-tests/`](shared-tests/)) against both implementations: 76 assertions that fail if the JS and Kotlin results ever disagree.
 - **Firebase Spark was chosen, not inherited.** Auth + Firestore + Hosting cover the whole product on the free tier — no server to run, nothing to bill, no operational surface to maintain.
 - **App Check is intentionally absent.** Both clients talk to Firebase directly and Firestore Rules are the authorization boundary, so the app ships without attestation. That is a scope decision with a real cost, stated plainly: **API-key restrictions (HTTP referrer on web, package + signing certificate on Android) make casual reuse of the public key harder, but they are not App Check and they are not a substitute for authorization.** See [SECURITY.md](SECURITY.md).
-- **CI verifies all three surfaces, not just the web.** `web-and-rules` (lint, unit, contract, rules against the emulator, build, PWA, accessibility, production dependency audit), `mobile` (Kotlin unit, Compose UI, Android lint, three build variants: debug, release, staging), `functions` (callable unit and emulator integration), `test` (an Android emulator running the instrumentation suite behind a fail-closed JUnit-XML gate), and `validate-action-pins`. **Required on `main`: `mobile` and `web-and-rules`. `functions`, `test` and `validate-action-pins` run on every pull request but are advisory.**
+- **CI verifies all three surfaces, not just the web.** `web-and-rules` (lint, unit, contract, rules against the emulator, build, PWA, accessibility, production dependency audit), `mobile` (Kotlin unit, Compose UI, Android lint, three build variants: debug, release, staging), `functions` (callable unit and emulator integration), `test` (an Android emulator running the instrumentation suite behind a fail-closed JUnit-XML gate), and `validate-action-pins`. **All five are required status checks on `main` (strict), as of 2026-11-16.**
 - **Cloud Functions are kept as a reference, not deployed.** The trusted-totals design needs Blaze, and a personal-use app has no other users to protect totals from, so production stays client-computed on Spark with no plan to change. The code path stays implemented and exercised in CI as a reference. See [Known limitations](#known-limitations).
 
 ## Stack
@@ -383,7 +383,8 @@ tabakpp/
 │   ├── workflows/     ci.yml · android-integration.yml · release-android.yml
 │   └── scripts/       action-pin, lockfile and release-safety validators (+ self-tests)
 ├── firestore.rules    Authorization + validation (the primary security boundary)
-├── firebase.json      Rules, hosting, emulator and functions config (run firebase from the repo root)
+├── firebase.json      Production config: rules, hosting, Firestore/Auth emulators (run firebase from the repo root)
+├── firebase.functions.json  Experimental Option B config: functions + their emulator (deploy blocked by a guard)
 └── build.gradle.kts · settings.gradle.kts · gradle/libs.versions.toml
 ```
 

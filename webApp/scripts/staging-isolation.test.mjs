@@ -35,9 +35,27 @@ describe('Staging vs Production Configuration Isolation (Phase 5.2)', () => {
       ]);
     });
 
-    it('guards production firebase.json so a bare deploy cannot ship the parked functions', () => {
+    it('keeps the parked Option-B functions out of production firebase.json entirely', () => {
       const prodConfig = JSON.parse(readFileSync(join(rootDir, 'firebase.json'), 'utf8'));
-      expect(prodConfig.functions.predeploy).toEqual(['node scripts/guard-functions-deploy.mjs']);
+      // No `functions` block: a bare `firebase deploy` has no functions target
+      // to ship, and the production emulator config cannot load them.
+      expect(prodConfig.functions).toBeUndefined();
+      expect(prodConfig.emulators.functions).toBeUndefined();
+
+      // Production runs on Spark with no deployed callables, so its CSP allows
+      // no Cloud Functions origin at all.
+      const csp = prodConfig.hosting.headers
+        .find((h) => h.source === '/**').headers
+        .find((h) => h.key === 'Content-Security-Policy').value;
+      expect(csp).not.toContain('cloudfunctions.net');
+    });
+
+    it('guards the experimental firebase.functions.json so even it cannot deploy without an opt-in', () => {
+      const experimental = JSON.parse(readFileSync(join(rootDir, 'firebase.functions.json'), 'utf8'));
+      expect(experimental.hosting).toBeUndefined();
+      expect(experimental.functions.source).toBe('functions');
+      expect(experimental.functions.predeploy).toEqual(['node scripts/guard-functions-deploy.mjs']);
+      expect(experimental.emulators.functions).toBeDefined();
 
       expect(checkFunctionsDeploy({}).ok).toBe(false);
       expect(checkFunctionsDeploy({}).reason).toMatch(/--only firestore:rules/);
