@@ -70,6 +70,9 @@ jobs:
       - name: Test release input and acceptance guards
         run: python3 .github/scripts/test-release-safety.py
 
+      - name: Test the transient-failure classifier used by the signing retry
+        run: python3 .github/scripts/test-gradle-transient-failure.py
+
       - name: Validate version input
         id: validate-version
         run: |
@@ -229,7 +232,32 @@ jobs:
           TABAKPP_KEY_ALIAS: ${{ secrets.TABAKPP_KEY_ALIAS }}
           TABAKPP_KEY_PASSWORD: ${{ secrets.TABAKPP_KEY_PASSWORD }}
           TABAKPP_VERSION_NAME: ${{ needs.require-ci.outputs.release_version }}
-        run: ./gradlew :androidApp:assembleRelease --no-daemon
+        # Bounded retry for transient dependency-download failures only.
+        # v1.0.21's first signing attempt died in 19 s on a Maven Central
+        # HTTP 429 (run 45629063905), costing a second approval. The
+        # classifier (.github/scripts/gradle-transient-failure.py, self-tested
+        # in require-ci) retries only when the log shows a download context AND
+        # a network cause, and never on compile/lint/test/signing failures, so a
+        # real build error still fails on the first attempt. At most 3 attempts,
+        # waiting 60 s then 120 s; nothing is tagged or published until the
+        # build succeeds.
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            ./gradlew :androidApp:assembleRelease --no-daemon 2>&1 | tee "$RUNNER_TEMP/assemble-$attempt.log"
+            status=${PIPESTATUS[0]}
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ] && python3 .github/scripts/gradle-transient-failure.py "$RUNNER_TEMP/assemble-$attempt.log"; then
+              wait_s=$((60 * attempt))
+              echo "::warning::Transient dependency-download failure on attempt $attempt; retrying in ${wait_s}s."
+              sleep "$wait_s"
+              continue
+            fi
+            echo "::error::assembleRelease failed on attempt $attempt (exit $status); not a retryable network failure, or out of attempts."
+            exit "$status"
+          done
 
       - name: Stage release artifact
         run: |
