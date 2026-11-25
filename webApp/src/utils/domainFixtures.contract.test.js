@@ -68,6 +68,14 @@ const runFixture = (op, input) => {
     }
     case 'lifetimeSmokingUnits':
       return SmokingCalculator.nextLifetimeSmokingUnits(input.current, input.debit, input.credit);
+    case 'velocitySeries':
+      return SmokingCalculator.buildVelocitySeries(
+        input.logs || [],
+        (input.dayDocs || []).map((d) => ({ date: d.date, counts: d.counts || {}, status: d.status || 'closed' })),
+        input.trackingDay,
+        input.days,
+        input.activeCounts || {}
+      );
     case 'trendComparison':
       return SmokingCalculator.calculateTrend(input.currentAvg, input.previousAvg);
     case 'export': {

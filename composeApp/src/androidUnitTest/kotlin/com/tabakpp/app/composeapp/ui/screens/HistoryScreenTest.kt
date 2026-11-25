@@ -1,8 +1,10 @@
 package com.tabakpp.app.composeapp.ui.screens
 
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -172,6 +174,10 @@ class HistoryScreenTest {
         // The velocity chart reflects real (non-zero) historical data.
         rule.onNodeWithContentDescription("$d0: 7 units", substring = true).assertIsDisplayed()
         rule.onNodeWithContentDescription("$d1: 3 units", substring = true).assertIsDisplayed()
+        // A day in the window with no record is not a zero-use day.
+        val unrecorded = dayBefore(4)
+        rule.onNodeWithContentDescription("$unrecorded: no record", substring = true).assertIsDisplayed()
+        rule.onAllNodesWithContentDescription("$unrecorded: 0 units", substring = true).assertCountEquals(0)
     }
 
     // --- Scenario 2 — mixed sources ---------------------------------------

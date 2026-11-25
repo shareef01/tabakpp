@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { HistoryScreen } from './HistoryScreen';
 
 // Mock recharts ResponsiveContainer for JSDOM
@@ -131,8 +131,11 @@ describe('HistoryScreen — Option B Canonical History integration (P0 Concern A
     );
 
     // Spent Today should show "—" and "Unavailable", NEVER "0,00 €"
-    expect(screen.getByText('—')).toBeTruthy();
-    expect(screen.getByText('Unavailable')).toBeTruthy();
+    // Scoped to the Spent tile: the chart's trend delta also shows "—" when
+    // the previous day has no record.
+    const spentTile = screen.getByText('Unavailable').parentElement;
+    expect(within(spentTile).getByText('—')).toBeTruthy();
+    expect(spentTile.textContent).not.toContain('0,00');
   });
 
   it('correctly indicates unresolved components as "—" and "Unresolved"', () => {
@@ -169,8 +172,8 @@ describe('HistoryScreen — Option B Canonical History integration (P0 Concern A
       />
     );
 
-    expect(screen.getByText('—')).toBeTruthy();
-    expect(screen.getByText('Unresolved')).toBeTruthy();
+    const spentTile = screen.getByText('Unresolved').parentElement;
+    expect(within(spentTile).getByText('—')).toBeTruthy();
   });
 
   it('correctly indicates truncated or incomplete financial windows as partial', () => {

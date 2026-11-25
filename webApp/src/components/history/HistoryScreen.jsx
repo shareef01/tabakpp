@@ -31,17 +31,6 @@ const weekdayFromDateStr = (dateStr) => {
   return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
 };
 
-/** Shift a YYYY-MM-DD calendar date by `delta` days in UTC. */
-const shiftDateStr = (dateStr, delta) => {
-  const [y, m, d] = (dateStr || '').split('-').map(Number);
-  if (!y || !m || !d) return dateStr;
-  const dt = new Date(Date.UTC(y, m - 1, d + delta));
-  const yy = dt.getUTCFullYear();
-  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(dt.getUTCDate()).padStart(2, '0');
-  return `${yy}-${mm}-${dd}`;
-};
-
 const axisLabelForPeriod = (dateStr, days) => {
   if (days <= 7) return weekdayFromDateStr(dateStr);
   const [, m, d] = (dateStr || '').split('-').map(Number);
@@ -49,9 +38,6 @@ const axisLabelForPeriod = (dateStr, days) => {
   if (days <= 14) return String(d);
   return `${d}/${m}`;
 };
-
-const sumCounts = (counts = {}) =>
-  Object.values(counts).reduce((a, b) => a + Math.max(0, b || 0), 0);
 
 /**
  * Velocity series for the trend chart: one point per calendar day ending on the
@@ -65,31 +51,26 @@ const sumCounts = (counts = {}) =>
  * `dayDocs` (optional — the dated daily-document model, item 1) is merged in
  * additively alongside legacy `logs`; the two never cover the same date.
  */
-export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = []) => {
-  const logged = SmokingCalculator.projectLoggedCounts(logs, dayDocs, today, activeCounts);
-  const series = [];
-  for (let i = days - 1; i >= 1; i -= 1) {
-    const date = shiftDateStr(today, -i);
-    series.push({
-      name: axisLabelForPeriod(date, days),
-      date,
-      dateLabel: formatDateDisplay(date),
-      val: sumCounts(logged[date]),
-      isNow: false,
+//
+// The totals come from SmokingCalculator.buildVelocitySeries (shared contract
+// with Kotlin). A past day with no record has `val: null`, which Recharts
+// draws as a gap: an unrecorded day is not a day with zero use.
+export const buildVelocitySeries = (logs, today, days, activeCounts, dayDocs = []) =>
+  SmokingCalculator.buildVelocitySeries(logs, dayDocs, today, days, activeCounts || {})
+    .map(({ date, total }) => {
+      const isNow = date === today;
+      return {
+        // Not 'NOW': in small bold caps it reads as the month "NOV".
+        name: isNow ? 'TODAY' : axisLabelForPeriod(date, days),
+        date,
+        dateLabel: isNow ? 'Today' : formatDateDisplay(date),
+        val: total,
+        isNow,
+      };
     });
-  }
-  series.push({
-    // Not 'NOW': in small bold caps it reads as the month "NOV".
-    name: 'TODAY',
-    date: today,
-    dateLabel: 'Today',
-    // projectLoggedCounts already projected the live session over today's
-    // persisted day doc (replace, not merge) — no double-counting (AUD-001).
-    val: sumCounts(logged[today]),
-    isNow: true,
-  });
-  return series;
-};
+
+/** Units for display: an unrecorded day says so instead of printing "null". */
+const unitsText = (val) => (val == null ? 'No record' : `${val}`);
 
 const VelocityTooltip = ({ active, payload }) => {
   if (!active || !payload?.[0]) return null;
@@ -99,10 +80,14 @@ const VelocityTooltip = ({ active, payload }) => {
       <p className="text-[11px] font-black uppercase tracking-[0.16em] text-neutral-400">
         {point.isNow ? 'Live session' : (point.dateLabel || point.name)}
       </p>
-      <p className="mt-1 text-lg font-black tabular-nums text-white leading-none">
-        {point.val}
-        <span className="ml-1.5 text-[11px] font-bold uppercase tracking-widest text-neutral-400">units</span>
-      </p>
+      {point.val == null ? (
+        <p className="mt-1 text-sm font-bold text-neutral-400 leading-none">No record</p>
+      ) : (
+        <p className="mt-1 text-lg font-black tabular-nums text-white leading-none">
+          {point.val}
+          <span className="ml-1.5 text-[11px] font-bold uppercase tracking-widest text-neutral-400">units</span>
+        </p>
+      )}
     </div>
   );
 };
@@ -497,8 +482,11 @@ export const HistoryScreen = React.memo(({
                     <td className="py-1.5 px-3 font-medium text-neutral-300">
                       {point.isNow ? 'Today (live)' : point.dateLabel}
                     </td>
-                    <td className="py-1.5 px-3 text-right font-black tabular-nums text-white">
-                      {point.val}
+                    <td className={cn(
+                      'py-1.5 px-3 text-right tabular-nums',
+                      point.val == null ? 'font-medium text-neutral-400' : 'font-black text-white'
+                    )}>
+                      {unitsText(point.val)}
                     </td>
                   </tr>
                 ))}
@@ -510,7 +498,7 @@ export const HistoryScreen = React.memo(({
         <div className="h-40 md:h-52 w-full -mx-1">
           <p className="sr-only">
             {velocityPeriod.title}: today {velocityStats.nowVal} units, peak {velocityStats.peak} units.
-            Data: {chartData.map((point) => `${point.dateLabel}: ${point.val}`).join('; ')}.
+            Data: {chartData.map((point) => `${point.dateLabel}: ${unitsText(point.val)}`).join('; ')}.
           </p>
           {chartData.every((p) => (p.val || 0) === 0) ? (
             <div className="h-full flex items-center justify-center rounded-2xl border border-dashed border-white/[0.06]">

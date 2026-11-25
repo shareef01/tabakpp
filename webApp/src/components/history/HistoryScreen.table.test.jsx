@@ -103,6 +103,9 @@ describe('HistoryScreen Accessible Chart Table', () => {
     expect(table.textContent).toContain('4');
     expect(table.textContent).toContain('8');
     expect(table.textContent).toContain('6');
+    // 03-04..03-07 have no log and no day doc: they say so, never "null" or a fake 0.
+    expect(screen.getAllByText('No record')).toHaveLength(4);
+    expect(table.textContent).not.toContain('null');
 
     // Click again to hide table
     await user.click(toggleBtn);
@@ -132,5 +135,7 @@ describe('HistoryScreen Accessible Chart Table', () => {
     const srSummary = screen.getByText(/today 4 units/i);
     expect(srSummary).toBeInTheDocument();
     expect(srSummary.className).toContain('sr-only');
+    expect(srSummary.textContent).toContain('No record');
+    expect(srSummary.textContent).not.toContain('null');
   });
 });

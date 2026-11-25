@@ -28,7 +28,20 @@ describe('buildVelocitySeries', () => {
     const byDate = Object.fromEntries(series.map((p) => [p.date, p.val]));
     expect(byDate['2026-03-09']).toBe(12);
     expect(byDate['2026-03-08']).toBe(3);
-    expect(byDate['2026-03-07']).toBe(0);
+    // No log and no day doc: nothing was recorded, so no value — not a
+    // tobacco-free day. The chart draws a gap here.
+    expect(byDate['2026-03-07']).toBeNull();
+  });
+
+  it('keeps a recorded zero-count day as 0, distinct from an unrecorded day', () => {
+    const dayDocs = [{ date: '2026-03-08', counts: { cig: 0 }, status: 'closed' }];
+    const byDate = Object.fromEntries(buildVelocitySeries([], TODAY, 7, {}, dayDocs).map((p) => [p.date, p.val]));
+    expect(byDate['2026-03-08']).toBe(0);
+    expect(byDate['2026-03-07']).toBeNull();
+  });
+
+  it('always gives today a number, even before anything is logged', () => {
+    expect(last(buildVelocitySeries([], TODAY, 7, {})).val).toBe(0);
   });
 
   it('counts the open session on the tracking day', () => {
