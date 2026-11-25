@@ -57,7 +57,9 @@ jobs:
     # Fail safe: if change detection itself fails, run the suite anyway.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.android == 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 70, not 60: gradle-retry.sh can add up to 3 minutes of waiting plus
+    # rebuilds of "Pre-build test APKs" after a transient download failure.
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -755,7 +757,7 @@ jobs:
       - name: Set up emulator and run instrumentation tests
         # Historical normal duration is ~10 min; a successful full run is
         # ~16 min. Without a per-step cap an emulator boot hang (observed:
-        # 50+ min of no progress on PR #85) silently burns the 60-min job
+        # 50+ min of no progress on PR #85) silently burns the 70-min job
         # budget — auto-fail instead so the run can simply be re-run.
         timeout-minutes: 25
         run: |
