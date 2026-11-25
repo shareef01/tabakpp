@@ -1,5 +1,11 @@
-# Captures Android screenshots in Signal red (#FF5F5F) for the README.
+# Captures Android screenshots in Signal red (#FF5F5F) from a real device.
 # Requires: adb + unlocked device with com.tabakpp.app installed and signed in.
+#
+# NOT for the README showcase: it captures whatever account and tracking data
+# is on the device. The README images come from synthetic data instead:
+#   TABAKPP_SHOWCASE_DIR=<dir> ./gradlew :composeApp:testDebugUnitTest --tests "*ShowcaseScreenshotTest" --rerun
+# (composeApp/src/androidUnitTest/.../ShowcaseScreenshotTest.kt), then copy the
+# three PNGs to assets/screenshots/showcase/android-{track,history,settings}.png.
 #
 #   powershell -File scripts/android-screenshots.ps1 [-Serial SERIAL]
 #
