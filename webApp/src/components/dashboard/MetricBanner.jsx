@@ -28,8 +28,31 @@ const valueFontSize = (value) => {
   return `clamp(1.25rem, min(24cqi, ${fit.toFixed(2)}cqi), 2.35rem)`;
 };
 
-const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success, className, title, isPrimary = false }) => {
+// Semantic tone for a tile. `danger` wins: an above-target state must never
+// render in the accent colour, which defaults to green (Android parity:
+// MetricBanner.kt uses ErrorColor for "over").
+const toneOf = ({ danger, accent, warning, success }) =>
+  danger ? 'danger' : accent ? 'accent' : warning ? 'warning' : success ? 'success' : 'neutral';
+
+const ICON_TONE = {
+  danger: 'text-danger',
+  accent: 'text-accent',
+  warning: 'text-amber-400',
+  success: 'text-emerald-400',
+  neutral: 'text-neutral-400',
+};
+
+const VALUE_TONE = {
+  danger: 'text-danger',
+  accent: 'text-accent',
+  warning: 'text-amber-300',
+  success: 'text-emerald-400',
+  neutral: 'text-white',
+};
+
+const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success, danger, className, title, isPrimary = false }) => {
   const sentence = isSentence(String(value ?? '').trim());
+  const tone = toneOf({ danger, accent, warning, success });
   return (
     <div
       title={title}
@@ -42,10 +65,7 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success,
       <div className="flex items-center gap-1.5 max-w-full">
         <Icon
           size={isPrimary ? 14 : 12}
-          className={cn(
-            'shrink-0',
-            accent ? 'text-accent' : warning ? 'text-amber-400' : success ? 'text-emerald-400' : 'text-neutral-400'
-          )}
+          className={cn('shrink-0', ICON_TONE[tone])}
           strokeWidth={2.5}
           aria-hidden="true"
         />
@@ -62,7 +82,7 @@ const MetricColumn = ({ icon: Icon, label, value, sub, accent, warning, success,
         className={cn(
           'max-w-full font-black tracking-tight tabular-nums',
           sentence ? 'leading-tight text-balance break-words' : 'leading-none whitespace-nowrap',
-          accent ? 'text-accent' : warning ? 'text-amber-300' : success ? 'text-emerald-400' : 'text-white'
+          VALUE_TONE[tone]
         )}
       >
         {value}
@@ -100,8 +120,12 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
   const { status, aboveTarget } = SmokingCalculator.getLimitStatus(m.count || 0, m.limit || 0);
   const isOver = status === 'over';
   const isAtLimit = status === 'at';
-  const progress = (m.limit || 0) > 0 ? Math.min(1, (m.count || 0) / m.limit) : (status === 'under' ? 0 : 1);
-  const quotaPct = Math.round(progress * 100);
+  const ratio = (m.limit || 0) > 0 ? (m.count || 0) / m.limit : (status === 'under' ? 0 : 1);
+  const progress = Math.min(1, ratio);
+  // The tile shows the real share (35 of 28 → 125%), so it agrees with the
+  // "35 / 28 units" header; only the bar is clamped to its track.
+  const quotaPct = Math.round(ratio * 100);
+  const barPct = Math.round(progress * 100);
   const quotaSub = isOver ? `${aboveTarget} over target` : isAtLimit ? 'At target' : 'Usage';
   const quotaWarning = isOver || isAtLimit || progress >= 0.8;
 
@@ -145,7 +169,9 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           label="Remaining"
           value={remainingUnits}
           sub="Units"
-          accent
+          danger={isOver}
+          warning={isAtLimit}
+          accent={!isOver && !isAtLimit}
           isPrimary
           className="order-1 md:order-1"
         />
@@ -153,7 +179,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           icon={Target}
           label="TODAY'S GOAL"
           value={goalText}
-          accent={m.goalStatus?.status === 'over'}
+          danger={m.goalStatus?.status === 'over'}
           warning={m.goalStatus?.status === 'at'}
           success={m.goalStatus?.status === 'under'}
           className="order-3 col-span-2 md:order-2 md:col-span-2"
@@ -205,6 +231,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           label="Daily Use"
           value={`${quotaPct}%`}
           sub={quotaSub}
+          danger={isOver}
           warning={quotaWarning}
         />
       </div>
@@ -216,7 +243,8 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
           role="progressbar"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.min(100, quotaPct)}
+          aria-valuenow={barPct}
+          aria-valuetext={`${quotaPct}% of today's target${isOver ? `, ${aboveTarget} over` : ''}`}
           aria-label="Daily use"
         >
           <div
@@ -224,7 +252,7 @@ export const MetricBanner = React.memo(({ m, onEndDay, isEnding }) => {
               'h-full rounded-full transition-all duration-700 ease-out',
               isOver ? 'bg-danger' : quotaWarning ? 'bg-amber-400' : 'bg-accent'
             )}
-            style={{ width: `${Math.min(100, quotaPct)}%` }}
+            style={{ width: `${barPct}%` }}
           />
         </div>
       </div>
