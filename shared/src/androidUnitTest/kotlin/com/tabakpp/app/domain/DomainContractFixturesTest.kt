@@ -189,6 +189,21 @@ class DomainContractFixturesTest {
                 )
                 assertEquals(expected.jsonPrimitive.double, actual)
             }
+            "velocitySeries" -> {
+                val actual = SmokingCalculator.buildVelocitySeries(
+                    logs = (input["logs"]?.jsonArray ?: emptyList()).map { parseLog(it.jsonObject) },
+                    dayDocs = (input["dayDocs"]?.jsonArray ?: emptyList()).map { parseDayDoc(it.jsonObject) },
+                    trackingDay = input["trackingDay"]!!.jsonPrimitive.content,
+                    days = input["days"]!!.jsonPrimitive.int,
+                    activeCounts = input["activeCounts"]?.let { jsonObjectToDoubleMap(it.jsonObject) } ?: emptyMap(),
+                )
+                val exp = expected.jsonArray.map {
+                    val o = it.jsonObject
+                    val total = o["total"]!!
+                    SmokingCalculator.DateTotal(o["date"]!!.jsonPrimitive.content, if (total is JsonNull) null else total.jsonPrimitive.int)
+                }
+                assertEquals(exp, actual)
+            }
             "trendComparison" -> {
                 val actual = SmokingCalculator.calculateTrend(
                     input["currentAvg"]!!.jsonPrimitive.double,

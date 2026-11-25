@@ -31,20 +31,23 @@ fun HistoryChart(
     val chartDescription = dailyTotals.joinToString(
         prefix = "Usage trend. ",
         separator = "; "
-    ) { "${it.date}: ${it.total} units" }
-    
+    ) { if (it.total == null) "${it.date}: no record" else "${it.date}: ${it.total} units" }
+    // A null total is a day with no record: it gets no point and breaks the
+    // line, so the chart never presents it as a tobacco-free (zero) day.
+    val recorded = dailyTotals.withIndex().filter { it.value.total != null }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 156.dp, max = 196.dp)
             .semantics { contentDescription = chartDescription }
     ) {
-        if (dailyTotals.isEmpty()) {
+        if (recorded.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("NO DATA LOGGED", color = TextDisabled, style = TabakTypography.labelSmall.copy(letterSpacing = 1.sp))
             }
         } else {
-            val maxTotalVal = dailyTotals.maxOf { it.total }.coerceAtLeast(1)
+            val maxTotalVal = recorded.maxOf { it.value.total ?: 0 }.coerceAtLeast(1)
             val maxTotal = maxTotalVal.toFloat() * 1.3f
 
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -64,49 +67,61 @@ fun HistoryChart(
                 }
 
                 if (dailyTotals.size > 1) {
+                    // x keeps calendar spacing (index in the full series), so a
+                    // missing day leaves visible room instead of being skipped.
                     val spacing = width / (dailyTotals.size - 1)
-                    val points = dailyTotals.mapIndexed { index, data ->
-                        val x = index * spacing
-                        val y = height - (data.total.toFloat() / maxTotal * height)
-                        Offset(x, y)
+                    fun pointAt(index: Int, total: Int) =
+                        Offset(index * spacing, height - (total.toFloat() / maxTotal * height))
+
+                    // Runs of consecutive recorded days; a gap ends a run.
+                    val runs = mutableListOf<MutableList<Offset>>()
+                    var lastIndex = -2
+                    recorded.forEach { (index, data) ->
+                        if (index != lastIndex + 1) runs += mutableListOf<Offset>()
+                        runs.last() += pointAt(index, data.total ?: 0)
+                        lastIndex = index
                     }
 
-                    // 2. PATH CALCULATION
-                    val path = Path().apply {
-                        moveTo(points[0].x, points[0].y)
-                        for (i in 0 until points.size - 1) {
-                            val p0 = points[i]
-                            val p1 = points[i + 1]
-                            val controlPoint1 = Offset(p0.x + (p1.x - p0.x) / 2.2f, p0.y)
-                            val controlPoint2 = Offset(p1.x - (p1.x - p0.x) / 2.2f, p1.y)
-                            cubicTo(controlPoint1.x, controlPoint1.y, controlPoint2.x, controlPoint2.y, p1.x, p1.y)
+                    runs.filter { it.size > 1 }.forEach { points ->
+                        // 2. PATH CALCULATION
+                        val path = Path().apply {
+                            moveTo(points[0].x, points[0].y)
+                            for (i in 0 until points.size - 1) {
+                                val p0 = points[i]
+                                val p1 = points[i + 1]
+                                val controlPoint1 = Offset(p0.x + (p1.x - p0.x) / 2.2f, p0.y)
+                                val controlPoint2 = Offset(p1.x - (p1.x - p0.x) / 2.2f, p1.y)
+                                cubicTo(controlPoint1.x, controlPoint1.y, controlPoint2.x, controlPoint2.y, p1.x, p1.y)
+                            }
                         }
-                    }
 
-                    // 3. UNDER-GLOW FILL
-                    val fillPath = Path().apply {
-                        addPath(path)
-                        lineTo(points.last().x, height)
-                        lineTo(points.first().x, height)
-                        close()
-                    }
-                    drawPath(
-                        path = fillPath,
-                        brush = Brush.verticalGradient(
-                            colors = listOf(accentColor.copy(alpha = 0.15f), Color.Transparent)
+                        // 3. UNDER-GLOW FILL
+                        val fillPath = Path().apply {
+                            addPath(path)
+                            lineTo(points.last().x, height)
+                            lineTo(points.first().x, height)
+                            close()
+                        }
+                        drawPath(
+                            path = fillPath,
+                            brush = Brush.verticalGradient(
+                                colors = listOf(accentColor.copy(alpha = 0.15f), Color.Transparent)
+                            )
                         )
-                    )
 
-                    // 4. REINFORCED TREND LINE
-                    drawPath(
-                        path = path,
-                        color = accentColor,
-                        style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                    )
-                    
-                    // 5. TACTICAL DATA POINTS
-                    points.forEachIndexed { idx, p ->
-                        val isNow = idx == points.size - 1
+                        // 4. REINFORCED TREND LINE
+                        drawPath(
+                            path = path,
+                            color = accentColor,
+                            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                    }
+
+                    // 5. TACTICAL DATA POINTS (recorded days only; the last
+                    // series index is the tracking day, always recorded)
+                    recorded.forEach { (index, data) ->
+                        val p = pointAt(index, data.total ?: 0)
+                        val isNow = index == dailyTotals.size - 1
                         drawCircle(
                             color = Color(0xFF0F0F12),
                             radius = if (isNow) 5.dp.toPx() else 4.dp.toPx(),
@@ -118,9 +133,9 @@ fun HistoryChart(
                             center = p
                         )
                     }
-                    
-                } else if (dailyTotals.size == 1) {
-                    val y = height - (dailyTotals[0].total.toFloat() / maxTotal * height)
+
+                } else {
+                    val y = height - ((dailyTotals[0].total ?: 0).toFloat() / maxTotal * height)
                     drawCircle(color = accentColor, radius = 5.dp.toPx(), center = Offset(width / 2, y))
                 }
             }

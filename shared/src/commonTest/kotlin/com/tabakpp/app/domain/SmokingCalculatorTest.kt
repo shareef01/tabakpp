@@ -5,6 +5,7 @@ import kotlin.time.Instant
 import kotlinx.datetime.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class SmokingCalculatorTest {
 
@@ -475,7 +476,8 @@ class SmokingCalculatorTest {
         assertEquals(today, series.last().date)
         assertEquals(5, series.last().total) // not 10
         assertEquals(12, series.first { it.date == "2026-03-09" }.total)
-        assertEquals(0, series.first { it.date == "2026-03-07" }.total)
+        // No log and no day document: no value, not a tobacco-free day.
+        assertNull(series.first { it.date == "2026-03-07" }.total)
     }
 
     @Test

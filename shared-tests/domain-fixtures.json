@@ -522,6 +522,24 @@
       "expected": 0 },
     { "case": "lifetime_smoking_units_replace_floors_at_zero", "op": "lifetimeSmokingUnits",
       "input": { "current": 2, "debit": 9, "credit": 3 },
-      "expected": 0 }
+      "expected": 0 },
+    { "case": "velocity_series_unrecorded_days_are_null_not_zero", "op": "velocitySeries",
+      "input": { "trackingDay": "2026-03-10", "days": 5, "activeCounts": {},
+        "logs": [ { "id": "a", "logDate": "2026-03-07", "counts": { "cig": 12 } } ],
+        "dayDocs": [] },
+      "expected": [ { "date": "2026-03-06", "total": null }, { "date": "2026-03-07", "total": 12 },
+                    { "date": "2026-03-08", "total": null }, { "date": "2026-03-09", "total": null },
+                    { "date": "2026-03-10", "total": 0 } ] },
+    { "case": "velocity_series_recorded_zero_day_stays_zero", "op": "velocitySeries",
+      "input": { "trackingDay": "2026-03-10", "days": 3, "activeCounts": {},
+        "logs": [],
+        "dayDocs": [ { "date": "2026-03-08", "counts": { "cig": 0 }, "status": "closed" },
+                     { "date": "2026-03-09", "counts": { "cig": 4, "ryo": 1 }, "status": "closed" } ] },
+      "expected": [ { "date": "2026-03-08", "total": 0 }, { "date": "2026-03-09", "total": 5 },
+                    { "date": "2026-03-10", "total": 0 } ] },
+    { "case": "velocity_series_today_counts_live_session", "op": "velocitySeries",
+      "input": { "trackingDay": "2026-03-10", "days": 2, "activeCounts": { "cig": 3, "ryo": 2 },
+        "logs": [], "dayDocs": [] },
+      "expected": [ { "date": "2026-03-09", "total": null }, { "date": "2026-03-10", "total": 5 } ] }
   ]
 }

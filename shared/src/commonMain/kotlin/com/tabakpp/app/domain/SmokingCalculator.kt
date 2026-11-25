@@ -88,14 +88,21 @@ object SmokingCalculator {
         }.sortedBy { it.date }
     }
 
-    data class DateTotal(val date: String, val total: Int)
+    /** [total] is null for a date with no record at all (see [buildVelocitySeries]). */
+    data class DateTotal(val date: String, val total: Int?)
 
     /**
      * Rolling per-day unit totals ending on [trackingDay] — the Kotlin mirror of
-     * the web `buildVelocitySeries`. Historical days come from the legacy `logs`
-     * ledger merged with `days/{date}` documents; the final (tracking) day uses
-     * the canonical effective overlay so it is neither double-counted (AUD-001)
-     * nor lost after a day is closed (AUD-004).
+     * the web `SmokingCalculator.buildVelocitySeries`. Historical days come from
+     * the legacy `logs` ledger merged with `days/{date}` documents; the final
+     * (tracking) day uses the canonical effective overlay so it is neither
+     * double-counted (AUD-001) nor lost after a day is closed (AUD-004).
+     *
+     * A past date with no record (no log entry and no day document) is `null`,
+     * not 0: nothing was recorded, so the chart must show a gap rather than a
+     * tobacco-free day. A recorded day keeps its total, including a recorded 0.
+     * The tracking day is always a number: it is the live count so far.
+     * Contract: `velocitySeries` cases in shared-tests/domain-fixtures.json.
      */
     fun buildVelocitySeries(
         logs: List<LogEntry>,
@@ -115,7 +122,7 @@ object SmokingCalculator {
         val out = mutableListOf<DateTotal>()
         for (i in days - 1 downTo 1) {
             val date = anchor.minus(i, DateTimeUnit.DAY).toString()
-            val total = logged[date]?.values?.sumOf { max(0.0, it) }?.toInt() ?: 0
+            val total = logged[date]?.values?.sumOf { max(0.0, it) }?.toInt()
             out += DateTotal(date, total)
         }
         val todayCounts = mergeEffectiveToday(legacyLogged[trackingDay], activeCounts, dayCountsByDate[trackingDay])

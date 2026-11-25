@@ -652,6 +652,30 @@ export const SmokingCalculator = {
    * from "untracked/missing" (no record at all) — a day with a zero-count
    * dayDoc or a zero-count manual entry still counts as tracked.
    */
+  /**
+   * Rolling per-day unit totals ending on `trackingDay` for the trend chart
+   * (Kotlin SmokingCalculator.buildVelocitySeries mirror).
+   *
+   * A past date with no record (no log entry and no day document) is `null`,
+   * not 0: nothing was recorded, so the chart must show a gap rather than a
+   * tobacco-free day. A recorded day keeps its total, including a recorded 0.
+   * The tracking day is always a number: it is the live count so far.
+   *
+   * @returns {Array<{date: string, total: number|null}>}
+   */
+  buildVelocitySeries: (logs, dayDocs, trackingDay, days, activeCounts = {}) => {
+    if (!trackingDay || !(days >= 1)) return [];
+    const logged = projectLoggedCounts(logs, dayDocs, trackingDay, activeCounts || {});
+    const total = (counts) => Math.trunc(Object.values(counts).reduce((a, b) => a + Math.max(0, b || 0), 0));
+    const out = [];
+    for (let i = days - 1; i >= 1; i -= 1) {
+      const date = shiftDate(trackingDay, -i);
+      out.push({ date, total: Object.prototype.hasOwnProperty.call(logged, date) ? total(logged[date]) : null });
+    }
+    out.push({ date: trackingDay, total: total(logged[trackingDay] || {}) });
+    return out;
+  },
+
   calculateTrackingStreak: (logs, activeCounts, trackingDay, dayDocs = []) => {
     if (!trackingDay) return 0;
     const logged = mergeDayDocsIntoLogged(aggregateLoggedCountsCached(logs), dayDocs);
