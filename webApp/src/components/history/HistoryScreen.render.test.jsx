@@ -78,6 +78,27 @@ describe('HistoryScreen — canonical financial rendering (Task B)', () => {
   });
 });
 
+describe('HistoryScreen — session log row layout', () => {
+  it('gives the date its own line and moves the origin badge below it', () => {
+    renderHistory({
+      logs: [{ id: 'R', logDate: '2026-07-14', counts: { cig: 4 }, origin: 'LEGACY_RECOVERY' }],
+      dayDocs: [],
+    });
+    const badge = screen.getByTitle('Recovered · money unknown');
+    const row = badge.closest('div.flex-1');
+    const dateLine = row.firstElementChild;
+    // The date line holds only the date: the badge no longer competes with it
+    // for width (it truncated dates to "M…" at 375px).
+    expect(dateLine.tagName).toBe('SPAN');
+    expect(dateLine.contains(badge)).toBe(false);
+    expect(dateLine.textContent).toMatch(/14/);
+    // The badge can shrink instead of pushing the row past its card.
+    expect(badge.className).toContain('min-w-0');
+    expect(badge.className).not.toContain('shrink-0');
+    expect(screen.queryByText('Logged session')).toBeNull();
+  });
+});
+
 describe('HistoryScreen — session log paging', () => {
   const manyLogs = Array.from({ length: 25 }, (_, i) => ({
     id: `L${i}`,

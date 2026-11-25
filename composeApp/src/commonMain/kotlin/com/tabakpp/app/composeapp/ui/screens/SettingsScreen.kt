@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
@@ -655,18 +656,38 @@ fun TrackerSettingsItem(
         TrackerType.SIMPLE -> "Custom"
     }
 
+    // On a 360dp phone the row is 328dp wide. Four actions in one line used
+    // 216dp (48dp targets + 8dp gaps) and 40dp of padding, leaving the name
+    // ~72dp, so "CIGARETTES" broke mid-word. Reorder now stacks on the left
+    // (web parity: SettingsScreen.jsx ProtocolListItem), the 48dp targets
+    // carry their own inset instead of extra padding, and the name is one line
+    // with an ellipsis. The name gets ~164dp.
     Row(
-        modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp).fillMaxWidth(),
+        modifier = Modifier.padding(start = 8.dp, end = 12.dp, top = 8.dp, bottom = 8.dp).fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(config.name.uppercase(), style = TabakTypography.bodyLarge.copy(fontWeight = FontWeight.Black, letterSpacing = 1.sp), color = TextPrimary)
-            Text(typeLabel, style = TabakTypography.labelSmall, color = TextMuted)
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column {
             IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move ${config.name} up", modifier = Modifier.size(18.dp), tint = if (canMoveUp) TextMuted else TextDisabled) }
             IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move ${config.name} down", modifier = Modifier.size(18.dp), tint = if (canMoveDown) TextMuted else TextDisabled) }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                config.name.uppercase(),
+                style = TabakTypography.bodyLarge.copy(fontWeight = FontWeight.Black, letterSpacing = 0.5.sp),
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                "${config.limit} / day · $typeLabel",
+                style = TabakTypography.labelSmall,
+                color = TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onEdit, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Edit, contentDescription = "Edit ${config.name}", modifier = Modifier.size(18.dp), tint = TextMuted) }
             IconButton(onClick = onDelete, modifier = Modifier.size(48.dp)) { Icon(Icons.Default.Delete, contentDescription = "Delete ${config.name}", modifier = Modifier.size(18.dp), tint = ErrorColor) }
         }

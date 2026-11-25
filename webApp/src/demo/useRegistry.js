@@ -28,7 +28,27 @@ const demoTrackerCount = () => {
 
 const configs = allConfigs.slice(0, demoTrackerCount());
 
-const activeCounts = { cig: 7, ryo: 3 };
+// `?counts=cig:25,ryo:0` previews other states (zero, at target, over target,
+// large values). Synthetic only; ignored outside the demo build.
+const demoCounts = () => {
+  const fallback = { cig: 7, ryo: 3 };
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = new URLSearchParams(window.location.search).get('counts');
+    if (!raw) return fallback;
+    const parsed = {};
+    for (const pair of raw.split(',')) {
+      const [id, value] = pair.split(':');
+      const n = Number(value);
+      if (allConfigs.some((c) => c.id === id) && Number.isInteger(n) && n >= 0 && n <= 10_000) parsed[id] = n;
+    }
+    return { ...fallback, ...parsed };
+  } catch {
+    return fallback;
+  }
+};
+
+const activeCounts = demoCounts();
 const dayDocs = [];
 
 const daysAgo = (n) => {
