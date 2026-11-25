@@ -444,7 +444,12 @@ class FirebaseRegistryRepositoryTest {
 
             // The velocity series the chart renders must be non-zero for seeded history.
             val series = SmokingCalculator.buildVelocitySeries(logs, closed, "2099-12-31", 30, emptyMap())
-            assertTrue(series.any { it.total > 0 }, "velocity series must be non-zero for seeded history")
+            assertTrue(series.any { (it.total ?: 0) > 0 }, "velocity series must be non-zero for seeded history")
+            // Every seeded day is a recorded day: it must carry a value, never
+            // the null that marks a date with no record.
+            dates.forEach { d ->
+                assertTrue(series.first { it.date == d }.total != null, "seeded day $d must be recorded in the series")
+            }
         }
     }
 

@@ -100,9 +100,9 @@ class ShowcaseScreenshotTest {
         foldedIntoLifetime = !open,
     )
 
-    // A full 30-day window: History opens on 30 days, and the Android chart
-    // plots a date with no record as 0, so a short seed would show a long run
-    // of fake zero days. The first week matches the web demo exactly.
+    // A full 30-day window: History opens on 30 days, and the chart leaves a
+    // gap for a date with no record, so a short seed would leave most of the
+    // chart empty. The first week matches the web demo exactly.
     private val pastCigarettes = listOf(
         17, 9, 19, 7, 13, 15, 8, 14, 16, 11, 18, 12, 10, 15, 17,
         13, 9, 16, 14, 12, 18, 11, 15, 13, 10, 17, 14, 12, 16,
