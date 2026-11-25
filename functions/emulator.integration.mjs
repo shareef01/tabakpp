@@ -1,7 +1,8 @@
 /**
  * End-to-end emulator integration test for the trusted financial boundary.
  *
- * Requires: `firebase emulators:start --only functions,firestore,auth`.
+ * Requires: `firebase emulators:start --config firebase.functions.json --only functions,firestore,auth`
+ * (the production firebase.json has no functions config).
  * Run: `node emulator.integration.mjs` from `functions/`.
  *
  * Proves the success criterion: an authenticated callable invocation makes the

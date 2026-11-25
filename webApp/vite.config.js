@@ -43,7 +43,7 @@ export default defineConfig({
         // Self-hosted Inter: only the Latin subsets are precached; other scripts
         // are still served same-origin, fetched only when a page needs them
         // (unicode-range).
-        globIgnores: ['**/heic2any*.js', '**/inter-{cyrillic,greek,vietnamese}*'],
+        globIgnores: ['**/heic2any*.js', '**/firebase-functions*.js', '**/inter-{cyrillic,greek,vietnamese}*'],
         // generateSW's NavigationRoute would serve precached HTML before the
         // runtime strategy. Use one network-first route with an error fallback.
         navigateFallback: null,
@@ -111,6 +111,9 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('heic2any')) return 'heic2any';
+          // Option-B callables only (trustedFinancial.js, dynamic import): kept
+          // out of the always-loaded firebase chunk and out of the precache.
+          if (id.includes('/@firebase/functions/') || id.includes('/firebase/functions/')) return 'firebase-functions';
           if (id.includes('/firebase/') || id.includes('/@firebase/')) return 'firebase';
           if (id.includes('/recharts/') || id.includes('/d3-') || id.includes('/victory-')) return 'recharts';
           if (id.includes('/framer-motion/') || id.includes('/motion-dom/') || id.includes('/motion-utils/')) return 'framer';
